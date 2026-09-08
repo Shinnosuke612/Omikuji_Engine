@@ -17,6 +17,35 @@ void SceneManager::ChangeScene(const std::string& sceneId) {
 	LoadScene(sceneId, SceneLoadMode::Single);
 }
 
+void SceneManager::RequestSceneTransition(const std::string& sceneId, bool useEffect)
+{
+	if (
+		sceneId.empty() ||
+		sceneTransitionPhase_ != SceneTransitionPhase::None ||
+		pendingSceneInstance_
+	) {
+		return;
+	}
+	if (!useEffect) {
+		LoadScene(sceneId, SceneLoadMode::Single);
+		return;
+	}
+	sceneTransitionTargetId_ = sceneId;
+	sceneTransitionElapsedSeconds_ = 0.0f;
+	sceneTransitionFadeAmount_ = 0.0f;
+	sceneTransitionPhase_ = SceneTransitionPhase::FadeOut;
+}
+
+bool SceneManager::IsSceneTransitioning() const
+{
+	return sceneTransitionPhase_ != SceneTransitionPhase::None;
+}
+
+float SceneManager::GetSceneTransitionFadeAmount() const
+{
+	return sceneTransitionFadeAmount_;
+}
+
 SceneInstanceId SceneManager::LoadScene(
 	const std::string& sceneId,
 	SceneLoadMode loadMode,
@@ -334,8 +363,12 @@ bool SceneManager::TryGetActiveRuntimePostProcessSettings(
 
 void SceneManager::Update(float deltaTime)
 {
+	AdvanceSceneTransition(deltaTime);
 	ProcessPendingSceneUnloads();
 	ActivatePendingScene();
+	if (IsSceneTransitioning()) {
+		return;
+	}
 
 	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
 		if (BaseScene* scene = instance->GetScene()) {
@@ -349,6 +382,49 @@ void SceneManager::Update(float deltaTime)
 			);
 		}
 		ParticleManager::GetInstance()->Update();
+	}
+}
+
+void SceneManager::AdvanceSceneTransition(float deltaTime)
+{
+	if (sceneTransitionPhase_ == SceneTransitionPhase::None) {
+		return;
+	}
+
+	const float safeDeltaTime = (std::max)(deltaTime, 0.0f);
+	sceneTransitionElapsedSeconds_ += safeDeltaTime;
+	const float progress = (std::min)(
+		sceneTransitionElapsedSeconds_ / kSceneTransitionFadeSeconds,
+		1.0f
+	);
+
+	// イージングの適用
+	const float easedProgress = progress * progress * (3.0f - 2.0f * progress);
+
+	if (sceneTransitionPhase_ == SceneTransitionPhase::FadeOut) {
+		sceneTransitionFadeAmount_ = easedProgress;
+		if (progress < 1.0f) {
+			return;
+		}
+
+		const std::string targetSceneId = sceneTransitionTargetId_;
+		sceneTransitionTargetId_.clear();
+		sceneTransitionElapsedSeconds_ = 0.0f;
+		if (LoadScene(targetSceneId, SceneLoadMode::Single) ==
+			kInvalidSceneInstanceId) {
+			sceneTransitionFadeAmount_ = 0.0f;
+			sceneTransitionPhase_ = SceneTransitionPhase::None;
+			return;
+		}
+		sceneTransitionPhase_ = SceneTransitionPhase::FadeIn;
+		return;
+	}
+
+	sceneTransitionFadeAmount_ = 1.0f - easedProgress;
+	if (progress >= 1.0f) {
+		sceneTransitionFadeAmount_ = 0.0f;
+		sceneTransitionElapsedSeconds_ = 0.0f;
+		sceneTransitionPhase_ = SceneTransitionPhase::None;
 	}
 }
 

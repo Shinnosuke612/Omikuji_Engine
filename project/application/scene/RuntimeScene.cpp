@@ -3,7 +3,9 @@
 
 #include "../../engine/scene/SceneManager.h"
 #include "../../engine/scene/SceneExecutionContext.h"
+#include "../../engine/scene/EditorSession.h"
 #include "../../engine/scene/SceneDocument.h"
+#include "../../engine/scene/SceneTransformResolver.h"
 #include "../../engine/3d/SrvManager.h"
 #include "../../engine/base/DirectXCommon.h"
 
@@ -13,6 +15,10 @@
 #include "../../engine/math/Math.h"
 #include "../../engine/particle/ParticleManager.h"
 #include "../player/Player.h"
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
 
 namespace {
 	Transform MakeRuntimeTransform(const QuaternionTransform& source) {
@@ -26,14 +32,25 @@ namespace {
 	}
 
 	void SynchronizeSceneTransform(
-		QuaternionTransform& destination,
+		const SceneDocument& document,
+		SceneEntity& entity,
+		Object3d& object,
 		const Transform& source
 	) {
-		destination.scale = source.scale;
-		destination.rotate = source.useQuaternionRotation
-			? source.quaternionRotate
-			: MakeQuaternionFromEuler(source.rotate);
-		destination.translate = source.translate;
+		Transform localTransform{};
+		if (!SceneTransformResolver::TryConvertSceneWorldTransformToLocal(
+			document,
+			entity,
+			source,
+			localTransform
+		)) {
+			return;
+		}
+		entity.transform.scale = localTransform.scale;
+		entity.transform.rotate = localTransform.quaternionRotate;
+		entity.transform.translate = localTransform.translate;
+		object.GetTransform() = localTransform;
+		object.Update();
 	}
 
 	Transform GetSceneTransform(
@@ -47,6 +64,165 @@ namespace {
 		return entity ? MakeRuntimeTransform(entity->transform) : fallback;
 	}
 
+	void ProcessFormationParticleSaveRequest(
+		SceneFishingScoreAttackSystem& system,
+		SceneExecutionContext* executionContext,
+		const std::string& runtimeSceneId
+	) {
+		SceneFishingScoreAttackFormationParticleSaveRequest request{};
+		if (!system.ConsumeFormationParticleSaveRequest(request)) {
+			return;
+		}
+		auto fail = [&system](std::string message) {
+			system.SetFormationParticleSaveResult(false, std::move(message));
+		};
+		EditorSession* editorSession = dynamic_cast<EditorSession*>(executionContext);
+		if (
+			!editorSession ||
+			(!editorSession->IsPlaying() && !editorSession->IsPaused())
+		) {
+			fail("Save failed: editor runtime session is unavailable.");
+			return;
+		}
+		if (
+			runtimeSceneId.empty() ||
+			runtimeSceneId != editorSession->GetRuntimeSceneId() ||
+			runtimeSceneId != editorSession->GetEditSceneId()
+		) {
+			fail("Save failed: runtime and edit scene IDs do not match.");
+			return;
+		}
+		const SceneDocument& runtimeDocument = editorSession->GetActiveDocument();
+		const SceneEntity* runtimeEntity = runtimeDocument.FindEntity(
+			request.directorEntityId
+		);
+		if (!runtimeEntity) {
+			fail("Save failed: runtime Director entity was not found.");
+			return;
+		}
+		const SceneComponent* runtimeDirector = nullptr;
+		for (const SceneComponent& component : runtimeEntity->components) {
+			if (!component.enabled || component.type != "FishingScoreAttackDirector") {
+				continue;
+			}
+			if (runtimeDirector) {
+				fail("Save failed: runtime Director is not unique.");
+				return;
+			}
+			runtimeDirector = &component;
+		}
+		if (!runtimeDirector) {
+			fail("Save failed: runtime Director is not enabled.");
+			return;
+		}
+
+		SceneDocument& editDocument = editorSession->GetEditDocument();
+		SceneEntity* editEntity = editDocument.FindEntity(request.directorEntityId);
+		if (!editEntity) {
+			fail("Save failed: edit Director entity was not found.");
+			return;
+		}
+		SceneComponent* editDirector = nullptr;
+		for (SceneComponent& component : editEntity->components) {
+			if (!component.enabled || component.type != "FishingScoreAttackDirector") {
+				continue;
+			}
+			if (editDirector) {
+				fail("Save failed: edit Director is not unique.");
+				return;
+			}
+			editDirector = &component;
+		}
+		if (!editDirector) {
+			fail("Save failed: edit Director is not enabled.");
+			return;
+		}
+
+		const auto clampFinite = [](float value, float fallback, float minimum, float maximum) {
+			return std::isfinite(value)
+				? std::clamp(value, minimum, maximum)
+				: fallback;
+		};
+		const auto sanitizeColor = [](const Vector4& color) {
+			return Vector4{
+				std::isfinite(color.x) ? std::clamp(color.x, 0.0f, 1.0f) : 0.1f,
+				std::isfinite(color.y) ? std::clamp(color.y, 0.0f, 1.0f) : 0.9f,
+				std::isfinite(color.z) ? std::clamp(color.z, 0.0f, 1.0f) : 1.0f,
+				std::isfinite(color.w) ? std::clamp(color.w, 0.0f, 1.0f) : 0.65f
+			};
+		};
+		const int pointCount = std::clamp(request.pointCount, 12, 128);
+		const float startSize = clampFinite(request.startSize, 0.26f, 0.01f, 5.0f);
+		const float endSize = clampFinite(request.endSize, 0.43f, 0.01f, 5.0f);
+		const int countPerEmission = static_cast<int>(std::clamp(
+			request.countPerEmission,
+			1u,
+			16u
+		));
+		const float emitterSpread = clampFinite(
+			request.emitterSpread,
+			0.0f,
+			0.0f,
+			0.5f
+		);
+		const float lifetime = clampFinite(request.lifetime, 0.8f, 0.1f, 3.0f);
+		const Vector4 startColor = sanitizeColor(request.startColor);
+		const Vector4 endColor = sanitizeColor(request.endColor);
+		const float emissiveIntensity = clampFinite(
+			request.emissiveIntensity,
+			1.0f,
+			0.0f,
+			8.0f
+		);
+		const auto sameColor = [](const Vector4& left, const Vector4& right) {
+			return left.x == right.x && left.y == right.y &&
+				left.z == right.z && left.w == right.w;
+		};
+		const bool changed =
+			editDirector->fishingFormationParticlePointCount != pointCount ||
+			editDirector->fishingFormationParticleStartSize != startSize ||
+			editDirector->fishingFormationParticleEndSize != endSize ||
+			editDirector->fishingFormationParticleCountPerEmission != countPerEmission ||
+			editDirector->fishingFormationParticleEmitterSpread != emitterSpread ||
+			editDirector->fishingFormationParticleLifetime != lifetime ||
+			!sameColor(editDirector->fishingFormationParticleStartColor, startColor) ||
+			!sameColor(editDirector->fishingFormationParticleEndColor, endColor) ||
+			editDirector->fishingFormationParticleEmissiveIntensity != emissiveIntensity;
+		if (changed) {
+			const SceneDocument beforeSnapshot = editDocument;
+			editDirector->fishingFormationParticlePointCount = pointCount;
+			editDirector->fishingFormationParticleStartSize = startSize;
+			editDirector->fishingFormationParticleEndSize = endSize;
+			editDirector->fishingFormationParticleCountPerEmission = countPerEmission;
+			editDirector->fishingFormationParticleEmitterSpread = emitterSpread;
+			editDirector->fishingFormationParticleLifetime = lifetime;
+			editDirector->fishingFormationParticleStartColor = startColor;
+			editDirector->fishingFormationParticleEndColor = endColor;
+			editDirector->fishingFormationParticleEmissiveIntensity = emissiveIntensity;
+			editDocument.MarkDirty();
+			if (!editorSession->CommitRuntimeEditAndSave(beforeSnapshot)) {
+				const std::string& saveError = editDocument.GetLastSaveError();
+				fail(saveError.empty()
+					? std::string("Save failed.")
+					: std::string("Save failed: ") + saveError);
+				return;
+			}
+		} else if (
+			editDocument.IsDirty() &&
+			!editorSession->CommitRuntimeEditAndSave(editDocument)
+		) {
+			const std::string& saveError = editDocument.GetLastSaveError();
+			fail(saveError.empty()
+				? std::string("Save failed.")
+				: std::string("Save failed: ") + saveError);
+			return;
+		}
+		system.SetFormationParticleSaveResult(
+			true,
+			"Formation particle settings saved to Scene."
+		);
+	}
+
 	Camera* CreateOrbitCamera() {
 		Camera* camera = new Camera();
 		camera->SetOrbitMode(true);
@@ -55,6 +231,53 @@ namespace {
 		camera->SetOrbitAngle(0.0f, 0.0f);
 		camera->Update();
 		return camera;
+	}
+
+	bool TryProjectWorldPositionToViewport(
+		const Camera& camera,
+		const Vector3& worldPosition,
+		Vector2& viewportPosition
+	) {
+		const Matrix4x4& viewProjection = camera.GetViewProjectionMatrix();
+		const float x =
+			worldPosition.x * viewProjection.m[0][0] +
+			worldPosition.y * viewProjection.m[1][0] +
+			worldPosition.z * viewProjection.m[2][0] +
+			viewProjection.m[3][0];
+		const float y =
+			worldPosition.x * viewProjection.m[0][1] +
+			worldPosition.y * viewProjection.m[1][1] +
+			worldPosition.z * viewProjection.m[2][1] +
+			viewProjection.m[3][1];
+		const float z =
+			worldPosition.x * viewProjection.m[0][2] +
+			worldPosition.y * viewProjection.m[1][2] +
+			worldPosition.z * viewProjection.m[2][2] +
+			viewProjection.m[3][2];
+		const float w =
+			worldPosition.x * viewProjection.m[0][3] +
+			worldPosition.y * viewProjection.m[1][3] +
+			worldPosition.z * viewProjection.m[2][3] +
+			viewProjection.m[3][3];
+		if (!std::isfinite(w) || w <= 0.000001f) {
+			return false;
+		}
+		const float inverseW = 1.0f / w;
+		const float normalizedDepth = z * inverseW;
+		if (!std::isfinite(normalizedDepth) ||
+			normalizedDepth < 0.0f || normalizedDepth > 1.0f) {
+			return false;
+		}
+		const float normalizedX = x * inverseW;
+		const float normalizedY = y * inverseW;
+		if (!std::isfinite(normalizedX) || !std::isfinite(normalizedY)) {
+			return false;
+		}
+		viewportPosition = {
+			normalizedX * 0.5f + 0.5f,
+			0.5f - normalizedY * 0.5f
+		};
+		return true;
 	}
 }
 
@@ -204,6 +427,10 @@ void RuntimeScene::Initialize()
 		Object3dCommon::GetInstance()->GetDxCommon(),
 		SrvManager::GetInstance()
 	);
+	miniMapSystem_.Initialize(
+		Object3dCommon::GetInstance()->GetDxCommon(),
+		SrvManager::GetInstance()
+	);
 
 	effectRenderSystem_.Initialize(
 		Object3dCommon::GetInstance()->GetDxCommon()
@@ -223,6 +450,27 @@ void RuntimeScene::Update(float deltaTime)
 	const bool editing = executionContext && executionContext->IsEditing();
 	const bool playing = !executionContext || executionContext->IsPlaying();
 	SceneDocument* activeDocument = GetSceneDocument();
+	const float realDeltaTime = (std::max)(deltaTime, 0.0f);
+	if (activeDocument && playing) {
+		pauseSystem_.BeginFrame(*activeDocument);
+	} else {
+		pauseSystem_.Clear();
+	}
+	const bool gameplayPaused =
+		activeDocument && playing &&
+		pauseSystem_.IsDomainPaused(ScenePauseDomain::Gameplay);
+	const bool physicsPaused =
+		activeDocument && playing &&
+		pauseSystem_.IsDomainPaused(ScenePauseDomain::Physics);
+	const bool gameplayInputPaused =
+		activeDocument && playing &&
+		pauseSystem_.IsDomainPaused(ScenePauseDomain::GameplayInput);
+	const bool worldAnimationPaused =
+		activeDocument && playing &&
+		pauseSystem_.IsDomainPaused(ScenePauseDomain::WorldAnimation);
+	const bool worldEffectsPaused =
+		activeDocument && playing &&
+		pauseSystem_.IsDomainPaused(ScenePauseDomain::WorldEffects);
 	if (activeDocument) {
 		postProcessProfileSystem_.Sync(*activeDocument);
 		// 2Dの先読みはTransform確定を待たないため、Eventより前に完了させる。
@@ -232,20 +480,37 @@ void RuntimeScene::Update(float deltaTime)
 			GetSceneInstanceId(),
 			sceneManager_ && sceneManager_->GetActiveSceneInstanceId() == GetSceneInstanceId()
 		);
+		audioSystem_.ApplyProcessPolicy(
+			*activeDocument,
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument, entityId, ScenePauseDomain::Audio
+				);
+			}
+		);
 	} else {
 		postProcessProfileSystem_.Reset();
 	}
 	std::vector<uint64_t> spawnerResetEntityIds;
-	const float gameplayDeltaTime = playing
-		? hitStopSystem_.Advance(deltaTime)
-		: deltaTime;
+	const float hitStopDeltaTime = playing && !gameplayPaused
+		? hitStopSystem_.Advance(realDeltaTime)
+		: 0.0f;
+	const float gameplayDeltaTime = gameplayPaused
+		? 0.0f
+		: (playing ? hitStopDeltaTime : realDeltaTime);
+	const float physicsDeltaTime = physicsPaused
+		? 0.0f
+		: (gameplayPaused ? realDeltaTime : gameplayDeltaTime);
 
 	// 遷移が成立したフレームは旧Sceneの状態をこれ以上変更しない。
-	if (playing && gameplayDeltaTime > 0.0f && activeDocument) {
-		const std::string targetSceneId =
+	if (playing && !gameplayPaused && gameplayDeltaTime > 0.0f && activeDocument) {
+		const SceneTransitionRequest transitionRequest =
 			transitionSystem_.Update(*activeDocument);
-		if (!targetSceneId.empty()) {
-			sceneManager_->ChangeScene(targetSceneId);
+		if (!transitionRequest.targetSceneId.empty()) {
+			sceneManager_->RequestSceneTransition(
+				transitionRequest.targetSceneId,
+				transitionRequest.useEffect
+			);
 			return;
 		}
 	}
@@ -254,25 +519,50 @@ void RuntimeScene::Update(float deltaTime)
 		gameFlowResult = gameFlowSystem_.Update(
 			*activeDocument,
 			enemySpawnerSystem_,
-			deltaTime
+			realDeltaTime,
+			!gameplayPaused
 		);
-		for (const SceneGameFlowEntityRequest& request : gameFlowResult.entityRequests) {
-			if (SceneEntity* entity = activeDocument->FindEntity(request.entityId)) {
-				entity->active = request.active;
+		if (!gameplayPaused) {
+			for (const SceneGameFlowEntityRequest& request : gameFlowResult.entityRequests) {
+				if (SceneEntity* entity = activeDocument->FindEntity(request.entityId)) {
+					entity->active = request.active;
+				}
 			}
-		}
-		for (const SceneGameFlowWaveRequest& request : gameFlowResult.waveRequests) {
-			enemySpawnerSystem_.BeginFiniteWave(
-				request.spawnerEntityId,
-				request.generation,
-				request.count
-			);
-		}
-		for (const SceneGameFlowMotionRequest& request : gameFlowResult.motionRequests) {
-			textMotionSystem_.Play(*activeDocument, request.entityId, request.clipId);
+			for (const SceneGameFlowWaveRequest& request : gameFlowResult.waveRequests) {
+				enemySpawnerSystem_.BeginFiniteWave(
+					request.spawnerEntityId,
+					request.generation,
+					request.count
+				);
+			}
+			for (const SceneGameFlowMotionRequest& request : gameFlowResult.motionRequests) {
+				textMotionSystem_.Play(*activeDocument, request.entityId, request.clipId);
+			}
 		}
 	} else {
 		gameFlowSystem_.Clear();
+	}
+	if (activeDocument && playing) {
+		if (!gameplayPaused) {
+			// Fish選択はObject同期前に確定し、同FrameのCollider生成へ反映する。
+			fishingScoreAttackSystem_.UpdateBeforeSimulation(
+				*activeDocument,
+				deltaTime,
+				true
+			);
+		}
+	} else {
+		fishingScoreAttackSystem_.Clear();
+	}
+	if (activeDocument && playing && executionContext) {
+		SceneFishingScoreAttackSessionBeginRequest beginRequest{};
+		while (fishingScoreAttackSystem_.ConsumeResultSessionBeginRequest(
+			beginRequest
+		)) {
+			executionContext->GetRuntimeSessionState().BeginFishingRun(
+				beginRequest.channelId
+			);
+		}
 	}
 	const std::string runtimeSceneId = GetSceneAssetId().empty()
 		? "runtime"
@@ -288,9 +578,11 @@ void RuntimeScene::Update(float deltaTime)
 
 	particleSystem_.Update(
 		runtimeSceneId,
-		editing
+		editing,
+		!playing || !worldEffectsPaused
 	);
-	effectRenderSystem_.Update(deltaTime);
+	runtimeEffectSystem_.SetWorldEffectsPaused(runtimeSceneId, worldEffectsPaused);
+	effectRenderSystem_.Update(worldEffectsPaused ? 0.0f : realDeltaTime);
 	environmentSystem_.Update(deltaTime);
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -313,7 +605,18 @@ void RuntimeScene::Update(float deltaTime)
 
 		particleSystem_.DrawEditor(runtimeSceneId);
 	}
+	if (activeDocument) {
+		fishingScoreAttackSystem_.DrawFormationParticleTuningImGui(
+			*activeDocument,
+			playing
+		);
+	}
 #endif
+	ProcessFormationParticleSaveRequest(
+		fishingScoreAttackSystem_,
+		executionContext,
+		runtimeSceneId
+	);
 	lightingSystem_.Sync(activeDocument);
 	if (activeDocument && playing) {
 		// 前フレームで寿命切れ/HitしたRuntime Entityをbinding再構築前に破棄する。
@@ -321,7 +624,7 @@ void RuntimeScene::Update(float deltaTime)
 		projectileSystem_.FlushRemovals(*activeDocument);
 		// 保存値を実行時状態へ展開し、Transform AnimationをObject同期前に反映する。
 		statSystem_.Update(*activeDocument);
-		if (gameFlowResult.gameplayAllowed) {
+		if (!gameplayPaused && gameFlowResult.gameplayAllowed) {
 			enemySpawnerSystem_.Update(*activeDocument, gameplayDeltaTime);
 		}
 		spawnerResetEntityIds = enemySpawnerSystem_.ConsumeResetEntityIds();
@@ -332,7 +635,7 @@ void RuntimeScene::Update(float deltaTime)
 			enemySystem_.ResetEntity(entityId);
 			hitReactionSystem_.ResetEntity(entityId);
 		}
-		if (gameFlowResult.gameplayAllowed) {
+		if (!gameplayPaused && gameFlowResult.gameplayAllowed) {
 			hitReactionSystem_.AdvanceRecoveries(statSystem_, gameplayDeltaTime);
 			attackRunnerSystem_.Advance(
 				*activeDocument,
@@ -347,8 +650,21 @@ void RuntimeScene::Update(float deltaTime)
 			effectRenderSystem_.SpawnGroundCracks(
 				runtimeEffectSystem_.ConsumeGroundCrackRequests()
 			);
-			runtimeEffectSystem_.Advance(*activeDocument, deltaTime);
-			prefabAnimationSystem_.Update(*activeDocument, gameplayDeltaTime);
+			runtimeEffectSystem_.SetWorldEffectsPaused(
+				runtimeSceneId, worldEffectsPaused
+			);
+			runtimeEffectSystem_.Advance(
+				*activeDocument, worldEffectsPaused ? 0.0f : realDeltaTime
+			);
+			prefabAnimationSystem_.Update(
+				*activeDocument,
+				worldAnimationPaused ? 0.0f : realDeltaTime,
+				[this, activeDocument](uint64_t entityId) {
+					return pauseSystem_.ShouldProcess(
+						*activeDocument, entityId, ScenePauseDomain::WorldAnimation
+					);
+				}
+			);
 		}
 	} else {
 		audioSystem_.Clear();
@@ -383,6 +699,10 @@ void RuntimeScene::Update(float deltaTime)
 			*activeDocument,
 			runtimeObjectBindings_
 		);
+		fishingScoreAttackSystem_.ApplyHookVisualOverrides(
+			*activeDocument,
+			runtimeObjectBindings_
+		);
 		physicsSystem_.SyncSceneSettings(
 			*activeDocument,
 			player_,
@@ -393,7 +713,7 @@ void RuntimeScene::Update(float deltaTime)
 			runtimeObjectBindings_,
 			spawnerResetEntityIds
 		);
-		if (playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
+		if (playing && !gameplayPaused && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
 			enemySystem_.Update(
 				*activeDocument,
 				runtimeObjectBindings_,
@@ -446,19 +766,38 @@ void RuntimeScene::Update(float deltaTime)
 			runtimeObjectBindings_,
 			deltaTime,
 			playing,
-			playing
+			playing,
+			!gameplayInputPaused,
+			fishingScoreAttackSystem_.AcceptWheelZoom(),
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument, entityId, ScenePauseDomain::WorldAnimation
+				);
+			}
 		);
 	}
 	Vector3 playerAttackInputDirection{};
-	if (player_ && playing) {
-		player_->Update(camera_, gameFlowResult.gameplayAllowed);
+	if (player_ && playing && !gameplayPaused) {
+		player_->Update(
+			camera_,
+			gameFlowResult.gameplayAllowed &&
+				fishingScoreAttackSystem_.IsPlayerMovementAllowed() &&
+				!gameplayInputPaused,
+			gameplayDeltaTime
+		);
 		const Vector3& playerVelocity = player_->GetPhysicsBody().velocity;
 		playerAttackInputDirection = { playerVelocity.x, 0.0f, playerVelocity.z };
 		if (Math::Length(playerAttackInputDirection) > 0.0001f) {
 			playerAttackInputDirection = Math::Normalize(playerAttackInputDirection);
 		}
 	}
-	if (activeDocument && playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
+	const float stateMachineDeltaTime = gameplayPaused
+		? realDeltaTime
+		: gameplayDeltaTime;
+	if (
+		activeDocument && playing && gameFlowResult.gameplayAllowed &&
+		stateMachineDeltaTime > 0.0f
+	) {
 		// State行動は入力取得後、Physics確定前に速度・攻撃判定を更新する。
 		stateMachineSystem_.Update(
 			*activeDocument,
@@ -466,8 +805,18 @@ void RuntimeScene::Update(float deltaTime)
 			player_,
 			attackRunnerSystem_,
 			prefabAnimationSystem_,
-			gameplayDeltaTime
+			stateMachineDeltaTime,
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument,
+					entityId,
+					ScenePauseDomain::Gameplay
+				);
+			}
 		);
+	}
+	if (activeDocument && playing && !gameplayPaused &&
+		gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
 		attackRunnerSystem_.ApplyMotion(
 			*activeDocument,
 			runtimeObjectBindings_,
@@ -482,27 +831,128 @@ void RuntimeScene::Update(float deltaTime)
 			gameplayDeltaTime
 		);
 	}
-	if (activeDocument && (!playing || gameplayDeltaTime > 0.0f)) {
+	if (activeDocument && (!playing || physicsDeltaTime > 0.0f)) {
 		physicsSystem_.Step(
 			player_,
 			runtimeObjectBindings_,
-			gameplayDeltaTime,
+			physicsDeltaTime,
 			playing
 		);
 	}
-	if (player_ && playing && gameplayDeltaTime > 0.0f) {
+	if (player_ && playing && physicsDeltaTime > 0.0f) {
 		player_->PostPhysicsUpdate();
 		SceneEntity* playerEntity = activeDocument
 			? activeDocument->FindEntityByName("Player")
 			: nullptr;
+		SceneFishingScoreAttackPlayerWaterBounds waterBounds{};
+		if (playerEntity &&
+			fishingScoreAttackSystem_.TryGetPlayerWaterBounds(waterBounds) &&
+			waterBounds.playerEntityId == playerEntity->id) {
+			player_->ClampToWaterBounds(
+				waterBounds.center,
+				waterBounds.yaw,
+				waterBounds.halfSizeX,
+				waterBounds.halfSizeZ
+			);
+		}
 		if (playerEntity && player_->GetObject()) {
 			SynchronizeSceneTransform(
-				playerEntity->transform,
+				*activeDocument,
+				*playerEntity,
+				*player_->GetObject(),
 				player_->GetObject()->GetTransform()
 			);
 		}
 	}
-	if (activeDocument && playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
+	if (activeDocument && playing && !gameplayPaused) {
+		// Player Physics後のCollider world transformで釣り針Triggerを判定する。
+		fishingScoreAttackSystem_.UpdateAfterSimulation(
+			*activeDocument,
+			runtimeObjectBindings_,
+			agentSystem_,
+			true,
+			gameplayDeltaTime,
+			player_ ? player_->GetPhysicsBody().velocity : Vector3{}
+		);
+		if (executionContext) {
+			SceneFishingScoreAttackSessionPublishRequest publishRequest{};
+			while (fishingScoreAttackSystem_.ConsumeResultSessionPublishRequest(
+				publishRequest
+			)) {
+				publishRequest.record.sourceSceneId = GetSceneAssetId().empty()
+					? "runtime"
+					: GetSceneAssetId();
+				publishRequest.record.sourceSceneInstanceId = GetSceneInstanceId();
+				executionContext->GetRuntimeSessionState().PublishFishingResult(
+					std::move(publishRequest.record)
+				);
+			}
+		}
+		SceneFishingScoreAttackPlayerConstraintRequest constraintRequest{};
+		if (
+			player_ &&
+			fishingScoreAttackSystem_.ConsumePlayerConstraintRequest(constraintRequest)
+		) {
+			SceneEntity* playerEntity = activeDocument->FindEntity(
+				constraintRequest.playerEntityId
+			);
+			if (
+				playerEntity &&
+				player_->ApplyPlanarMotionConstraint(
+					constraintRequest.planarPosition,
+					constraintRequest.yaw,
+					constraintRequest.planarVelocity
+				)
+			) {
+				SynchronizeSceneTransform(
+					*activeDocument,
+					*playerEntity,
+					*player_->GetObject(),
+					player_->GetObject()->GetTransform()
+				);
+			}
+		}
+		SceneFishingScoreAttackPlayerResetRequest resetRequest{};
+		if (player_ &&
+			fishingScoreAttackSystem_.ConsumePlayerResetRequest(resetRequest)) {
+			SceneEntity* playerEntity = activeDocument->FindEntity(
+				resetRequest.playerEntityId
+			);
+			if (playerEntity && player_->GetObject()) {
+				player_->SetTransform(resetRequest.transform);
+				SynchronizeSceneTransform(
+					*activeDocument,
+					*playerEntity,
+					*player_->GetObject(),
+					player_->GetObject()->GetTransform()
+				);
+			}
+			for (const SceneFishingScoreAttackPlayerResetRequest::EntityReset& entityReset :
+				resetRequest.entityResets) {
+				for (const SceneRuntimeObjectBinding& binding : runtimeObjectBindings_) {
+					if (
+						!binding.entity ||
+						binding.entity->id != entityReset.entityId ||
+						!binding.object
+					) {
+						continue;
+					}
+					SynchronizeSceneTransform(
+						*activeDocument,
+						*binding.entity,
+						*binding.object,
+						entityReset.transform
+					);
+					break;
+				}
+			}
+			agentSystem_.ResetTeam(
+				*activeDocument,
+				resetRequest.teamName
+			);
+		}
+	}
+	if (activeDocument && playing && !gameplayPaused && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
 		// Bone追従はAnimation/Physics後、当たり判定とEventは最終Transform後に評価する。
 		attachmentSystem_.Update(
 			*activeDocument,
@@ -528,10 +978,24 @@ void RuntimeScene::Update(float deltaTime)
 			hitEvents,
 			gameplayDeltaTime
 		);
-		runtimeEffectSystem_.SpawnDeathEffects(
+		 runtimeEffectSystem_.SpawnDeathEffects(
 			*activeDocument,
 			hitReactionSystem_.ConsumeDeathEffectRequests()
 		);
+	}
+	runtimeEffectSystem_.SetWorldEffectsPaused(runtimeSceneId, worldEffectsPaused);
+	objectSystem_.ClearSpriteOverrides();
+	if (activeDocument) {
+		for (const SceneFishingScoreAttackIconRequest& request :
+			fishingScoreAttackSystem_.GetIconRequests()) {
+			objectSystem_.SetSpriteRuntimeOverride(SceneSpriteRuntimeOverride{
+				request.entityId,
+				request.texturePath,
+				request.size,
+				{ 1.0f, 1.0f, 1.0f, 1.0f },
+				request.visible
+			});
+		}
 	}
 	objectSystem_.SyncSprites(activeDocument);
 	if (activeDocument) {
@@ -549,9 +1013,34 @@ void RuntimeScene::Update(float deltaTime)
 	}
 	// Transform確定後に環境設定とDebug形状を登録し、描画時の状態を揃える。
 	environmentSystem_.Sync(activeDocument, runtimeObjectBindings_);
+	if (activeDocument) {
+		fishingScoreAttackSystem_.UpdateFormationParticleEffect(
+			*activeDocument,
+			agentSystem_,
+			worldEffectsPaused ? 0.0f : realDeltaTime,
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument, entityId, ScenePauseDomain::WorldEffects
+				);
+			},
+			runtimeSceneId
+		);
+		fishingScoreAttackSystem_.AddFormationOutlineDebugDraw(
+			*activeDocument,
+			agentSystem_
+		);
+	}
 	if (activeDocument && playing) {
 		// Eventは同FrameのTextMotion completionを次Packageで受け取れる位置に置く。
-		textMotionSystem_.Update(*activeDocument, deltaTime);
+		textMotionSystem_.Update(
+			*activeDocument,
+			worldAnimationPaused ? 0.0f : realDeltaTime,
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument, entityId, ScenePauseDomain::WorldAnimation
+				);
+			}
+		);
 	} else {
 		textMotionSystem_.Clear();
 	}
@@ -567,24 +1056,47 @@ void RuntimeScene::Update(float deltaTime)
 		false
 	);
 #endif
-	if (activeDocument && playing && gameplayDeltaTime > 0.0f) {
+	if (activeDocument && playing) {
 		// Prefab生成はEntity配列を再配置し得るため、bindingを使い終えた最後に行う。
 		const SceneEventRuntimeSignals eventSignals{
 			cameraSystem_.ConsumeCompletedCameraPathEntityId(),
 			audioSystem_.ConsumeFinishedEntityIds(*activeDocument),
-			textMotionSystem_.ConsumeCompletions()
+			textMotionSystem_.ConsumeCompletions(),
+			fishingScoreAttackSystem_.GetResultInputReadyDirectorEntityId()
 		};
 		const SceneEventResult eventResult = eventSystem_.Update(
 			*activeDocument,
 			statSystem_,
 			stateMachineSystem_,
-			gameplayDeltaTime,
-			eventSignals
+			pauseSystem_,
+			executionContext
+				? &executionContext->GetRuntimeSessionState()
+				: nullptr,
+			realDeltaTime,
+			eventSignals,
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument,
+					entityId,
+					ScenePauseDomain::Gameplay
+				);
+			}
 		);
 		if (!eventResult.sceneTransitionId.empty()) {
 			postProcessProfileSystem_.Reset(activeDocument);
-			sceneManager_->ChangeScene(eventResult.sceneTransitionId);
+			sceneManager_->RequestSceneTransition(
+				eventResult.sceneTransitionId,
+				eventResult.sceneTransitionUseEffect
+			);
 			return;
+		}
+		pauseSystem_.CommitRequests(*activeDocument, eventResult.pauseRequests);
+		for (const SceneFishingFishCountRequest& request :
+			eventResult.fishingFishCountRequests) {
+			fishingScoreAttackSystem_.QueueFishCountAdjustment(
+				request.directorEntityId,
+				request.delta
+			);
 		}
 		for (const SceneTextMotionRequest& request : eventResult.textMotionRequests) {
 			if (request.type == SceneTextMotionRequestType::Play) {
@@ -602,6 +1114,14 @@ void RuntimeScene::Update(float deltaTime)
 			eventResult.cameraRequests
 		);
 		audioSystem_.ApplyRequests(*activeDocument, eventResult.audioRequests);
+		audioSystem_.ApplyProcessPolicy(
+			*activeDocument,
+			[this, activeDocument](uint64_t entityId) {
+				return pauseSystem_.ShouldProcess(
+					*activeDocument, entityId, ScenePauseDomain::Audio
+				);
+			}
+		);
 		postProcessProfileSystem_.ApplyEventResult(*activeDocument, eventResult);
 	}
 	if (activeDocument) {
@@ -616,12 +1136,29 @@ void RuntimeScene::Update(float deltaTime)
 			audioSystem_.UpdateSpatial(*activeDocument, camera_);
 		}
 	}
-	postProcessProfileSystem_.Update(playing ? gameplayDeltaTime : 0.0f);
+	const uint64_t postProcessManagerEntityId =
+		postProcessProfileSystem_.GetActiveManagerEntityId();
+	const bool advancePostProcess = activeDocument && playing &&
+		(postProcessManagerEntityId == 0 || pauseSystem_.ShouldProcess(
+			*activeDocument,
+			postProcessManagerEntityId,
+			ScenePauseDomain::WorldEffects
+		));
+	postProcessProfileSystem_.Update(advancePostProcess ? realDeltaTime : 0.0f);
 	textRenderSystem_.ClearTextOverrides();
+	textRenderSystem_.ClearTextColorOverrides();
+	textRenderSystem_.ClearViewportPositionOverrides();
 	textRenderSystem_.ClearPresentationOverrides();
 	if (activeDocument) {
 		for (const SceneGameFlowTextRequest& request : gameFlowResult.textRequests) {
 			textRenderSystem_.SetTextOverride(request.entityId, request.text);
+		}
+		for (const SceneFishingScoreAttackTextRequest& request :
+			fishingScoreAttackSystem_.GetTextRequests()) {
+			textRenderSystem_.SetTextOverride(request.entityId, request.text);
+			if (request.hasColor) {
+				textRenderSystem_.SetTextColorOverride(request.entityId, request.color);
+			}
 		}
 		SceneEntity* statusText = postProcessProfileSystem_.GetStatusTextEntityId() != 0
 			? activeDocument->FindEntity(
@@ -652,12 +1189,49 @@ void RuntimeScene::Update(float deltaTime)
 			presentation.opacityMultiplier
 		);
 	}
+	const SceneFishingScoreAttackScorePopup& scorePopup =
+		fishingScoreAttackSystem_.GetScorePopup();
+	Camera* popupCamera = GetSceneViewCamera();
+	Vector2 popupViewportPosition{};
+	if (
+		activeDocument && popupCamera && scorePopup.active &&
+		scorePopup.entityId != 0 &&
+		TryProjectWorldPositionToViewport(
+			*popupCamera,
+			{
+				scorePopup.worldPosition.x,
+				scorePopup.worldPosition.y + scorePopup.elapsedSeconds * 1.5f,
+				scorePopup.worldPosition.z
+			},
+			popupViewportPosition
+		)
+	) {
+		const float progress = std::clamp(
+			scorePopup.elapsedSeconds / scorePopup.durationSeconds,
+			0.0f,
+			1.0f
+		);
+		textRenderSystem_.SetViewportPositionOverride(
+			scorePopup.entityId,
+			popupViewportPosition
+		);
+		textRenderSystem_.SetPresentationOverride(
+			scorePopup.entityId,
+			{},
+			0.0f,
+			{ 1.0f, 1.0f },
+			1.0f - progress
+		);
+	}
 	textRenderSystem_.Sync(activeDocument);
 }
 
 void RuntimeScene::UpdatePaused()
 {
 	cameraSystem_.UpdatePaused(camera_, debugCamera_);
+	SceneExecutionContext* executionContext = sceneManager_
+		? sceneManager_->GetExecutionContext()
+		: nullptr;
 	SceneDocument* document = GetSceneDocument();
 	lightingSystem_.Sync(document);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -666,6 +1240,12 @@ void RuntimeScene::UpdatePaused()
 		document,
 		GetSceneViewCamera()
 	);
+	if (document) {
+		fishingScoreAttackSystem_.DrawFormationParticleTuningImGui(
+			*document,
+			true
+		);
+	}
 	debugSystem_.AddDebugDraw(
 		document,
 		objectSystem_,
@@ -676,6 +1256,11 @@ void RuntimeScene::UpdatePaused()
 		true
 	);
 #endif
+	ProcessFormationParticleSaveRequest(
+		fishingScoreAttackSystem_,
+		executionContext,
+		GetSceneAssetId()
+	);
 }
 
 void RuntimeScene::Draw()
@@ -747,13 +1332,21 @@ void RuntimeScene::DrawForegroundEffectsWithCamera(Camera* viewCamera)
 bool RuntimeScene::HasScreenOverlay() const
 {
 	const SceneDocument* document = GetSceneDocument();
-	return document && textRenderSystem_.HasScreenOverlay(*document);
+	return
+		document &&
+		(
+			miniMapSystem_.HasScreenOverlay(document) ||
+			objectSystem_.HasScreenOverlaySprites(*document) ||
+			textRenderSystem_.HasScreenOverlay(*document)
+		);
 }
 
 void RuntimeScene::DrawScreenOverlay(uint32_t width, uint32_t height)
 {
 	SceneDocument* document = GetSceneDocument();
 	if (document) {
+		miniMapSystem_.DrawScreenOverlay(document, width, height);
+		objectSystem_.DrawScreenOverlaySprites(*document, width, height);
 		textRenderSystem_.DrawScreenOverlay(*document, width, height);
 	}
 }
@@ -769,8 +1362,14 @@ void RuntimeScene::DrawOffscreenViews()
 			DrawSceneView(monitorCamera, skipEntityId);
 		}
 	);
+	miniMapSystem_.DrawOffscreen(
+		document,
+		[this](Camera* miniMapCamera, uint64_t skipEntityId) {
+			DrawSceneView(miniMapCamera, skipEntityId);
+		}
+	);
 	if (document) {
-		// Monitor描画が差し替えたCameraを、通常Scene View用へ戻す。
+		// Offscreen描画が差し替えたCameraを、通常Scene View用へ戻す。
 		ApplyRenderCamera(GetSceneViewCamera());
 	}
 }
@@ -806,6 +1405,7 @@ void RuntimeScene::Finalize()
 {
 	// 非所有参照を持つSystemから解除し、最後にObjectとCameraを破棄する。
 	monitorSystem_.Finalize(&runtimeObjectBindings_);
+	miniMapSystem_.Finalize();
 	agentSystem_.Clear();
 	attachmentSystem_.Clear(&objectSystem_);
 	combatSystem_.Clear();
@@ -813,6 +1413,7 @@ void RuntimeScene::Finalize()
 	hitStopSystem_.Clear();
 	enemySystem_.Clear();
 	eventSystem_.Clear();
+	pauseSystem_.Clear();
 	textMotionSystem_.Clear();
 	gameFlowSystem_.Clear();
 	audioSystem_.Clear();
@@ -849,6 +1450,7 @@ void RuntimeScene::Finalize()
 
 void RuntimeScene::PrepareForSceneTransition()
 {
+	pauseSystem_.Clear();
 	textMotionSystem_.Clear();
 	gameFlowSystem_.Clear();
 	SceneExecutionContext* executionContext = sceneManager_

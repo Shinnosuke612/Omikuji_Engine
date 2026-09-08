@@ -162,6 +162,7 @@ public: //公開メンバ関数
 	const Transform& GetTransform() const { return transform; }
 	Transform& GetTransform() { return transform; }
 	const Matrix4x4& GetWorldMatrix() const { return objectWorldMatrix_; }
+	void SetVisualLocalRotation(const Vector3& rotation);
 	bool HasAnimation() const;
 	bool IsAnimationEnabled() const { return animationPlayer_.IsEnabled(); }
 	bool IsAnimationPlaying() const { return animationPlayer_.IsPlaying(); }
@@ -201,6 +202,7 @@ private: //非公開メンバ関数
 private://メンバ変数
 	Transform transform;
 	Matrix4x4 objectWorldMatrix_ = MakeIdentity4x4();
+	Matrix4x4 visualLocalRotationMatrix_ = MakeIdentity4x4();
 	const Object3d* parent_ = nullptr;
 	Matrix4x4 parentMatrixOverride_ = MakeIdentity4x4();
 	bool hasParentMatrixOverride_ = false;

@@ -1,0 +1,335 @@
+{
+  "debug": {
+    "jointAxisLength": 0.05999999865889549,
+    "jointRadius": 0.017999999225139618,
+    "showCameraDirection": false,
+    "showCameraPath": true,
+    "showCameraPathPointCameraDirection": true,
+    "showColliders": false,
+    "showJointAxes": true,
+    "showJointNames": false,
+    "showSkeleton": false
+  },
+  "entities": [
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "farClip": 1000.0,
+          "fovY": 0.44999998807907104,
+          "invertPitch": false,
+          "invertYaw": false,
+          "isMain": true,
+          "localId": 1,
+          "nearClip": 0.10000000149011612,
+          "type": "Camera"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 1,
+      "locked": false,
+      "modelPath": "",
+      "name": "Main Camera",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          2.0,
+          -10.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "enabled": true,
+          "localId": 1,
+          "reflectionIntensity": 0.30000001192092896,
+          "skyboxEnabled": true,
+          "skyboxIntensity": 1.0,
+          "skyboxPath": "resources/rostock_laage_airport_4k.dds",
+          "type": "Environment"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 2,
+      "locked": false,
+      "modelPath": "",
+      "name": "Environment",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": false,
+          "localId": 1,
+          "targetSceneId": "title",
+          "triggerKey": "ENTER",
+          "triggerType": "Key",
+          "type": "SceneTransition"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "sceneId": "title",
+                  "type": "SceneTransition"
+                }
+              ],
+              "inputExpression": {
+                "groups": [
+                  {
+                    "mode": "Any",
+                    "terms": [
+                      {
+                        "input": "ENTER",
+                        "phase": "Pressed"
+                      },
+                      {
+                        "input": "Gamepad A",
+                        "phase": "Pressed"
+                      }
+                    ]
+                  }
+                ],
+                "mode": "Any"
+              },
+              "triggerKey": "ENTER",
+              "triggerType": "OnKeyPressed",
+              "triggerOnce": false
+            }
+          ],
+          "enabled": true,
+          "localId": 2,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 3,
+      "locked": false,
+      "modelPath": "",
+      "name": "Entity",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "lighting": {
+    "shadowMapSize": 4096
+  },
+  "postProcess": {
+    "baseExposure": 1.0,
+    "bloomBlurIterations": 4,
+    "bloomBlurRadius": 1.0,
+    "bloomDownsampleScale": 2,
+    "bloomEnabled": true,
+    "bloomIntensity": 0.699999988079071,
+    "bloomSoftKnee": 0.5,
+    "bloomThreshold": 1.0,
+    "boxBlurEnabled": false,
+    "boxBlurKernelSize": 3,
+    "boxBlurStrength": 1.0,
+    "chromaticAberrationCenter": [
+      0.5,
+      0.5
+    ],
+    "chromaticAberrationEnabled": false,
+    "chromaticAberrationFalloff": 1.5,
+    "chromaticAberrationIntensity": 0.003000000026077032,
+    "depthOfFieldBlurStrength": 1.0,
+    "depthOfFieldEnabled": false,
+    "depthOfFieldFarStrength": 1.0,
+    "depthOfFieldFocusDistance": 10.0,
+    "depthOfFieldFocusRange": 2.0,
+    "depthOfFieldMaxRadius": 4.0,
+    "depthOfFieldNearStrength": 0.0,
+    "dissolveEdgeColor": [
+      1.0,
+      0.4000000059604645,
+      0.30000001192092896,
+      1.0
+    ],
+    "dissolveEdgeWidth": 0.029999999329447746,
+    "dissolveEnabled": false,
+    "dissolveMaskIndex": 0,
+    "dissolveThreshold": 0.0,
+    "gaussianBlurEnabled": false,
+    "gaussianBlurKernelSize": 3,
+    "gaussianBlurSigma": 1.0,
+    "gaussianBlurStrength": 1.0,
+    "grayscaleEnabled": false,
+    "motionBlurEnabled": false,
+    "motionBlurMaxRadius": 24.0,
+    "motionBlurSamples": 8,
+    "motionBlurStrength": 0.5,
+    "noiseAmount": 0.25,
+    "noiseAnimate": true,
+    "noiseEnabled": false,
+    "noiseScale": 1.0,
+    "noiseSeed": 0.0,
+    "noiseSpeed": 1.0,
+    "outlineColor": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "outlineDepthEnabled": true,
+    "outlineDepthWeight": 1.0,
+    "outlineEnabled": false,
+    "outlineLuminanceEnabled": false,
+    "outlineLuminanceWeight": 1.0,
+    "outlineSoftness": 0.05000000074505806,
+    "outlineThickness": 1.0,
+    "outlineThreshold": 0.10000000149011612,
+    "pixelationBlockSize": 4,
+    "pixelationEnabled": false,
+    "radialBlurCenter": [
+      0.5,
+      0.5
+    ],
+    "radialBlurEnabled": false,
+    "radialBlurSamples": 10,
+    "radialBlurWidth": 0.009999999776482582,
+    "toneMapMode": 0,
+    "underwaterDistortion": 0.012000000104308128,
+    "underwaterEnabled": false,
+    "underwaterFogDensity": 0.03500000014901161,
+    "underwaterIntensity": 0.6499999761581421,
+    "underwaterTintColor": [
+      0.019999999552965164,
+      0.44999998807907104,
+      0.6800000071525574,
+      1.0
+    ],
+    "vignetteEnabled": false,
+    "vignetteIntensity": 1.0,
+    "vignettePower": 0.800000011920929,
+    "vignetteScale": 16.0,
+    "waterRefractionEdgeSoftness": 0.07999999821186066,
+    "waterRefractionEnabled": false,
+    "waterRefractionStrength": 0.017999999225139618,
+    "waterRefractionTintColor": [
+      0.019999999552965164,
+      0.550000011920929,
+      0.8199999928474426,
+      1.0
+    ],
+    "waterRefractionTintStrength": 0.11999999731779099
+  },
+  "sceneName": "RESULT",
+  "teams": [],
+  "version": 27
+}

@@ -72,9 +72,9 @@ void Framework::Initialize() {
 	input_ = Input::GetInstance();
 	input_->GetInstance()->Initialize(winApp_);
 
-#if defined(_DEBUG) || defined(DEVELOPMENT)
 	DebugRenderer::GetInstance()->Initialize(dxCommon_);
 
+#if defined(_DEBUG) || defined(DEVELOPMENT)
 	imguiManager_ = new ImGuiManager();
 	imguiManager_->Initialize(winApp_, dxCommon_, srvManager_);
 #endif
@@ -130,9 +130,9 @@ void Framework::Finalize() {
 	delete sceneFactory_;
 	sceneFactory_ = nullptr;
 
-#if defined(_DEBUG) || defined(DEVELOPMENT)
 	DebugRenderer::GetInstance()->Finalize();
 
+#if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (imguiManager_) {
 		imguiManager_->Finalize();
 	}

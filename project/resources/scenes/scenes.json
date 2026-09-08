@@ -9,17 +9,23 @@
     {
       "id": "gameplay",
       "name": "GAMEPLAY",
-      "path": "resources/scenes/gameplay.scene.json",
+      "path": "resources/scenes/GAMEPLAY.scene.json",
       "runtimeProfile": "RUNTIME"
     },
     {
-      "id": "gameplay_legacy",
-      "name": "GAMEPLAY LEGACY",
-      "path": "resources/scenes/gameplay_legacy.scene.json",
+      "id": "result",
+      "name": "RESULT",
+      "path": "resources/scenes/RESULT.scene.json",
+      "runtimeProfile": "RUNTIME"
+    },
+    {
+      "id": "tutorial",
+      "name": "TUTORIAL",
+      "path": "resources/scenes/TUTORIAL.scene.json",
       "runtimeProfile": "RUNTIME"
     }
   ],
-  "startScene": "title",
+  "startScene": "gameplay",
   "startup": {
     "debug": "EDITOR",
     "development": "EDITOR",

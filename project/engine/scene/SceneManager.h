@@ -40,6 +40,11 @@ public:
 
 	// ChangeSceneは予約のみ行い、次のUpdate先頭でDocument読込と初期化を確定する。
 	void ChangeScene(const std::string& sceneId);
+	// Runtime中のScene遷移を予約する。演出を使わない場合は次のUpdateで即時切り替える。
+	// ChangeSceneは起動処理・Editor操作向けの通常切り替えとして残す。
+	void RequestSceneTransition(const std::string& sceneId, bool useEffect = true);
+	bool IsSceneTransitioning() const;
+	float GetSceneTransitionFadeAmount() const;
 	SceneInstanceId LoadScene(
 		const std::string& sceneId,
 		SceneLoadMode loadMode,
@@ -98,6 +103,13 @@ public:
 	) const;
 
 private:
+	enum class SceneTransitionPhase {
+		None,
+		FadeOut,
+		FadeIn
+	};
+
+	void AdvanceSceneTransition(float deltaTime);
 	void ActivatePendingScene();
 	void DiscardPendingScene();
 	void ProcessPendingSceneUnloads();
@@ -122,5 +134,10 @@ private:
 	SceneCatalog* sceneCatalog_ = nullptr;
 	std::string currentSceneName_;
 	SceneExecutionContext* executionContext_ = nullptr;
+	SceneTransitionPhase sceneTransitionPhase_ = SceneTransitionPhase::None;
+	std::string sceneTransitionTargetId_;
+	float sceneTransitionElapsedSeconds_ = 0.0f;
+	float sceneTransitionFadeAmount_ = 0.0f;
+	static constexpr float kSceneTransitionFadeSeconds = 0.5f;
 };
 

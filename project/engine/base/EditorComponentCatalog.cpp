@@ -28,7 +28,7 @@ namespace {
 		EditorComponentTag::Prefab
 	}};
 
-	constexpr std::array<EditorComponentDefinition, 38> kDefinitions = {{
+	constexpr std::array<EditorComponentDefinition, 48> kDefinitions = {{
 		{
 			"MeshRenderer", "3Dモデル表示", "Mesh Renderer",
 			"3DモデルとMaterialをSceneへ表示します。",
@@ -239,6 +239,23 @@ namespace {
 			EditorComponentTagBit(EditorComponentTag::Event)
 		},
 		{
+			"PauseController", "Pause管理", "Pause Controller",
+			"Scene内のPause Profileと停止対象Domainを定義します。",
+			"Defines pause profiles and paused domains for a Scene.",
+			EditorComponentCategory::EventAndFlow,
+			SceneContext, 41, -1, "",
+			EditorComponentTagBit(EditorComponentTag::Event)
+		},
+		{
+			"ProcessPolicy", "処理Policy", "Process Policy",
+			"Pause中にEntityを更新するかどうかを親から継承して定義します。",
+			"Defines whether an Entity processes during pause, with parent inheritance.",
+			EditorComponentCategory::EventAndFlow,
+			SceneAndPrefabContext, 42, 11, "",
+			EditorComponentTagBit(EditorComponentTag::Event) |
+			EditorComponentTagBit(EditorComponentTag::Prefab)
+		},
+		{
 			"AudioSource", "Audio Source", "Audio Source",
 			"2Dまたは3D Audio ClipのBus、再生開始、Loopを設定します。",
 			"Configures a 2D or 3D audio clip, bus, start playback, and loop.",
@@ -366,6 +383,79 @@ namespace {
 			EditorComponentTagBit(EditorComponentTag::Combat) |
 			EditorComponentTagBit(EditorComponentTag::Animation) |
 			EditorComponentTagBit(EditorComponentTag::Prefab)
+		},
+		{
+			"FishingScoreAttackDirector", "釣りスコア管理", "Fishing Score Attack Director",
+			"魚数選択、距離倍率、釣り針Pool、制限時間の設定を保持します。",
+			"Stores fish selection, distance multipliers, hook pool, and time-limit settings.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 34, -1, "",
+			EditorComponentTagBit(EditorComponentTag::Spawn) |
+			EditorComponentTagBit(EditorComponentTag::UI)
+		},
+		{
+			"FishingResultTracker", "釣り結果トラッカー", "Fishing Result Tracker",
+			"釣り針ランク別の結果集計先と同率時の選択規則を保持します。",
+			"Stores the fishing result channel and tie-break policy for rank outcomes.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 34, -1, "FishingScoreAttackDirector",
+			EditorComponentTagBit(EditorComponentTag::UI) |
+			EditorComponentTagBit(EditorComponentTag::Reference)
+		},
+		{
+			"FishingHookSpawnArea", "釣り針生成範囲", "Fishing Hook Spawn Area",
+			"釣り針をランダム生成するXZ範囲を設定します。",
+			"Configures the XZ area used to randomly place fishing hooks.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 35, -1, "",
+			EditorComponentTagBit(EditorComponentTag::Spawn) |
+			EditorComponentTagBit(EditorComponentTag::ThreeD)
+		},
+		{
+			"FishingHookPool", "釣り針Pool", "Fishing Hook Pool",
+			"距離区間ごとの釣り針抽選Weightを設定します。",
+			"Configures hook selection weights for each distance band.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 36, -1, "",
+			EditorComponentTagBit(EditorComponentTag::Spawn) |
+			EditorComponentTagBit(EditorComponentTag::Reference)
+		},
+		{
+			"FishingHook", "釣り針", "Fishing Hook",
+			"釣り針に接触したときの基礎スコアを設定します。",
+			"Configures the base score awarded when the player reaches a hook.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 37, -1, "OBBCollider",
+			EditorComponentTagBit(EditorComponentTag::Collision) |
+			EditorComponentTagBit(EditorComponentTag::Spawn)
+		},
+		{
+			"FishingShark", "周回サメ", "Fishing Shark",
+			"水域を周回し、プレイヤーの魚群に接触すると減点します。",
+			"Patrols the water and subtracts points when it contacts the player's formation.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 38, -1, "OBBCollider",
+			EditorComponentTagBit(EditorComponentTag::Collision) |
+			EditorComponentTagBit(EditorComponentTag::Enemy) |
+			EditorComponentTagBit(EditorComponentTag::ThreeD)
+		},
+		{
+			"FishingObstacle", "釣り障害物", "Fishing Obstacle",
+			"Cubeなどの見た目とStatic Colliderを持つ釣り用障害物です。",
+			"Marks a fishing obstacle with a visible mesh and a static collider.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 39, -1, "OBBCollider",
+			EditorComponentTagBit(EditorComponentTag::Collision) |
+			EditorComponentTagBit(EditorComponentTag::ThreeD)
+		},
+		{
+			"AgentTeamLeaderController", "群れ仮想リーダー制御", "Agent Team Leader Controller",
+			"所属Teamの仮想リーダーを、このEntityのTransformで制御します。",
+			"Controls the owning Team's virtual leader from this Entity's Transform.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 40, -1, "",
+			EditorComponentTagBit(EditorComponentTag::ThreeD) |
+			EditorComponentTagBit(EditorComponentTag::Reference)
 		}
 	}};
 

@@ -97,7 +97,10 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	float deltaTime,
 	bool runtimeActive,
-	bool playing
+	bool playing,
+	bool acceptGameplayInput,
+	bool acceptWheelZoom,
+	const std::function<bool(uint64_t)>& shouldProcessCameraPath
 ) {
 	if (!playing) {
 		if (wasPlaying_) {
@@ -124,12 +127,17 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 
 	// CameraPathを優先し、終了したフレームだけPlayer追従へ制御を戻す。
 	if (cameraPathRuntime_.IsPlaying()) {
+		if (shouldProcessCameraPath &&
+			!shouldProcessCameraPath(activeCameraPathEntityId_)) {
+			camera->Update();
+			return;
+		}
 		cameraPathRuntime_.Update(deltaTime, *camera);
 		if (cameraPathRuntime_.ConsumeFinishedThisFrame()) {
 			HandlePathFinished(document, camera, player);
 		}
 	} else {
-		UpdateCameraSwitch(document, playing);
+		UpdateCameraSwitch(document, playing && acceptGameplayInput);
 		ApplyActiveCamera(document, camera);
 		UpdateThirdPersonCamera(
 			document,
@@ -138,10 +146,18 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 			bindings,
 			deltaTime * 0.5f,
 			playing,
-			true
+			acceptGameplayInput,
+			acceptGameplayInput && acceptWheelZoom
 		);
-		TryStartCameraPath(document, camera);
+		if (acceptGameplayInput) {
+			TryStartCameraPath(document, camera);
+		}
 		if (cameraPathRuntime_.IsPlaying()) {
+			if (shouldProcessCameraPath &&
+				!shouldProcessCameraPath(activeCameraPathEntityId_)) {
+				camera->Update();
+				return;
+			}
 			cameraPathRuntime_.Update(deltaTime, *camera);
 			if (cameraPathRuntime_.ConsumeFinishedThisFrame()) {
 				HandlePathFinished(document, camera, player);
@@ -172,6 +188,7 @@ void SceneCameraSystem::UpdateAfterSimulation(
 			bindings,
 			deltaTime * 0.5f,
 			playing,
+			false,
 			false
 		);
 	}
@@ -391,7 +408,8 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	float deltaTime,
 	bool playing,
-	bool acceptMouseInput
+	bool acceptMouseInput,
+	bool acceptWheelZoom
 ) {
 	(void)player;
 	if (!playing || !camera) {
@@ -453,9 +471,9 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	}
 
 	Input* input = Input::GetInstance();
-	const bool altHeld =
-		input && (input->PushKey(DIK_LMENU) || input->PushKey(DIK_RMENU));
-	if (altHeld && acceptMouseInput) {
+	const bool gameplayMouseActive =
+		!input || input->IsCursorCaptured();
+	if (!gameplayMouseActive && acceptMouseInput) {
 		return true;
 	}
 
@@ -564,7 +582,8 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 		deltaTime,
 		acceptMouseInput &&
 			thirdPerson->thirdPersonAllowMouseInput &&
-			!altHeld
+			gameplayMouseActive,
+		acceptWheelZoom
 	);
 	ApplyPlayerDissolve(
 		bindings,

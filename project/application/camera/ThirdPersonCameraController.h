@@ -16,7 +16,8 @@ public:
 		float targetYaw,
 		const std::vector<OBBCollider*>& obstacleColliders,
 		float deltaTime,
-		bool acceptMouseInput
+		bool acceptMouseInput,
+		bool acceptWheelZoom
 	);
 
 	void SetYawPitch(float yaw, float pitch);

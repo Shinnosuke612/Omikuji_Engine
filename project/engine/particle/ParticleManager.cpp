@@ -105,7 +105,7 @@ namespace {
 	}
 
 	bool ShouldIncludeParticleInWaterPass(
-		const ParticleManager::Particle& particle,
+		const Vector3& particlePosition,
 		const ParticleManager::WaterDrawFilter& filter
 	) {
 		if (filter.mode == ParticleManager::WaterDrawMode::kAll) {
@@ -115,7 +115,7 @@ namespace {
 		const bool refracted =
 			IntersectsSegmentAabb(
 				filter.cameraPosition,
-				particle.transform.translate,
+				particlePosition,
 				filter.waterCenter,
 				filter.waterHalfSize
 			);
@@ -168,6 +168,9 @@ void ParticleManager::Reset() {
 	sceneParticleAssetInstances_.clear();
 	sceneParticleAssetCycleSteps_.clear();
 	sceneGpuParticleKeys_.clear();
+	pausedSceneParticleIds_.clear();
+	sceneParticleGroupNames_.clear();
+	particleGroupPauseOwners_.clear();
 	sceneParticleLayoutLoaded_ = false;
 	sceneParticleLayoutDirty_ = false;
 	sceneParticlePersistenceMessage_.clear();
@@ -1075,12 +1078,27 @@ void ParticleManager::UpdateSceneParticles(const std::string& sceneName) {
 	for (SceneParticleAssetInstance& instance : it->second) {
 		if (!instance.enabled) continue;
 		for (SceneParticlePlacement& placement : instance.runtimePlacements) {
+			if (placement.effect &&
+				placement.effect->simulationType == ParticleSimulationType::kCPU) {
+				sceneParticleGroupNames_[sceneName].insert(placement.effect->name);
+			}
 			if (placement.enabled && placement.emitter) placement.emitter->Update();
 		}
 	}
 }
 
-void ParticleManager::ReleaseSceneParticles(const std::string& sceneName) {
+void ParticleManager::ReleaseSceneParticles(
+	const std::string& sceneName
+) {
+	pausedSceneParticleIds_.erase(sceneName);
+	if (const auto found = sceneParticleGroupNames_.find(sceneName);
+		found != sceneParticleGroupNames_.end()) {
+		const std::string ownerKey = "scene:" + sceneName;
+		for (const std::string& groupName : found->second) {
+			SetParticleGroupSimulationPaused(groupName, ownerKey, false);
+		}
+		sceneParticleGroupNames_.erase(found);
+	}
 	const std::string sceneKeyPrefix = "scene|" + sceneName + "|";
 	for (auto it = sceneGpuParticleKeys_.begin();
 		it != sceneGpuParticleKeys_.end();) {
@@ -1675,6 +1693,82 @@ bool ParticleManager::SetParticleGroupTexture(
 	group->second.textureSrvIndex =
 		TextureManager::GetInstance()->GetSrvIndex(textureFilePath);
 	return true;
+}
+
+bool ParticleManager::SetParticleGroupParentTransform(
+	const std::string& name,
+	const Vector3& translation,
+	float yaw
+) {
+	if (
+		!std::isfinite(translation.x) ||
+		!std::isfinite(translation.y) ||
+		!std::isfinite(translation.z) ||
+		!std::isfinite(yaw)
+	) {
+		return false;
+	}
+	auto it = particleGroups_.find(name);
+	if (it == particleGroups_.end()) {
+		return false;
+	}
+	it->second.parentTransformEnabled = true;
+	it->second.parentTranslation = translation;
+	it->second.parentYaw = yaw;
+	return true;
+}
+
+void ParticleManager::ClearParticleGroupParentTransform(const std::string& name) {
+	auto it = particleGroups_.find(name);
+	if (it == particleGroups_.end()) {
+		return;
+	}
+	it->second.parentTransformEnabled = false;
+	it->second.parentTranslation = {};
+	it->second.parentYaw = 0.0f;
+}
+
+void ParticleManager::SetParticleGroupSimulationPaused(
+	const std::string& name,
+	const std::string& ownerKey,
+	bool paused
+) {
+	if (name.empty() || ownerKey.empty()) {
+		return;
+	}
+	if (paused) {
+		particleGroupPauseOwners_[name].insert(ownerKey);
+		return;
+	}
+	auto found = particleGroupPauseOwners_.find(name);
+	if (found == particleGroupPauseOwners_.end()) {
+		return;
+	}
+	found->second.erase(ownerKey);
+	if (found->second.empty()) {
+		particleGroupPauseOwners_.erase(found);
+	}
+}
+
+void ParticleManager::SetSceneParticleSimulationPaused(
+	const std::string& sceneId, bool paused
+) {
+	if (sceneId.empty()) {
+		return;
+	}
+	if (paused) {
+		pausedSceneParticleIds_.insert(sceneId);
+	} else {
+		pausedSceneParticleIds_.erase(sceneId);
+	}
+	const auto found = sceneParticleGroupNames_.find(sceneId);
+	if (found == sceneParticleGroupNames_.end()) {
+		return;
+	}
+	const std::string ownerKey = "scene:" + sceneId;
+	for (const std::string& groupName : found->second) {
+		SetParticleGroupSimulationPaused(groupName, ownerKey, paused);
+	}
 }
 
 void ParticleManager::InitializeParticleLife(Particle& particle, const ParticleBehavior& behavior) {
@@ -2315,6 +2409,22 @@ void ParticleManager::UpdateParticleRotation(Particle& particle) {
 	}
 }
 
+Vector3 ParticleManager::ResolveParticleWorldPosition(
+	const ParticleGroup& group,
+	const Vector3& localPosition
+) const {
+	if (!group.parentTransformEnabled) {
+		return localPosition;
+	}
+	const float cosine = std::cos(group.parentYaw);
+	const float sine = std::sin(group.parentYaw);
+	return {
+		group.parentTranslation.x + localPosition.x * cosine + localPosition.z * sine,
+		group.parentTranslation.y + localPosition.y,
+		group.parentTranslation.z - localPosition.x * sine + localPosition.z * cosine
+	};
+}
+
 void ParticleManager::Update() {
 	using Clock = std::chrono::steady_clock;
 	const auto updateStart = Clock::now();
@@ -2353,7 +2463,16 @@ void ParticleManager::Update() {
 	if (gpuParticleEnabled_) {
 		const auto gpuUpdateStart = Clock::now();
 		for (auto& [key, particle] : gpuParticles_) {
-			(void)key;
+			bool scenePaused = false;
+			for (const std::string& sceneId : pausedSceneParticleIds_) {
+				if (key.rfind("scene|" + sceneId + "|", 0) == 0) {
+					scenePaused = true;
+					break;
+				}
+			}
+			if (scenePaused) {
+				continue;
+			}
 			particle->Update();
 		}
 		runtimeStats_.gpuParticleCpuUpdateMs =
@@ -2363,6 +2482,15 @@ void ParticleManager::Update() {
 	const auto cpuUpdateStart = Clock::now();
 	uint32_t cpuParticleActiveCount = 0;
 	for (auto& [name, group] : particleGroups_) {
+		const auto pauseOwners = particleGroupPauseOwners_.find(name);
+		if (pauseOwners != particleGroupPauseOwners_.end() &&
+			!pauseOwners->second.empty()) {
+			group.instanceCount = 0;
+			cpuParticleActiveCount += static_cast<uint32_t>(
+				(std::min)(group.particles.size(), static_cast<size_t>(kMaxInstanceCount))
+			);
+			continue;
+		}
 		group.uvOffset.x += group.render.uvScrollSpeed.x * deltaTime_;
 		group.uvOffset.y += group.render.uvScrollSpeed.y * deltaTime_;
 		group.materialData->uvTransform = MakeIdentity4x4();
@@ -2450,8 +2578,17 @@ uint32_t ParticleManager::RebuildCpuParticleInstances(
 			if (group.instanceCount >= kMaxInstanceCount) {
 				break;
 			}
-			if (!ShouldIncludeParticleInWaterPass(particle, filter)) {
+			const Vector3 worldPosition = ResolveParticleWorldPosition(
+				group,
+				particle.transform.translate
+			);
+			if (!ShouldIncludeParticleInWaterPass(worldPosition, filter)) {
 				continue;
+			}
+			Vector3 worldRotation = particle.transform.rotate;
+			if (group.parentTransformEnabled &&
+				particle.billboardMode != BillboardMode::kBillboard) {
+				worldRotation.y = WrapRadian(worldRotation.y + group.parentYaw);
 			}
 
 			Matrix4x4 worldMatrix{};
@@ -2459,14 +2596,14 @@ uint32_t ParticleManager::RebuildCpuParticleInstances(
 				worldMatrix = MakeBillboardMatrix(
 					camera->GetWorldMatrix(),
 					particle.transform.scale,
-					particle.transform.translate,
+					worldPosition,
 					particle.transform.rotate.z
 				);
 			} else {
 				worldMatrix = MakeAffineMatrix(
 					particle.transform.scale,
-					particle.transform.rotate,
-					particle.transform.translate
+					worldRotation,
+					worldPosition
 				);
 			}
 			Matrix4x4 wvp = Multiply(

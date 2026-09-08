@@ -122,7 +122,8 @@ void ThirdPersonCameraController::Update(
 	float targetYaw,
 	const std::vector<OBBCollider*>& obstacleColliders,
 	float deltaTime,
-	bool acceptMouseInput
+	bool acceptMouseInput,
+	bool acceptWheelZoom
 ) {
 	if (!camera_) {
 		return;
@@ -154,7 +155,7 @@ void ThirdPersonCameraController::Update(
 				maxPitch_
 			);
 
-			if (!isAimMode_) {
+			if (!isAimMode_ && acceptWheelZoom) {
 				const float wheel = input->GetMouseWheel();
 				if (std::abs(wheel) > 0.000001f) {
 					targetDistance_ = std::clamp(
