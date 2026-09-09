@@ -214,10 +214,15 @@ public:
 
 	uint32_t GetSceneViewWidth() const { return sceneViewWidth_; }
 	uint32_t GetSceneViewHeight() const { return sceneViewHeight_; }
+	float GetSceneViewAspectRatio() const { return 16.0f / 9.0f; }
 	float GetSceneViewMinX() const { return sceneViewMinX_; }
 	float GetSceneViewMinY() const { return sceneViewMinY_; }
 	float GetSceneViewMaxX() const { return sceneViewMaxX_; }
 	float GetSceneViewMaxY() const { return sceneViewMaxY_; }
+	bool IsGameplayCameraMouseActive(bool altHeld) const;
+	bool ShouldHideCursorForGameplayCameraMouse() const {
+		return hideCursorWhileGameplayCameraMouseActive_;
+	}
 	bool IsSceneGridVisible() const { return sceneGridVisible_; }
 	static bool IsSceneViewInputActive();
 	void SetEditorSession(EditorSession* editorSession) {
@@ -337,6 +342,9 @@ private:
 	void BuildDefaultLayout();
 	void DrawHierarchyWindow(const char* sceneName);
 	void DrawInspectorWindow();
+	void DrawFishingScoreAttackConsoleWindow();
+	void DrawRockLayoutWindow();
+	void DrawInputSettingsWindow();
 	void StopAudioPreview();
 	void DrawSceneComponentPicker();
 	void DrawPrefabComponentPicker();
@@ -511,6 +519,9 @@ private:
 	bool showInspector_ = true;
 	bool showProject_ = true;
 	bool showConsole_ = true;
+	bool showFishingScoreAttackConsole_ = true;
+	bool showRockLayout_ = true;
+	bool showInputSettings_ = true;
 	bool showLoadedScenes_ = true;
 	bool showPrefab_ = false;
 	bool showPrefabInspector_ = true;
@@ -524,6 +535,8 @@ private:
 	float editorFontSize_ = 13.0f;
 	bool editorFontRebuildRequested_ = false;
 	bool startFullscreen_ = false;
+	bool requireAltForGameplayCameraMouse_ = false;
+	bool hideCursorWhileGameplayCameraMouseActive_ = true;
 	// シーン/Entity/コンポーネント単位のInspector折りたたみ状態。
 	std::unordered_map<std::string, bool> componentFoldoutStates_;
 	// Transformなど、Component以外のInspector区画もEditorローカルで保持する。
@@ -535,6 +548,10 @@ private:
 	std::string prefabSummarySelectedComponentType_;
 	int selectedHierarchyItem_ = 0;
 	uint64_t selectedEntityId_ = 0;
+	uint64_t fishingConsoleDirectorEntityId_ = 0;
+	int fishingConsolePreviewFishCount_ = 1;
+	std::string fishingHookRankBubbleSaveStatus_;
+	bool fishingHookRankBubbleSaveStatusIsError_ = false;
 	ComponentPickerState sceneComponentPicker_;
 	// Hierarchyの複数選択と表示状態を保持する。selectedEntityId_はInspector/Gizmo用の基準Entity。
 	std::unordered_set<uint64_t> selectedEntityIds_;

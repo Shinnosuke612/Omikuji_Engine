@@ -62,6 +62,8 @@ namespace {
 	using SceneEntityQuery::FindEnabledComponent;
 	using SceneEntityQuery::IsEntityActiveInHierarchy;
 	using SceneTransformResolver::ResolveScene3DTransform;
+	constexpr const char* kSceneTransitionMaskPath =
+		"resources/transition/transition.png";
 
 	constexpr SceneBuildConfiguration GetCurrentBuildConfiguration() {
 #if defined(_DEBUG)
@@ -437,6 +439,7 @@ void Game::Initialize() {
 
 	TextureManager::GetInstance()->LoadTexture("resources/noise0.png");
 	TextureManager::GetInstance()->LoadTexture("resources/noise1.png");
+	TextureManager::GetInstance()->LoadTexture(kSceneTransitionMaskPath);
 
 	if (executionContext_) {
 		const SceneDocument* document = sceneManager_
@@ -517,8 +520,9 @@ void Game::Update() {
 		editorCameraSnapshot_ = CaptureCameraSnapshot();
 	}
 
-#if defined(_DEBUG) || defined(DEVELOPMENT)
 	DebugRenderer::GetInstance()->Clear();
+
+#if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (editorSession_) {
 
 	ImGui::Begin("Post Process Stack");
@@ -565,8 +569,7 @@ void Game::Update() {
 		imguiManager_->GetSceneViewHeight() > 0
 	) {
 		editorCamera->SetAspectRatio(
-			static_cast<float>(imguiManager_->GetSceneViewWidth()) /
-			static_cast<float>(imguiManager_->GetSceneViewHeight())
+			imguiManager_->GetSceneViewAspectRatio()
 		);
 	}
 	}
@@ -634,11 +637,16 @@ void Game::Update() {
 			input->PushKey(DIK_LMENU) || input->PushKey(DIK_RMENU);
 		const bool playing =
 			executionContext_ && executionContext_->IsPlaying();
+		const bool gameplayMouseActive = playing && (
+			imguiManager_
+				? imguiManager_->IsGameplayCameraMouseActive(altHeld)
+				: !altHeld
+		);
 		if (
 			editorSession_ &&
 			imguiManager_ &&
 			playing &&
-			!altHeld
+			gameplayMouseActive
 		) {
 			input->SetCursorCaptureRect(
 				imguiManager_->GetSceneViewMinX(),
@@ -647,7 +655,12 @@ void Game::Update() {
 				imguiManager_->GetSceneViewMaxY()
 			);
 		}
-		input->SetCursorCapture(playing && !altHeld);
+		input->SetCursorCapture(
+			gameplayMouseActive,
+			imguiManager_
+				? imguiManager_->ShouldHideCursorForGameplayCameraMouse()
+				: true
+		);
 	}
 	const bool paused =
 		executionContext_ && executionContext_->IsPaused();
@@ -664,6 +677,10 @@ void Game::Update() {
 		sceneManager_->Update(deltaTime);
 	} else {
 		sceneManager_->UpdatePaused();
+	}
+	if (sceneManager_->ConsumeExitRequest()) {
+		endRequest_ = true;
+		return;
 	}
 	ApplyRuntimePostProcessSettings();
 	if (preserveEditorCamera) {
@@ -1421,11 +1438,8 @@ void Game::Draw() {
 		return;
 	}
 
-	// 影描画でもスキニングパレットSRVを使うので先に必要
+	// ShadowMapを含む描画用SRVヒープを、影パスより先に設定する。
 	srvManager_->PreDraw();
-
-	sceneManager_->DrawShadow();
-	sceneManager_->DrawOffscreenViews();
 
 	uint32_t renderWidth = dxCommon_->GetClientWidth();
 	uint32_t renderHeight = dxCommon_->GetClientHeight();
@@ -1435,6 +1449,16 @@ void Game::Draw() {
 		renderHeight = imguiManager_->GetSceneViewHeight();
 	}
 #endif
+	if (renderHeight > 0) {
+		sceneManager_->SetRenderAspectRatio(
+			static_cast<float>(renderWidth) /
+			static_cast<float>(renderHeight)
+		);
+	}
+
+	sceneManager_->DrawShadow();
+	sceneManager_->DrawOffscreenViews();
+
 	sceneRenderTarget_->Resize(renderWidth, renderHeight);
 	if (
 		motionBlurHistoryRenderTarget_->GetWidth() != renderWidth ||
@@ -1467,10 +1491,10 @@ void Game::Draw() {
 	) {
 		EditorGridRenderer::AddGrid(*DebugRenderer::GetInstance());
 	}
+#endif
 	DebugRenderer::GetInstance()->Draw(
 		Object3dCommon::GetInstance()->GetDefaultCamera()
 	);
-#endif
 	sceneRenderTarget_->End();
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -1910,6 +1934,33 @@ void Game::Draw() {
 		sceneManager_->DrawScreenOverlay(renderWidth, renderHeight);
 		textOverlayRenderTarget_->End();
 		sourceHandle = textOverlayRenderTarget_->GetSrvGpuHandle();
+	}
+	if (
+		sceneManager_ &&
+		sceneManager_->IsSceneTransitioning()
+	) {
+		FullscreenCopy::Parameters parameters{};
+		parameters.radialBlurCenter[0] = 0.5f;
+		parameters.radialBlurCenter[1] = 0.5f;
+		parameters.radialBlurWidth = (
+			1.0f - sceneManager_->GetSceneTransitionFadeAmount()
+		);
+		SceneRenderTarget* destination =
+			postProcessRenderTargets_[passIndex % 2];
+		destination->Begin();
+		srvManager_->PreDraw();
+		fullscreenCopy_->SetParameters(parameters);
+		fullscreenCopy_->Draw(
+			sourceHandle,
+			depthHandle,
+			TextureManager::GetInstance()->GetSrvHandleGPU(
+				kSceneTransitionMaskPath
+			),
+			FullscreenCopy::Effect::kIrisTransition
+		);
+		destination->End();
+		sourceHandle = destination->GetSrvGpuHandle();
+		++passIndex;
 	}
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)

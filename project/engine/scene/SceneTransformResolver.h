@@ -22,4 +22,11 @@ namespace SceneTransformResolver {
 		const SceneDocument& document,
 		const SceneEntity& entity
 	);
+
+	bool TryConvertSceneWorldTransformToLocal(
+		const SceneDocument& document,
+		const SceneEntity& entity,
+		const Transform& worldTransform,
+		Transform& localTransform
+	);
 }

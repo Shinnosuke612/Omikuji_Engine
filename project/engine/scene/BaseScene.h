@@ -29,6 +29,10 @@ public:
 	virtual void Update(float deltaTime) = 0;
 	// Pause中はSimulationを進めず、Debug Cameraなど必要な表示状態だけを更新する。
 	virtual void UpdatePaused() {}
+	/// <summary>
+	/// Scene内で発生したアプリ終了要求を呼び出し元へ渡します。
+	/// </summary>
+	virtual bool ConsumeExitRequest() { return false; }
 
 	virtual void Draw() = 0;
 	// Additive描画ではActive SceneのCameraを全Instanceへ共有する。
@@ -69,6 +73,8 @@ public:
 		DrawShadow();
 	}
 	virtual void DrawOffscreenViews() {}
+	// 描画先の比率が決まった時点でCameraへ反映する。
+	virtual void SetRenderAspectRatio(float aspectRatio) { (void)aspectRatio; }
 	virtual void SetDeferForegroundEffects(bool defer) { (void)defer; }
 	// Runtime-only Profileなど、Scene更新後に有効になる描画設定を返す任意口。
 	// 非Runtime Sceneはfalseのままで既存のDocument Baselineを使う。

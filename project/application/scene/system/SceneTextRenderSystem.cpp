@@ -2,6 +2,7 @@
 #include "SceneTextRenderSystem.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <sstream>
@@ -15,7 +16,9 @@
 #include "../../../engine/scene/SceneDocument.h"
 #include "../../../engine/scene/SceneEntityQuery.h"
 #include "../../../engine/scene/SceneTransformResolver.h"
+#include "../../../engine/text/TextFontRegistry.h"
 #include "../../../engine/text/TextRasterizer.h"
+#include "SceneScreenOverlayCanvasLayout.h"
 
 namespace {
 	using SceneEntityQuery::FindEnabledComponent;
@@ -24,29 +27,42 @@ namespace {
 
 	TextRasterizer::Settings ToRasterizerSettings(
 		const SceneComponent& component,
-		const std::string& text
+		const std::string& text,
+		const Vector4& color,
+		const std::string& fontFamily,
+		const std::shared_ptr<const TextFontResource>& resourceFont,
+		float rasterScale
 	) {
 		TextRasterizer::Settings settings{};
 		settings.text = text;
-		settings.fontFamily = component.textFontFamily;
-		settings.fontSize = component.textFontSize;
+		settings.fontFamily = fontFamily;
+		settings.resourceFont = resourceFont;
+		settings.fontSize = component.textFontSize * rasterScale;
 		settings.bold = component.textFontWeight == "Bold";
 		settings.italic = component.textFontStyle == "Italic";
-		settings.color = component.textColor;
+		settings.color = color;
 		settings.opacity = component.textOpacity;
 		settings.horizontalAlignment = component.textHorizontalAlignment;
 		settings.verticalAlignment = component.textVerticalAlignment;
 		settings.wordWrap = component.textWrapMode == "Word";
 		settings.overflowMode = component.textOverflowMode;
-		settings.layoutSize = component.textLayoutSize;
-		settings.characterSpacing = component.textCharacterSpacing;
+		settings.layoutSize = {
+			component.textLayoutSize.x > 0.0f
+				? component.textLayoutSize.x * rasterScale : 0.0f,
+			component.textLayoutSize.y > 0.0f
+				? component.textLayoutSize.y * rasterScale : 0.0f
+		};
+		settings.characterSpacing = component.textCharacterSpacing * rasterScale;
 		settings.lineSpacing = component.textLineSpacing;
 		settings.outlineEnabled = component.textOutlineEnabled;
 		settings.outlineColor = component.textOutlineColor;
-		settings.outlineWidth = component.textOutlineWidth;
+		settings.outlineWidth = component.textOutlineWidth * rasterScale;
 		settings.shadowEnabled = component.textShadowEnabled;
 		settings.shadowColor = component.textShadowColor;
-		settings.shadowOffset = component.textShadowOffset;
+		settings.shadowOffset = {
+			component.textShadowOffset.x * rasterScale,
+			component.textShadowOffset.y * rasterScale
+		};
 		return settings;
 	}
 
@@ -61,14 +77,21 @@ namespace {
 
 	std::string BuildContentSignature(
 		const SceneComponent& component,
-		const std::string& text
+		const std::string& text,
+		const Vector4& color,
+		const std::string& resolutionKey,
+		uint64_t registryGeneration,
+		float rasterScale
 	) {
 		std::ostringstream stream;
-		stream << text << '\n' << component.textFontFamily << '|'
+		stream << text << '\n' << component.textFontSource << '|'
+			<< component.textFontResourcePath << '|' << component.textFontFamily << '|'
+			<< resolutionKey << "|generation=" << registryGeneration << '|'
 			<< component.textFontSize << '|' << component.textFontWeight << '|'
-			<< component.textFontStyle << '|' << component.textColor.x << ','
-			<< component.textColor.y << ',' << component.textColor.z << ','
-			<< component.textColor.w << '|' << component.textOpacity << '|'
+			<< "rasterScale=" << rasterScale << '|'
+			<< component.textFontStyle << '|' << color.x << ','
+			<< color.y << ',' << color.z << ',' << color.w << '|'
+			<< component.textOpacity << '|'
 			<< component.textHorizontalAlignment << '|' << component.textVerticalAlignment << '|'
 			<< component.textWrapMode << '|' << component.textOverflowMode << '|'
 			<< component.textLayoutSize.x << ',' << component.textLayoutSize.y << '|'
@@ -81,6 +104,13 @@ namespace {
 			<< component.textShadowColor.w << '|' << component.textShadowOffset.x << ','
 			<< component.textShadowOffset.y;
 		return stream.str();
+	}
+
+	float QuantizeRasterScale(float scale) {
+		if (!std::isfinite(scale) || scale <= 0.0f) {
+			return 1.0f;
+		}
+		return std::clamp(std::ceil(scale * 16.0f) / 16.0f, 0.25f, 4.0f);
 	}
 
 	template <class RuntimeMap>
@@ -130,6 +160,32 @@ void SceneTextRenderSystem::ClearTextOverrides() {
 	textOverrides_.clear();
 }
 
+void SceneTextRenderSystem::SetTextColorOverride(
+	uint64_t entityId,
+	const Vector4& color
+) {
+	if (entityId != 0) {
+		textColorOverrides_[entityId] = color;
+	}
+}
+
+void SceneTextRenderSystem::ClearTextColorOverrides() {
+	textColorOverrides_.clear();
+}
+
+void SceneTextRenderSystem::SetViewportPositionOverride(
+	uint64_t entityId,
+	const Vector2& position
+) {
+	if (entityId != 0) {
+		viewportPositionOverrides_[entityId] = position;
+	}
+}
+
+void SceneTextRenderSystem::ClearViewportPositionOverrides() {
+	viewportPositionOverrides_.clear();
+}
+
 void SceneTextRenderSystem::SetPresentationOverride(
 	uint64_t entityId,
 	const Vector2& positionOffset,
@@ -165,6 +221,7 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 	}
 	std::unordered_set<uint64_t> requiredIds;
 	TextRasterizer rasterizer;
+	TextFontRegistry& fontRegistry = TextFontRegistry::GetInstance();
 	for (const SceneEntity& entity : document->GetEntities()) {
 		const SceneComponent* component = FindEnabledComponent(entity, "TextRenderer");
 		if (!component) {
@@ -181,13 +238,71 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 		const std::string& text = override != textOverrides_.end()
 			? override->second
 			: component->textValue;
-		const std::string signature = BuildContentSignature(*component, text);
+		const auto colorOverride = textColorOverrides_.find(entity.id);
+		const Vector4& color = colorOverride != textColorOverrides_.end()
+			? colorOverride->second
+			: component->textColor;
+		std::shared_ptr<const TextFontResource> resourceFont;
+		std::string fontFamily = component->textFontFamily;
+		std::string fontResolutionKey;
+		std::string fontDiagnostic;
+		if (component->textFontSource == "Resource") {
+			const TextFontResolution resolution = fontRegistry.AcquireResource(
+				component->textFontResourcePath
+			);
+			fontResolutionKey = resolution.cacheKey;
+			fontDiagnostic = resolution.diagnostic;
+			if (resolution.resource && std::find(
+				resolution.resource->GetFamilies().begin(),
+				resolution.resource->GetFamilies().end(),
+				component->textFontFamily
+			) != resolution.resource->GetFamilies().end()) {
+				resourceFont = resolution.resource;
+			} else {
+				if (resolution.resource && fontDiagnostic.empty()) {
+					fontDiagnostic = "Selected family is not present in the resource font.";
+				}
+				fontFamily = "Yu Gothic UI";
+			}
+		} else if (component->textFontSource != "System") {
+			fontFamily = "Yu Gothic UI";
+			fontDiagnostic = "Unknown font source; using Yu Gothic UI.";
+		}
+		runtime.fontLease = resourceFont;
+		runtime.fontResolutionKey = fontResolutionKey;
+		runtime.fontDiagnostic = fontDiagnostic;
+		float rasterScale = 1.0f;
+		if (component->textRenderSpace == "ScreenOverlay" &&
+			lastScreenOverlayViewportWidth_ > 0 &&
+			lastScreenOverlayViewportHeight_ > 0) {
+			const SceneScreenOverlayCanvasLayout layout =
+				ResolveSceneScreenOverlayCanvasLayout(
+					*document,
+					*component,
+					lastScreenOverlayViewportWidth_,
+					lastScreenOverlayViewportHeight_
+				);
+			if (layout.responsive) {
+				rasterScale = QuantizeRasterScale(runtime.screenOverlayScale);
+			}
+		}
+		const std::string signature = BuildContentSignature(
+			*component,
+			text,
+			color,
+			fontResolutionKey,
+			fontRegistry.GetGeneration(),
+			rasterScale
+		);
 		if (runtime.contentSignature == signature && runtime.bitmapSize.x > 0.0f) {
 			continue;
 		}
 		TextRasterizer::Bitmap bitmap{};
 		if (!rasterizer.Rasterize(
-			ToRasterizerSettings(*component, text), bitmap
+			ToRasterizerSettings(
+				*component, text, color, fontFamily, resourceFont, rasterScale
+			),
+			bitmap
 		)) {
 			runtime.bitmapSize = {};
 			continue;
@@ -211,6 +326,7 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 			runtime.sprite->SetTextureKey(runtime.textureKey);
 		}
 		runtime.contentSignature = signature;
+		runtime.rasterScale = rasterScale;
 		runtime.bitmapSize = {
 			static_cast<float>(bitmap.width),
 			static_cast<float>(bitmap.height)
@@ -218,6 +334,9 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 	}
 	for (auto iterator = texts_.begin(); iterator != texts_.end();) {
 		if (!requiredIds.contains(iterator->first)) {
+			if (!iterator->second.textureKey.empty()) {
+				TextureManager::GetInstance()->ReleaseTexture(iterator->second.textureKey);
+			}
 			iterator = texts_.erase(iterator);
 		} else {
 			++iterator;
@@ -268,7 +387,9 @@ void SceneTextRenderSystem::DrawScreenOverlay(
 	const SceneDocument& document,
 	uint32_t width,
 	uint32_t height
-) const {
+) {
+	lastScreenOverlayViewportWidth_ = width;
+	lastScreenOverlayViewportHeight_ = height;
 	for (const SceneEntity* entity : CollectOrderedEntities(document, texts_, "ScreenOverlay")) {
 		const SceneComponent* component = FindEnabledComponent(*entity, "TextRenderer");
 		const auto found = texts_.find(entity->id);
@@ -290,15 +411,33 @@ void SceneTextRenderSystem::DrawScreenOverlay(
 		const float baseRotation = placement ? placement->rotation : transform.rotate.z;
 		const Vector2 baseScale = placement
 			? placement->scale : Vector2{ transform.scale.x, transform.scale.y };
-		const Vector2 position{
-			anchor.x * static_cast<float>(width) + basePosition.x + positionOffset.x,
-			anchor.y * static_cast<float>(height) + basePosition.y + positionOffset.y
-		};
+		const SceneScreenOverlayCanvasLayout layout =
+			ResolveSceneScreenOverlayCanvasLayout(
+				document, *component, width, height
+			);
+		const float currentScale = layout.responsive ? layout.scale : 1.0f;
+		RuntimeText& runtime = found->second;
+		runtime.screenOverlayScale = currentScale;
+		const auto viewportOverride = viewportPositionOverrides_.find(entity->id);
+		const Vector2 position = viewportOverride != viewportPositionOverrides_.end()
+			? Vector2{
+				viewportOverride->second.x * static_cast<float>(width) +
+					layout.ScalePixelOffset(positionOffset).x,
+				viewportOverride->second.y * static_cast<float>(height) +
+					layout.ScalePixelOffset(positionOffset).y
+			}
+			: layout.ResolvePosition(
+				anchor,
+				{ basePosition.x + positionOffset.x, basePosition.y + positionOffset.y }
+			);
+		const float bitmapScale = layout.responsive && runtime.rasterScale > 0.0f
+			? currentScale / runtime.rasterScale
+			: 1.0f;
 		found->second.sprite->Update(
 			position,
 			baseRotation + rotationOffset,
-			{ found->second.bitmapSize.x * baseScale.x * scaleMultiplier.x,
-				found->second.bitmapSize.y * baseScale.y * scaleMultiplier.y },
+			{ found->second.bitmapSize.x * baseScale.x * scaleMultiplier.x * bitmapScale,
+				found->second.bitmapSize.y * baseScale.y * scaleMultiplier.y * bitmapScale },
 			placement ? placement->pivot : component->textPivot,
 			{ 1.0f, 1.0f, 1.0f, 1.0f * opacityMultiplier },
 			width,
@@ -318,7 +457,17 @@ bool SceneTextRenderSystem::HasScreenOverlay(const SceneDocument& document) cons
 }
 
 void SceneTextRenderSystem::Finalize() {
+	TextureManager* textureManager = TextureManager::GetInstance();
+	for (const auto& [entityId, runtime] : texts_) {
+		if (!runtime.textureKey.empty()) {
+			textureManager->ReleaseTexture(runtime.textureKey);
+		}
+	}
 	texts_.clear();
 	textOverrides_.clear();
+	textColorOverrides_.clear();
+	viewportPositionOverrides_.clear();
 	presentationOverrides_.clear();
+	lastScreenOverlayViewportWidth_ = 0;
+	lastScreenOverlayViewportHeight_ = 0;
 }

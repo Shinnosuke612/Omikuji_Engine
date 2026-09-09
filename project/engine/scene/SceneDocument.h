@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,6 +43,11 @@ struct SceneTeamSettings {
 	float agentMemberCatchupSpeed = 2.0f;
 	float agentMemberSeparationUpdateInterval = 0.1f;
 	float agentMemberSeparationBlend = 0.5f;
+	float agentMemberMinimumDistance = 0.0f;
+	bool agentFormationCapsuleEnabled = false;
+	bool agentFormationCapsuleScaleWithActiveMembers = false;
+	float agentFormationCapsuleRadius = 8.5f;
+	float agentFormationCapsuleHalfSegmentLength = 10.5f;
 	bool agentUseTeamHeading = false;
 	bool agentTeamHeadingFromAverage = true;
 	Vector3 agentTeamHeadingDirection = { 0.0f, 0.0f, 1.0f };
@@ -99,6 +105,7 @@ struct SceneEventAction {
 	float value = 0.0f;
 	bool active = true;
 	std::string sceneId;
+	bool sceneTransitionUseEffect = true;
 	std::string prefabPath;
 	bool prefabParentToTarget = false;
 	bool prefabUseTargetTransform = true;
@@ -107,13 +114,69 @@ struct SceneEventAction {
 	std::string postProcessManagerEntityName;
 	std::string postProcessProfileId;
 	std::string textMotionClipId;
+	std::string pauseProfileId;
+	std::string pauseOperation = "Pause";
+	std::string pauseRequestId;
+};
+
+struct ScenePauseProfile {
+	std::string id = "Default";
+	std::string label = "Default";
+	std::vector<std::string> pausedDomains;
+};
+
+struct SceneInputTerm {
+	std::string input;
+	std::string phase = "Pressed";
+};
+
+struct SceneInputGroup {
+	std::string mode = "Any";
+	std::vector<SceneInputTerm> terms;
+};
+
+struct SceneInputExpression {
+	std::string mode = "Any";
+	std::vector<SceneInputGroup> groups;
+};
+
+struct SceneEventConditionTerm {
+	std::string type = "StatCompare";
+	bool negate = false;
+	uint64_t targetEntityId = 0;
+	std::string targetEntityName;
+	std::string statId = "hp";
+	std::string statComparison = "LessOrEqual";
+	float statValue = 0.0f;
+	std::string stateName;
+	std::string pauseProfileId;
+	std::string pauseRequestId;
+	std::string fishingResultChannelId;
+	std::string fishingResultRankId;
+	bool active = true;
+	Vector3 position{};
+	float radius = 1.0f;
+	std::optional<SceneInputExpression> inputExpression;
+};
+
+struct SceneEventConditionGroup {
+	std::string mode = "All";
+	std::vector<SceneEventConditionTerm> terms;
+};
+
+struct SceneEventConditionExpression {
+	std::string mode = "Any";
+	std::vector<SceneEventConditionGroup> groups;
 };
 
 struct SceneEventBinding {
 	std::string triggerType = "OnStart";
 	std::string triggerKey;
+	std::optional<SceneInputExpression> inputExpression;
 	uint64_t targetEntityId = 0;
 	std::string targetEntityName;
+	std::string stateName;
+	std::string fishingResultChannelId;
 	std::string statId = "hp";
 	std::string statComparison = "LessOrEqual";
 	float statValue = 0.0f;
@@ -121,6 +184,8 @@ struct SceneEventBinding {
 	float radius = 1.0f;
 	bool triggerOnce = true;
 	float cooldown = 0.0f;
+	int priority = 0;
+	std::optional<SceneEventConditionExpression> conditionExpression;
 	std::string textMotionClipId;
 	std::vector<SceneEventAction> actions;
 };
@@ -302,6 +367,24 @@ struct SceneTextMotionClip {
 	std::vector<SceneTextMotionKeyframe> keyframes;
 };
 
+struct SceneSpriteMotionKeyframe {
+	float timeSeconds = 0.0f;
+	Vector2 positionOffset = { 0.0f, 0.0f };
+	float rotationOffset = 0.0f;
+	Vector2 scaleMultiplier = { 1.0f, 1.0f };
+	float opacityMultiplier = 1.0f;
+	std::string easingToNext = "SmoothStep";
+};
+
+struct SceneSpriteMotionClip {
+	std::string id;
+	bool holdFinalPose = false;
+	// 0秒以降の任意区間を繰り返せるため、導入演出後の待機モーションに使える。
+	bool loop = false;
+	float loopStartTimeSeconds = 0.0f;
+	std::vector<SceneSpriteMotionKeyframe> keyframes;
+};
+
 struct SceneGameFlowWave {
 	uint64_t spawnerEntityId = 0;
 	int count = 1;
@@ -311,6 +394,44 @@ struct SceneGameFlowPhase {
 	std::string id;
 	std::string label;
 	std::vector<SceneGameFlowWave> waves;
+};
+
+struct SceneFishingHookPoolEntry {
+	uint64_t hookEntityId = 0;
+	std::vector<float> weightsByDistanceBand;
+};
+
+// 釣り針の抽選ランクに紐づく、外部参照可能な安定IDと表示／表示モデル設定。
+struct SceneFishingHookRankDefinition {
+	std::string id;
+	std::string displayName;
+	std::string modelPath;
+	std::string iconTexturePath;
+	float scoreMultiplier = 1.0f;
+	Vector4 color = { 1.0f, 1.0f, 1.0f, 1.0f };
+	Vector2 bubbleIconScale = { 1.0f, 1.0f };
+	Vector2 bubbleIconOffset = { 0.0f, 0.0f };
+};
+
+struct SceneFishingHookBandSettings {
+	float distanceMultiplier = 1.0f;
+	int hookCount = 0;
+	std::vector<float> hookMultiplierWeights;
+};
+
+struct SceneFishingResultVisualVariant {
+	std::string id;
+	std::string backgroundTexturePath;
+	std::string decorationTexturePath;
+	std::string centerPanelTexturePath;
+};
+
+struct SceneFishingResultDecorationEntry {
+	uint64_t spriteEntityId = 0;
+	float minScaleMultiplier = 0.85f;
+	float maxScaleMultiplier = 1.15f;
+	float periodSeconds = 2.0f;
+	float phaseOffset = 0.0f;
 };
 
 struct SceneComponent {
@@ -323,8 +444,12 @@ struct SceneComponent {
 	uint64_t localId = 0;
 	std::string type;
 	bool enabled = true;
+	std::string processMode = "Inherit";
+	std::vector<ScenePauseProfile> pauseProfiles;
 	std::string modelPath;
 	std::string meshCullMode = "Back";
+	bool meshCastsShadow = true;
+	Vector3 meshVisualRotation{};
 	bool meshEnvironmentReflectionOverride = false;
 	float meshEnvironmentReflectionIntensity = 0.3f;
 	std::vector<SceneMeshMaterialOverride> meshMaterialOverrides;
@@ -333,13 +458,19 @@ struct SceneComponent {
 	std::string environmentSkyboxPath;
 	float environmentSkyboxIntensity = 1.0f;
 	float environmentReflectionIntensity = 0.3f;
+	Vector2 screenOverlayCanvasReferenceSize = { 1920.0f, 1080.0f };
+	std::string screenOverlayScaleMode = "Inherit";
 	Vector2 spriteSize = { 100.0f, 100.0f };
 	Vector2 spriteAnchor = { 0.5f, 0.5f };
+	std::string spriteRenderSpace = "Scene2D";
+	Vector2 spriteViewportAnchor = { 0.0f, 0.0f };
 	Vector4 spriteColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 	bool spriteFlipX = false;
 	bool spriteFlipY = false;
 	std::string textValue = "Text";
 	std::string textRenderSpace = "ScreenOverlay";
+	std::string textFontSource = "System";
+	std::string textFontResourcePath;
 	std::string textFontFamily = "Yu Gothic UI";
 	float textFontSize = 32.0f;
 	std::string textFontWeight = "Regular";
@@ -367,6 +498,9 @@ struct SceneComponent {
 	Text2DPlacement textOverlayPlacement{};
 	Text2DPlacement textScene2DPlacement{};
 	std::vector<SceneTextMotionClip> textMotionClips;
+	bool spriteMotionPlayOnStart = false;
+	std::string spriteMotionStartClipId;
+	std::vector<SceneSpriteMotionClip> spriteMotionClips;
 	bool gameFlowAutoStart = true;
 	int gameFlowCountdownStart = 3;
 	float gameFlowCountdownStepSeconds = 1.0f;
@@ -388,6 +522,133 @@ struct SceneComponent {
 	uint64_t gameFlowResultTimeTextEntityId = 0;
 	std::string gameFlowResultMotionClipId;
 	std::vector<SceneGameFlowPhase> gameFlowPhases;
+	uint64_t fishingPlayerEntityId = 0;
+	std::vector<uint64_t> fishingFishEntityIds;
+	uint64_t fishingHookSpawnAreaEntityId = 0;
+	uint64_t fishingHookPoolEntityId = 0;
+	uint64_t fishingWaterVolumeEntityId = 0;
+	uint64_t fishingBoundaryNegativeXWallEntityId = 0;
+	uint64_t fishingBoundaryPositiveXWallEntityId = 0;
+	uint64_t fishingBoundaryNegativeZWallEntityId = 0;
+	uint64_t fishingBoundaryPositiveZWallEntityId = 0;
+	float fishingDurationSeconds = 60.0f;
+	bool fishingTimerRunsDuringFishSelection = true;
+	int fishingMaxSelectableFishCount = 5;
+	std::string fishingConfirmInput = "ENTER";
+	std::optional<SceneInputExpression> fishingConfirmInputExpression;
+	int fishingDistanceBandCount = 5;
+	int fishingHooksPerDistanceBand = 2;
+	float fishingDistanceMultiplierBase = 1.0f;
+	float fishingDistanceMultiplierStep = 0.2f;
+	bool fishingUseHookBandSettings = false;
+	std::vector<SceneFishingHookBandSettings> fishingHookBands;
+	float fishingHookScoreUnit = 100.0f;
+	float fishingFishMultiplierBase = 1.0f;
+	float fishingFishMultiplierPerAdditionalFish = 1.0f;
+	std::vector<SceneFishingHookRankDefinition> fishingHookRanks;
+	int fishingHookRankCount = 10;
+	bool fishingHookRankBubbleVisible = false;
+	std::string fishingHookRankBubbleTexturePath;
+	Vector3 fishingHookRankBubbleWorldOffset = { 0.0f, 1.5f, 0.0f };
+	Vector2 fishingHookRankBubbleScreenOffset = { 48.0f, -40.0f };
+	Vector2 fishingHookRankBubbleSize = { 128.0f, 128.0f };
+	Vector2 fishingHookRankBubbleIconBaseSize = { 64.0f, 64.0f };
+	Vector2 fishingHookRankBubbleIconBaseOffset = { 8.0f, -4.0f };
+	std::vector<float> fishingHookTierScoreMultipliers = {
+		1.0f, 2.0f, 3.0f, 4.0f, 5.0f,
+		6.0f, 7.0f, 8.0f, 9.0f, 10.0f
+	};
+	std::vector<Vector4> fishingHookMultiplierColors;
+	float fishingHookColorEmissiveIntensity = 0.35f;
+	bool fishingHookLegendVisible = false;
+	uint64_t fishingHookLegendTitleTextEntityId = 0;
+	std::vector<uint64_t> fishingHookLegendTextEntityIds;
+	std::string fishingHookLegendTitle = "HOOK BONUS";
+	std::string fishingHookLegendPrefix = "x";
+	std::vector<uint64_t> fishingHookLegendIconEntityIds;
+	Vector2 fishingHookLegendIconSize = { 32.0f, 32.0f };
+	bool fishingHookLegendAutoLayout = false;
+	Vector2 fishingHookLegendLayoutCenter = { -68.0f, -96.0f };
+	float fishingHookLegendColumnSpacing = 88.0f;
+	float fishingHookLegendRowSpacing = 32.0f;
+	Vector2 fishingHookLegendIconOffset = { -33.0f, -11.0f };
+	bool fishingRandomizeSeedOnPlay = true;
+	int fishingRandomSeed = 1;
+	uint64_t fishingFishCountTextEntityId = 0;
+	uint64_t fishingTimerTextEntityId = 0;
+	uint64_t fishingScoreTextEntityId = 0;
+	uint64_t fishingMultiplierTextEntityId = 0;
+	uint64_t fishingResultTextEntityId = 0;
+	std::string fishingFishCountPrefix = "FISH ";
+	std::string fishingTimerPrefix = "TIME ";
+	std::string fishingScorePrefix = "SCORE ";
+	std::string fishingMultiplierPrefix = "MULTIPLIER ";
+	std::string fishingResultPrefix = "RESULT ";
+	std::string fishingFinishText;
+	std::string fishingResultChannelId = "fishing.score_attack";
+	std::string fishingResultTieBreakMode = "HigherRank";
+	std::string fishingResultPresentationChannelId = "fishing.score_attack";
+	uint64_t fishingResultPresentationBackgroundEntityId = 0;
+	uint64_t fishingResultPresentationScoreTextEntityId = 0;
+	uint64_t fishingResultPresentationCenterPanelEntityId = 0;
+	std::string fishingResultPresentationScorePrefix = "SCORE ";
+	std::string fishingResultPresentationFallbackVariantId = "rank_1";
+	bool fishingResultPresentationIncludeSharkInWinnerSelection = false;
+	std::string fishingResultPresentationSharkVariantId = "shark";
+	std::vector<SceneFishingResultVisualVariant> fishingResultPresentationVariants;
+	std::vector<SceneFishingResultDecorationEntry>
+		fishingResultPresentationDecorations;
+	bool fishingUseFormationCapsuleCollision = false;
+	bool fishingFormationOutlineVisible = false;
+	Vector4 fishingFormationOutlineColor = { 0.1f, 0.9f, 1.0f, 1.0f };
+	float fishingFormationOutlineBloomIntensity = 1.0f;
+	float fishingFormationOutlineYOffset = 0.25f;
+	int fishingFormationOutlineSegments = 48;
+	int fishingFormationParticlePointCount = 48;
+	float fishingFormationParticleStartSize = 0.26f;
+	float fishingFormationParticleEndSize = 0.43f;
+	int fishingFormationParticleCountPerEmission = 1;
+	float fishingFormationParticleEmitterSpread = 0.0f;
+	float fishingFormationParticleLifetime = 0.8f;
+	Vector4 fishingFormationParticleStartColor = { 0.1f, 0.9f, 1.0f, 0.65f };
+	Vector4 fishingFormationParticleEndColor = { 0.1f, 0.9f, 1.0f, 0.65f };
+	float fishingFormationParticleEmissiveIntensity = 1.0f;
+	float fishingSpawnHalfSizeX = 10.0f;
+	float fishingSpawnHalfSizeZ = 10.0f;
+	float fishingSpawnMinimumDistance = 0.0f;
+	int fishingSpawnMaxAttempts = 16;
+	std::vector<SceneFishingHookPoolEntry> fishingHookPoolEntries;
+	int fishingHookBaseScore = 0;
+	uint64_t fishingHookBubbleSpriteEntityId = 0;
+	uint64_t fishingHookRankIconSpriteEntityId = 0;
+	float fishingSharkRadiusX = 12.0f;
+	float fishingSharkRadiusZ = 18.0f;
+	float fishingSharkAngularSpeed = 0.35f;
+	float fishingSharkInitialPhase = 0.0f;
+	int fishingSharkPenaltyScore = 300;
+	float fishingSharkHitCooldownSeconds = 2.0f;
+	float fishingSharkPathRandomness = 0.2f;
+	float fishingSharkWanderMoveSpeed = 0.0f;
+	float fishingSharkWanderMaximumTurnRate = 1.2f;
+	float fishingSharkObstacleAvoidanceDistance = 8.0f;
+	float fishingSharkObstacleAvoidanceStrength = 0.65f;
+	float fishingSharkObstacleAvoidanceResponse = 4.0f;
+	float fishingSharkPatrolRouteRebuildIntervalSeconds = 8.0f;
+	float fishingSharkNavigationCellSize = 4.0f;
+	float fishingSharkWaypointAcceptanceDistance = 1.5f;
+	float fishingSharkObstacleClearance = 2.0f;
+	float fishingSharkDetectionDistance = 30.0f;
+	float fishingSharkLoseDistance = 40.0f;
+	float fishingSharkDetectionDelaySeconds = 0.75f;
+	float fishingSharkLostTargetDelaySeconds = 2.0f;
+	float fishingSharkReacquireCooldownSeconds = 4.0f;
+	float fishingSharkChaseMoveSpeed = 13.0f;
+	float fishingSharkChaseMaximumTurnRate = 2.2f;
+	float fishingSharkChaseRouteRebuildIntervalSeconds = 0.35f;
+	Vector4 fishingSharkAlertColor = { 1.0f, 0.25f, 0.08f, 1.0f };
+	float fishingSharkAlertEmissiveIntensity = 2.0f;
+	float fishingSharkAlertPulseSpeed = 8.0f;
+	bool fishingSharkRouteDebugVisible = false;
 	bool cameraIsMain = false;
 	float cameraFovY = 0.45f;
 	float cameraNearClip = 0.1f;
@@ -492,6 +753,9 @@ struct SceneComponent {
 	float playerDashMultiplier = 1.65f;
 	bool playerCameraRelativeMove = true;
 	bool playerAllowJump = true;
+	bool playerAutoForward = false;
+	std::string playerInputMode = "KeyboardMouse";
+	float playerGamepadDeadzone = 0.20f;
 	std::string agentBehaviorName = "Fish";
 	// Free3Dは既存の遊泳群制御、GroundXZはEnemyBehaviorの速度へ離隔だけを加える。
 	std::string agentMovementMode = "Free3D";
@@ -525,6 +789,7 @@ struct SceneComponent {
 	float agentMemberCatchupSpeed = 2.0f;
 	float agentMemberSeparationUpdateInterval = 0.1f;
 	float agentMemberSeparationBlend = 0.5f;
+	float agentMemberMinimumDistance = 0.0f;
 	float agentBoundsWeight = 3.0f;
 	bool agentUseTeamHeading = false;
 	bool agentTeamHeadingFromAverage = true;
@@ -594,6 +859,7 @@ struct SceneComponent {
 	std::string sceneTransitionTargetSceneId = "gameplay";
 	std::string sceneTransitionTriggerType = "Key";
 	std::string sceneTransitionTriggerKey = "ENTER";
+	bool sceneTransitionUseEffect = true;
 	std::string cameraPathTargetCameraName;
 	std::string cameraPathTriggerType = "Key";
 	std::string cameraPathTriggerKey = "C";
@@ -851,6 +1117,12 @@ public:
 		debugSettings_ = settings;
 		MarkDirty();
 	}
+	SceneFishingObstacleSettings& GetFishingObstacleSettings() {
+		return fishingObstacleSettings_;
+	}
+	const SceneFishingObstacleSettings& GetFishingObstacleSettings() const {
+		return fishingObstacleSettings_;
+	}
 	bool IsDirty() const { return dirty_; }
 	const std::string& GetAssetId() const { return assetId_; }
 	bool IsPrefabVariant() const { return !variantBaseAssetId_.empty(); }
@@ -884,6 +1156,7 @@ private:
 	SceneLightingSettings lightingSettings_{};
 	ScenePostProcessSettings postProcessSettings_{};
 	SceneDebugSettings debugSettings_{};
+	SceneFishingObstacleSettings fishingObstacleSettings_{};
 	uint64_t nextId_ = 1;
 	bool dirty_ = false;
 	uint64_t revision_ = 0;

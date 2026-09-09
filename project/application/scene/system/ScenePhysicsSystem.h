@@ -37,12 +37,14 @@ public:
 		bool editing
 	);
 	void Step(
+		SceneDocument& document,
 		Player* player,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		float deltaTime,
 		bool playing
 	);
 	void ResetBodies(
+		const SceneDocument& document,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		const std::vector<uint64_t>& entityIds
 	) const;
@@ -77,4 +79,5 @@ private:
 
 	PhysicsWorld physicsWorld_;
 	std::vector<Collider*> staticColliders_;
+	std::vector<Collider*> formationObstacleColliders_;
 };

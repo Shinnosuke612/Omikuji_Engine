@@ -97,7 +97,10 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	float deltaTime,
 	bool runtimeActive,
-	bool playing
+	bool playing,
+	bool acceptGameplayInput,
+	bool acceptWheelZoom,
+	const std::function<bool(uint64_t)>& shouldProcessCameraPath
 ) {
 	if (!playing) {
 		if (wasPlaying_) {
@@ -124,12 +127,17 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 
 	// CameraPathを優先し、終了したフレームだけPlayer追従へ制御を戻す。
 	if (cameraPathRuntime_.IsPlaying()) {
+		if (shouldProcessCameraPath &&
+			!shouldProcessCameraPath(activeCameraPathEntityId_)) {
+			camera->Update();
+			return;
+		}
 		cameraPathRuntime_.Update(deltaTime, *camera);
 		if (cameraPathRuntime_.ConsumeFinishedThisFrame()) {
 			HandlePathFinished(document, camera, player);
 		}
 	} else {
-		UpdateCameraSwitch(document, playing);
+		UpdateCameraSwitch(document, playing && acceptGameplayInput);
 		ApplyActiveCamera(document, camera);
 		UpdateThirdPersonCamera(
 			document,
@@ -138,10 +146,18 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 			bindings,
 			deltaTime * 0.5f,
 			playing,
-			true
+			acceptGameplayInput,
+			acceptGameplayInput && acceptWheelZoom
 		);
-		TryStartCameraPath(document, camera);
+		if (acceptGameplayInput) {
+			TryStartCameraPath(document, camera);
+		}
 		if (cameraPathRuntime_.IsPlaying()) {
+			if (shouldProcessCameraPath &&
+				!shouldProcessCameraPath(activeCameraPathEntityId_)) {
+				camera->Update();
+				return;
+			}
 			cameraPathRuntime_.Update(deltaTime, *camera);
 			if (cameraPathRuntime_.ConsumeFinishedThisFrame()) {
 				HandlePathFinished(document, camera, player);
@@ -172,6 +188,7 @@ void SceneCameraSystem::UpdateAfterSimulation(
 			bindings,
 			deltaTime * 0.5f,
 			playing,
+			false,
 			false
 		);
 	}
@@ -391,13 +408,14 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	float deltaTime,
 	bool playing,
-	bool acceptMouseInput
+	bool acceptMouseInput,
+	bool acceptWheelZoom
 ) {
 	(void)player;
 	if (!playing || !camera) {
 		playerCameraInitialized_ = false;
 		thirdPersonCameraEntityId_ = 0;
-		ApplyPlayerDissolve(bindings, false);
+		ApplyPlayerDissolve(document, bindings, 0, false);
 		return false;
 	}
 
@@ -415,7 +433,7 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	) {
 		playerCameraInitialized_ = false;
 		thirdPersonCameraEntityId_ = 0;
-		ApplyPlayerDissolve(bindings, false);
+		ApplyPlayerDissolve(document, bindings, 0, false);
 		return false;
 	}
 	const SceneEntity* targetEntity = ResolveThirdPersonTarget(
@@ -426,7 +444,7 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	if (!targetEntity) {
 		playerCameraInitialized_ = false;
 		thirdPersonCameraEntityId_ = 0;
-		ApplyPlayerDissolve(bindings, false);
+		ApplyPlayerDissolve(document, bindings, 0, false);
 		return false;
 	}
 
@@ -453,9 +471,9 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	}
 
 	Input* input = Input::GetInstance();
-	const bool altHeld =
-		input && (input->PushKey(DIK_LMENU) || input->PushKey(DIK_RMENU));
-	if (altHeld && acceptMouseInput) {
+	const bool gameplayMouseActive =
+		!input || input->IsCursorCaptured();
+	if (!gameplayMouseActive && acceptMouseInput) {
 		return true;
 	}
 
@@ -514,29 +532,32 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 	std::vector<OBBCollider*> obstacles;
 	obstacles.reserve(bindings.size());
 	for (const SceneRuntimeObjectBinding& binding : bindings) {
+		const SceneEntity* bindingEntity = binding.entityId != 0
+			? document.FindEntity(binding.entityId)
+			: nullptr; // 現在Document上のEntity。
 		// 以前はTarget自身だけを除外していたため、子のHurtBoxや武器HitBoxが
 		// Camera Rayを遮っていた。TriggerとTarget階層は遮蔽物に含めない。
 		if (
-			!binding.entity ||
+			!bindingEntity ||
 			!binding.collider ||
 			!binding.collider->IsActive() ||
 			binding.collider->IsTrigger() ||
-			binding.entity->id == targetEntity->id ||
+			bindingEntity->id == targetEntity->id ||
 			document.IsDescendantOf(
-				binding.entity->id,
+				bindingEntity->id,
 				targetEntity->id
 			) ||
 			(
 				binding.collider->GetCollisionAttribute() &
 				thirdPerson->thirdPersonOcclusionMask
 			) == 0 ||
-			!IsEntityActiveInHierarchy(document, *binding.entity)
+			!IsEntityActiveInHierarchy(document, *bindingEntity)
 		) {
 			continue;
 		}
-		std::string modelPath = binding.entity->modelPath;
+		std::string modelPath = bindingEntity->modelPath;
 		if (const SceneComponent* meshRenderer =
-			FindEnabledComponent(*binding.entity, "MeshRenderer")) {
+			FindEnabledComponent(*bindingEntity, "MeshRenderer")) {
 			modelPath = meshRenderer->modelPath;
 		}
 		std::transform(
@@ -564,17 +585,22 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 		deltaTime,
 		acceptMouseInput &&
 			thirdPerson->thirdPersonAllowMouseInput &&
-			!altHeld
+			gameplayMouseActive,
+		acceptWheelZoom
 	);
 	ApplyPlayerDissolve(
+		document,
 		bindings,
+		targetEntity->id,
 		HasComponent(*targetEntity, "PlayerBehavior")
 	);
 	return true;
 }
 
 void SceneCameraSystem::ApplyPlayerDissolve(
+	const SceneDocument& document,
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
+	uint64_t targetEntityId,
 	bool enabled
 ) const {
 	constexpr float kStartPitch = -0.35f;
@@ -589,11 +615,22 @@ void SceneCameraSystem::ApplyPlayerDissolve(
 		? rawAmount * rawAmount * (3.0f - 2.0f * rawAmount)
 		: 0.0f;
 	for (const SceneRuntimeObjectBinding& binding : bindings) {
-		if (
-			binding.entity &&
-			binding.object &&
-			HasComponent(*binding.entity, "PlayerBehavior")
-		) {
+		if (!binding.object) {
+			continue;
+		}
+		// 三人称カメラがないSceneの初期化時にも解除処理は呼ばれる。
+		// 解除時は対象判定をせず、全runtime objectへ解除値を適用する。
+		// ここで全EntityのComponentを走査すると、TitleLogoTextなどの
+		// 非Player Entityを含むbindingでRelease時の不正参照を誘発する。
+		if (!enabled) {
+			binding.object->SetDissolve(0.0f, 0.08f, 6.0f);
+			continue;
+		}
+		if (binding.entityId == 0 || binding.entityId != targetEntityId) {
+			continue;
+		}
+		const SceneEntity* bindingEntity = document.FindEntity(binding.entityId);
+		if (bindingEntity && HasComponent(*bindingEntity, "PlayerBehavior")) {
 			binding.object->SetDissolve(amount, 0.08f, 6.0f);
 		}
 	}

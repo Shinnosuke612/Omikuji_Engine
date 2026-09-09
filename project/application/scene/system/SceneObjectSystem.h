@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "../SceneRuntimeObjectBinding.h"
 #include "../../../engine/collision/OBBCollider.h"
 #include "../../../engine/collision/SphereCollider.h"
+#include "../../../engine/math/Vector2.h"
 #include "../../../engine/math/Vector4.h"
 #include "../../../engine/physics/PhysicsBody.h"
 
@@ -18,6 +20,25 @@ class Object3d;
 class SceneDocument;
 class ScenePhysicsSystem;
 class Sprite;
+
+struct SceneSpriteRuntimeOverride {
+	uint64_t entityId = 0;
+	std::string texturePath;
+	Vector2 size = { 0.0f, 0.0f };
+	Vector4 color = { 1.0f, 1.0f, 1.0f, 1.0f };
+	bool visible = false;
+	bool hasViewportPositionOverride = false;
+	Vector2 viewportPosition = { 0.0f, 0.0f };
+	Vector2 positionOffsetPixels = { 0.0f, 0.0f };
+};
+
+struct SceneSpritePresentationOverride {
+	uint64_t entityId = 0;
+	Vector2 positionOffset{};
+	float rotationOffset = 0.0f;
+	Vector2 scaleMultiplier = { 1.0f, 1.0f };
+	float opacityMultiplier = 1.0f;
+};
 
 // Scene由来のObject3dとSpriteを一意に所有する。
 // BuildBindingsが返すポインタは次のSyncModelsまたはFinalizeまでだけ有効。
@@ -28,6 +49,8 @@ public:
 		std::string modelPath;
 		std::string materialOverrideSignature;
 		bool hasRenderer = false;
+		bool isWaterVolume = false; // WaterVolume描画をScene本体から除外するための判定。
+		bool hasPlayerBehavior = false; // 一人称Camera時にPlayer Modelを隠すための判定。
 		bool animatorInitialized = false;
 		bool hasAnimator = false;
 		bool animatorAutoPlayAllowed = false;
@@ -60,11 +83,26 @@ public:
 		bool editing
 	);
 	void SyncSprites(const SceneDocument* document);
+	void ClearSpriteOverrides();
+	void ClearSpritePresentationOverrides();
+	void SetSpriteRuntimeOverride(
+		const SceneSpriteRuntimeOverride& overrideValue
+	);
+	void SetSpritePresentationOverride(
+		const SceneSpritePresentationOverride& overrideValue
+	);
 	// Agent・Physics・Environmentへ渡す非所有参照を、Object同期直後に再構築する。
 	void BuildBindings(
 		SceneDocument& document,
 		std::vector<SceneRuntimeObjectBinding>& bindings
 	);
+	// 現在Documentと、外部Systemへ貸し出しているbindingの整合性を検証する。
+	// Componentは参照せず、破損区間の診断にだけ使用する。
+	bool ValidateBindings(
+		const SceneDocument& document,
+		const std::vector<SceneRuntimeObjectBinding>& bindings,
+		std::string& diagnostic
+	) const;
 
 	void ApplyRenderCamera(Camera* camera);
 	void PrepareModelDraw() const;
@@ -76,6 +114,12 @@ public:
 	void DrawSprites(
 		const SceneDocument& document,
 		uint64_t skipEntityId
+	) const;
+	bool HasScreenOverlaySprites(const SceneDocument& document) const;
+	void DrawScreenOverlaySprites(
+		const SceneDocument& document,
+		uint32_t viewportWidth,
+		uint32_t viewportHeight
 	) const;
 	void CollectShadowCasters(
 		const SceneDocument& document,
@@ -102,5 +146,14 @@ private:
 	void ClearSprites();
 
 	std::unordered_map<uint64_t, ModelRuntime> models_;
+	// Play開始時にFishingObstacleへ割り当てた岩モデル。Authoring Sceneは変更しない。
+	std::unordered_map<uint64_t, std::string> fishingObstacleModelPaths_;
+	const SceneDocument* fishingObstacleModelDocument_ = nullptr;
+	// Documentの格納先が再利用されても、Playごとに岩配置を再抽選する。
+	bool fishingObstacleLayoutRandomizedForCurrentPlay_ = false;
+	std::mt19937 fishingObstacleRandomEngine_{ std::random_device{}() };
 	std::unordered_map<uint64_t, SpriteRuntime> sprites_;
+	std::unordered_map<uint64_t, SceneSpriteRuntimeOverride> spriteOverrides_;
+	std::unordered_map<uint64_t, SceneSpritePresentationOverride>
+		spritePresentationOverrides_;
 };

@@ -7,7 +7,11 @@ bool RuntimeSession::Initialize(
 	const std::string& sceneId,
 	const std::string& sceneFilePath
 ) {
-	return LoadRuntimeScene(sceneId, sceneFilePath);
+	if (!LoadRuntimeScene(sceneId, sceneFilePath)) {
+		return false;
+	}
+	runtimeSessionState_.Clear();
+	return true;
 }
 
 bool RuntimeSession::LoadRuntimeScene(
@@ -25,6 +29,22 @@ bool RuntimeSession::LoadRuntimeScene(
 	}
 	loadedDocument.MarkClean();
 	document_ = std::move(loadedDocument);
+	sceneId_ = sceneId;
+	sceneFilePath_ = sceneFilePath;
+	lastLoadError_.clear();
+	return true;
+}
+
+bool RuntimeSession::AdoptPreloadedRuntimeScene(
+	const std::string& sceneId,
+	const std::string& sceneFilePath,
+	SceneDocument&& document
+) {
+	if (sceneId.empty() || sceneFilePath.empty()) {
+		return false;
+	}
+
+	document_ = std::move(document);
 	sceneId_ = sceneId;
 	sceneFilePath_ = sceneFilePath;
 	lastLoadError_.clear();

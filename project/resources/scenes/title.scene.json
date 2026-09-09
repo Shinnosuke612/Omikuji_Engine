@@ -1,7 +1,7 @@
 {
   "debug": {
-    "jointAxisLength": 0.06,
-    "jointRadius": 0.009,
+    "jointAxisLength": 0.05999999865889549,
+    "jointRadius": 0.008999999612569809,
     "showCameraDirection": false,
     "showCameraPath": true,
     "showCameraPathPointCameraDirection": true,
@@ -10,26 +10,161 @@
     "showJointNames": false,
     "showSkeleton": false
   },
-  "lighting": {
-    "shadowMapSize": 1024
-  },
-  "sceneName": "TITLE",
-  "teams": [],
-  "version": 27,
   "entities": [
     {
       "active": true,
       "components": [
         {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
           "enabled": true,
-          "farClip": 1000,
-          "fovY": 0.45,
-          "invertPitch": false,
-          "invertYaw": false,
-          "isMain": true,
+          "flipX": false,
+          "flipY": false,
           "localId": 1,
-          "nearClip": 0.1,
-          "type": "Camera"
+          "renderSpace": "ScreenOverlay",
+          "screenOverlayScaleMode": "Inherit",
+          "size": [
+            500.0,
+            500.0
+          ],
+          "texturePath": "resources/title/title.png",
+          "type": "SpriteRenderer",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "enabled": true,
+          "localId": 3,
+          "referenceSize": [
+            1280.0,
+            720.0
+          ],
+          "type": "ScreenOverlayCanvas"
+        },
+        {
+          "clips": [
+            {
+              "holdFinalPose": false,
+              "id": "intro",
+              "loop": true,
+              "loopStartTimeSeconds": 1.0499999523162842,
+              "keyframes": [
+                {
+                  "easingToNext": "EaseOut",
+                  "opacityMultiplier": 0.0,
+                  "positionOffset": [
+                    -1150.0,
+                    -70.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    1.2000000476837158,
+                    0.7200000286102295
+                  ],
+                  "timeSeconds": 0.0
+                },
+                {
+                  "easingToNext": "EaseIn",
+                  "opacityMultiplier": 1.0,
+                  "positionOffset": [
+                    70.0,
+                    0.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    1.0499999523162842,
+                    0.949999988079071
+                  ],
+                  "timeSeconds": 0.5199999809265137
+                },
+                {
+                  "easingToNext": "EaseOut",
+                  "opacityMultiplier": 1.0,
+                  "positionOffset": [
+                    0.0,
+                    0.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    1.25,
+                    0.6499999761581421
+                  ],
+                  "timeSeconds": 0.6800000071525574
+                },
+                {
+                  "easingToNext": "EaseInOut",
+                  "opacityMultiplier": 1.0,
+                  "positionOffset": [
+                    0.0,
+                    -18.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    0.8799999952316284,
+                    1.2200000286102295
+                  ],
+                  "timeSeconds": 0.8399999737739563
+                },
+                {
+                  "easingToNext": "EaseInOut",
+                  "opacityMultiplier": 1.0,
+                  "positionOffset": [
+                    0.0,
+                    0.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    1.0,
+                    1.0
+                  ],
+                  "timeSeconds": 1.0499999523162842
+                },
+                {
+                  "easingToNext": "EaseInOut",
+                  "opacityMultiplier": 1.0,
+                  "positionOffset": [
+                    0.0,
+                    -16.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    1.0,
+                    1.0
+                  ],
+                  "timeSeconds": 2.25
+                },
+                {
+                  "easingToNext": "EaseInOut",
+                  "opacityMultiplier": 1.0,
+                  "positionOffset": [
+                    0.0,
+                    0.0
+                  ],
+                  "rotationOffset": 0.0,
+                  "scaleMultiplier": [
+                    1.0,
+                    1.0
+                  ],
+                  "timeSeconds": 3.450000047683716
+                }
+              ]
+            }
+          ],
+          "enabled": true,
+          "localId": 2,
+          "playOnStart": true,
+          "startClipId": "intro",
+          "type": "SpriteMotion"
         }
       ],
       "folder": false,
@@ -37,7 +172,7 @@
       "id": 1,
       "locked": false,
       "modelPath": "",
-      "name": "Main Camera",
+      "name": "TitleLogoText",
       "parentId": 0,
       "sprite": {
         "anchor": [
@@ -45,288 +180,36 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          500.0,
+          500.0
         ],
-        "texturePath": ""
+        "texturePath": "resources/title/title.png"
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.8898271322250366,
+          0.9700000286102295,
+          1.0
         ],
         "translate": [
-          0,
-          2,
-          -8
-        ]
-      }
-    },
-    {
-      "active": false,
-      "components": [
-        {
-          "characterSpacing": 0,
-          "clipEnabled": false,
-          "color": [
-            1,
-            1,
-            1,
-            1
-          ],
-          "enabled": true,
-          "fontFamily": "Yu Gothic UI",
-          "fontSize": 72,
-          "fontStyle": "Normal",
-          "fontWeight": "Regular",
-          "horizontalAlignment": "Center",
-          "layoutSize": [
-            0,
-            0
-          ],
-          "lineSpacing": 1,
-          "localId": 1,
-          "opacity": 1,
-          "outlineColor": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "outlineEnabled": true,
-          "outlineWidth": 2,
-          "overflowMode": "Overflow",
-          "overlayPlacement": {
-            "clipEnabled": false,
-            "pivot": [
-              0.5,
-              0.5
-            ],
-            "position": [
-              0,
-              -80
-            ],
-            "rotation": 0,
-            "scale": [
-              1,
-              1
-            ],
-            "sortingOrder": 10,
-            "viewportAnchor": [
-              0.5,
-              0.42
-            ]
-          },
-          "pivot": [
-            0.5,
-            0.5
-          ],
-          "renderSpace": "ScreenOverlay",
-          "scene2DPlacement": {
-            "clipEnabled": false,
-            "pivot": [
-              0,
-              0
-            ],
-            "position": [
-              0,
-              0
-            ],
-            "rotation": 0,
-            "scale": [
-              1,
-              1
-            ],
-            "sortingOrder": 0,
-            "viewportAnchor": [
-              0,
-              0
-            ]
-          },
-          "shadowColor": [
-            0,
-            0,
-            0,
-            0.5
-          ],
-          "shadowEnabled": false,
-          "shadowOffset": [
-            2,
-            2
-          ],
-          "sortingOrder": 10,
-          "text": "WEAPON HUNTER",
-          "type": "TextRenderer",
-          "verticalAlignment": "Center",
-          "viewportAnchor": [
-            0.5,
-            0.42
-          ],
-          "wrapMode": "NoWrap"
-        },
-        {
-          "enabled": true,
-          "localId": 2,
-          "type": "TextMotion",
-          "clips": [
-            {
-              "id": "intro",
-              "holdFinalPose": true,
-              "keyframes": [
-                {
-                  "timeSeconds": 0,
-                  "positionOffset": [
-                    -900,
-                    0
-                  ],
-                  "rotationOffset": 0,
-                  "scaleMultiplier": [
-                    0.8,
-                    0.8
-                  ],
-                  "opacityMultiplier": 0,
-                  "easingToNext": "EaseOut"
-                },
-                {
-                  "timeSeconds": 0.75,
-                  "positionOffset": [
-                    40,
-                    0
-                  ],
-                  "rotationOffset": 0,
-                  "scaleMultiplier": [
-                    1.12,
-                    1.12
-                  ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "EaseOut"
-                },
-                {
-                  "timeSeconds": 1.1,
-                  "positionOffset": [
-                    0,
-                    0
-                  ],
-                  "rotationOffset": 0,
-                  "scaleMultiplier": [
-                    1,
-                    1
-                  ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "SmoothStep"
-                }
-              ]
-            },
-            {
-              "id": "exit",
-              "holdFinalPose": false,
-              "keyframes": [
-                {
-                  "timeSeconds": 0,
-                  "positionOffset": [
-                    0,
-                    0
-                  ],
-                  "rotationOffset": 0,
-                  "scaleMultiplier": [
-                    1,
-                    1
-                  ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "EaseInOut"
-                },
-                {
-                  "timeSeconds": 0.22,
-                  "positionOffset": [
-                    0,
-                    0
-                  ],
-                  "rotationOffset": 0,
-                  "scaleMultiplier": [
-                    1.08,
-                    0.92
-                  ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "EaseOut"
-                },
-                {
-                  "timeSeconds": 0.75,
-                  "positionOffset": [
-                    900,
-                    0
-                  ],
-                  "rotationOffset": 0,
-                  "scaleMultiplier": [
-                    1,
-                    1
-                  ],
-                  "opacityMultiplier": 0,
-                  "easingToNext": "EaseIn"
-                }
-              ]
-            }
-          ]
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 2,
-      "locked": false,
-      "modelPath": "",
-      "name": "Title Text",
-      "parentId": 0,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1,
-          1,
-          1,
-          1
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100,
-          100
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0,
-          0,
-          0,
-          1
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ],
-        "translate": [
-          0,
-          0,
-          0
+          633.0,
+          189.9999237060547,
+          0.0
         ]
       }
     },
@@ -334,35 +217,242 @@
       "active": true,
       "components": [
         {
-          "characterSpacing": 0,
+          "castsShadow": true,
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.20000000298023224,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "FishingBoat.obj",
+          "type": "MeshRenderer",
+          "visualRotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 100,
+      "locked": false,
+      "modelPath": "FishingBoat.obj",
+      "name": "TitleFishingBoat",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          0.8199999928474426,
+          0.8199999928474426,
+          0.8199999928474426
+        ],
+        "translate": [
+          -2.847524881362915,
+          0.786749005317688,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "farClip": 1000.0,
+          "fovY": 0.44999998807907104,
+          "invertPitch": false,
+          "invertYaw": false,
+          "isMain": true,
+          "localId": 1,
+          "nearClip": 0.10000000149011612,
+          "type": "Camera"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 101,
+      "locked": false,
+      "modelPath": "",
+      "name": "Title Main Camera",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.75,
+          -10.5
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "castsShadow": false,
+          "color": [
+            1.0,
+            0.9200000166893005,
+            0.7799999713897705,
+            1.0
+          ],
+          "decay": 1.0,
+          "enabled": true,
+          "innerAngle": 25.0,
+          "intensity": 5.0,
+          "lightType": "Point",
+          "localId": 1,
+          "outerAngle": 35.0,
+          "range": 16.0,
+          "shadow": {
+            "bias": 0.0024999999441206455,
+            "distance": 45.0,
+            "farClip": 120.0,
+            "nearClip": 0.10000000149011612,
+            "normalBias": 0.019999999552965164,
+            "orthographicSize": 40.0,
+            "strength": 0.550000011920929,
+            "texelSnap": true
+          },
+          "type": "Light"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 102,
+      "locked": false,
+      "modelPath": "",
+      "name": "Title Boat Key Light",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          -2.799999952316284,
+          2.4000000953674316,
+          -3.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "characterSpacing": 0.0,
           "clipEnabled": false,
           "color": [
-            1,
-            1,
-            1,
-            1
+            1.0,
+            0.9200000166893005,
+            0.550000011920929,
+            1.0
           ],
           "enabled": true,
-          "fontFamily": "Yu Gothic UI",
-          "fontSize": 28,
+          "fontFamily": "なぎの",
+          "fontResourcePath": "",
+          "fontSize": 50.0,
+          "fontSource": "System",
           "fontStyle": "Normal",
-          "fontWeight": "Regular",
+          "fontWeight": "Bold",
           "horizontalAlignment": "Center",
           "layoutSize": [
-            0,
-            0
+            560.0,
+            76.0
           ],
-          "lineSpacing": 1,
+          "lineSpacing": 1.0,
           "localId": 1,
-          "opacity": 1,
+          "opacity": 1.0,
           "outlineColor": [
-            0,
-            0,
-            0,
-            1
+            0.0,
+            0.0,
+            0.0,
+            1.0
           ],
           "outlineEnabled": true,
-          "outlineWidth": 2,
+          "outlineWidth": 1.0,
           "overflowMode": "Overflow",
           "overlayPlacement": {
             "clipEnabled": false,
@@ -371,64 +461,217 @@
               0.5
             ],
             "position": [
-              0,
-              80
+              1070.0,
+              340.0
             ],
-            "rotation": 0,
+            "rotation": 0.0,
             "scale": [
-              1,
-              1
+              1.0,
+              1.0
             ],
-            "sortingOrder": 10,
+            "sortingOrder": 1,
             "viewportAnchor": [
-              0.5,
-              0.58
+              0.0,
+              0.0
             ]
           },
           "pivot": [
-            0.5,
-            0.5
+            0.0,
+            0.0
           ],
           "renderSpace": "ScreenOverlay",
           "scene2DPlacement": {
             "clipEnabled": false,
             "pivot": [
-              0,
-              0
+              0.0,
+              0.0
             ],
             "position": [
-              0,
-              0
+              0.0,
+              0.0
             ],
-            "rotation": 0,
+            "rotation": 0.0,
             "scale": [
-              1,
-              1
+              1.0,
+              1.0
             ],
             "sortingOrder": 0,
             "viewportAnchor": [
-              0,
-              0
+              0.0,
+              0.0
             ]
           },
+          "screenOverlayScaleMode": "Inherit",
           "shadowColor": [
-            0,
-            0,
-            0,
-            0.5
+            0.0,
+            0.0,
+            0.0,
+            1.0
           ],
-          "shadowEnabled": false,
+          "shadowEnabled": true,
           "shadowOffset": [
-            2,
-            2
+            3.0,
+            3.0
           ],
-          "sortingOrder": 10,
-          "text": "PRESS ENTER",
+          "sortingOrder": 0,
+          "text": "すたーと",
           "type": "TextRenderer",
           "verticalAlignment": "Center",
           "viewportAnchor": [
-            0.5,
-            0.58
+            0.0,
+            0.0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 2,
+      "locked": false,
+      "modelPath": "",
+      "name": "TitleMenuStartText",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.7799999713897705,
+            0.8600000143051147,
+            0.9399999976158142,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "なぎの",
+          "fontResourcePath": "",
+          "fontSize": 50.0,
+          "fontSource": "System",
+          "fontStyle": "Normal",
+          "fontWeight": "Bold",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            560.0,
+            76.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 1,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1.0,
+          "overflowMode": "Overflow",
+          "overlayPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.5,
+              0.5
+            ],
+            "position": [
+              1070.0,
+              410.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 2,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "scene2DPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.0,
+              0.0
+            ],
+            "position": [
+              0.0,
+              0.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 0,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "screenOverlayScaleMode": "Inherit",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shadowEnabled": true,
+          "shadowOffset": [
+            3.0,
+            3.0
+          ],
+          "sortingOrder": 0,
+          "text": "ちゅーとりある",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
           ],
           "wrapMode": "NoWrap"
         }
@@ -438,7 +681,7 @@
       "id": 3,
       "locked": false,
       "modelPath": "",
-      "name": "Start Prompt",
+      "name": "TitleMenuTutorialText",
       "parentId": 0,
       "sprite": {
         "anchor": [
@@ -446,36 +689,36 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          100.0,
+          100.0
         ],
         "texturePath": ""
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0
         ],
         "translate": [
-          0,
-          0,
-          0
+          0.0,
+          0.0,
+          0.0
         ]
       }
     },
@@ -483,143 +726,106 @@
       "active": true,
       "components": [
         {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.7799999713897705,
+            0.8600000143051147,
+            0.9399999976158142,
+            1.0
+          ],
           "enabled": true,
+          "fontFamily": "なぎの",
+          "fontResourcePath": "",
+          "fontSize": 50.0,
+          "fontSource": "System",
+          "fontStyle": "Normal",
+          "fontWeight": "Bold",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            556.0,
+            76.0
+          ],
+          "lineSpacing": 1.0,
           "localId": 1,
-          "type": "EventTrigger",
-          "bindings": [
-            {
-              "actions": [
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "sceneId": "",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 2,
-                  "targetEntityName": "",
-                  "textMotionClipId": "",
-                  "value": 0,
-                  "type": "SetEntityActive"
-                },
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "sceneId": "",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 2,
-                  "targetEntityName": "",
-                  "textMotionClipId": "intro",
-                  "value": 0,
-                  "type": "PlayTextMotion"
-                }
-              ],
-              "cooldown": 0,
-              "radius": 1,
-              "statComparison": "LessOrEqual",
-              "statId": "hp",
-              "statValue": 0,
-              "targetEntityId": 0,
-              "targetEntityName": "",
-              "targetPosition": [
-                0,
-                0,
-                0
-              ],
-              "triggerKey": "",
-              "triggerOnce": true,
-              "triggerType": "OnStart",
-              "textMotionClipId": ""
-            },
-            {
-              "actions": [
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "sceneId": "",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 2,
-                  "targetEntityName": "",
-                  "textMotionClipId": "exit",
-                  "value": 0,
-                  "type": "PlayTextMotion"
-                }
-              ],
-              "cooldown": 0,
-              "radius": 1,
-              "statComparison": "LessOrEqual",
-              "statId": "hp",
-              "statValue": 0,
-              "targetEntityId": 0,
-              "targetEntityName": "",
-              "targetPosition": [
-                0,
-                0,
-                0
-              ],
-              "triggerKey": "ENTER",
-              "triggerOnce": true,
-              "triggerType": "OnKeyPressed",
-              "textMotionClipId": ""
-            },
-            {
-              "actions": [
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "sceneId": "gameplay",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 0,
-                  "targetEntityName": "",
-                  "textMotionClipId": "",
-                  "value": 0,
-                  "type": "SceneTransition"
-                }
-              ],
-              "cooldown": 0,
-              "radius": 1,
-              "statComparison": "LessOrEqual",
-              "statId": "hp",
-              "statValue": 0,
-              "targetEntityId": 2,
-              "targetEntityName": "",
-              "targetPosition": [
-                0,
-                0,
-                0
-              ],
-              "triggerKey": "",
-              "triggerOnce": true,
-              "triggerType": "OnTextMotionCompleted",
-              "textMotionClipId": "exit"
-            }
-          ]
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1.0,
+          "overflowMode": "Overflow",
+          "overlayPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.5,
+              0.5
+            ],
+            "position": [
+              1070.0,
+              480.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 3,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "scene2DPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.0,
+              0.0
+            ],
+            "position": [
+              0.0,
+              0.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 0,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "screenOverlayScaleMode": "Inherit",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shadowEnabled": true,
+          "shadowOffset": [
+            3.0,
+            3.0
+          ],
+          "sortingOrder": 0,
+          "text": "おぷしょん",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "NoWrap"
         }
       ],
       "folder": false,
@@ -627,7 +833,7 @@
       "id": 4,
       "locked": false,
       "modelPath": "",
-      "name": "Title Flow Events",
+      "name": "TitleMenuOptionText",
       "parentId": 0,
       "sprite": {
         "anchor": [
@@ -635,38 +841,559 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          100.0,
+          100.0
         ],
         "texturePath": ""
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0
         ],
         "translate": [
-          0,
-          0,
-          0
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.7799999713897705,
+            0.8600000143051147,
+            0.9399999976158142,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "なぎの",
+          "fontResourcePath": "",
+          "fontSize": 50.0,
+          "fontSource": "System",
+          "fontStyle": "Normal",
+          "fontWeight": "Bold",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            560.0,
+            76.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 1,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1.0,
+          "overflowMode": "Overflow",
+          "overlayPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.5,
+              0.5
+            ],
+            "position": [
+              1070.0,
+              550.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 4,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "scene2DPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.0,
+              0.0
+            ],
+            "position": [
+              0.0,
+              0.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 0,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "screenOverlayScaleMode": "Inherit",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shadowEnabled": true,
+          "shadowOffset": [
+            3.0,
+            3.0
+          ],
+          "sortingOrder": 0,
+          "text": "くれじっと",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 5,
+      "locked": false,
+      "modelPath": "",
+      "name": "TitleMenuCreditText",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.7799999713897705,
+            0.8600000143051147,
+            0.9399999976158142,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "なぎの",
+          "fontResourcePath": "",
+          "fontSize": 50.0,
+          "fontSource": "System",
+          "fontStyle": "Normal",
+          "fontWeight": "Bold",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            560.0,
+            76.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 1,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1.0,
+          "overflowMode": "Overflow",
+          "overlayPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.5,
+              0.5
+            ],
+            "position": [
+              1070.0,
+              620.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 5,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "scene2DPlacement": {
+            "clipEnabled": false,
+            "pivot": [
+              0.0,
+              0.0
+            ],
+            "position": [
+              0.0,
+              0.0
+            ],
+            "rotation": 0.0,
+            "scale": [
+              1.0,
+              1.0
+            ],
+            "sortingOrder": 0,
+            "viewportAnchor": [
+              0.0,
+              0.0
+            ]
+          },
+          "screenOverlayScaleMode": "Inherit",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shadowEnabled": true,
+          "shadowOffset": [
+            3.0,
+            3.0
+          ],
+          "sortingOrder": 0,
+          "text": "おわる",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 104,
+      "locked": false,
+      "modelPath": "",
+      "name": "TitleMenuExitText",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "breakupStrength": 1.0,
+          "causticsIntensity": 0.3499999940395355,
+          "causticsScale": 0.07999999821186066,
+          "causticsSpeed": 1.0,
+          "drag": 4.0,
+          "enabled": true,
+          "gravityScale": 0.550000011920929,
+          "halfSize": [
+            10.0,
+            0.10000000149011612,
+            10.0
+          ],
+          "lightColor": [
+            0.550000011920929,
+            0.8999999761581421,
+            1.149999976158142,
+            1.0
+          ],
+          "lightDensity": 0.04500000178813934,
+          "lightDirection": [
+            -0.25,
+            -1.0,
+            0.18000000715255737
+          ],
+          "lightIntensity": 0.550000011920929,
+          "lightSampleCount": 16,
+          "lightShaftEnabled": true,
+          "localId": 1,
+          "maxFallSpeed": 5.0,
+          "moveSpeedMultiplier": 0.44999998807907104,
+          "noiseScale": 1.0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "surfaceAlpha": 0.42000001668930054,
+          "surfaceBaseColor": [
+            0.03999999910593033,
+            0.550000011920929,
+            0.7799999713897705,
+            1.0
+          ],
+          "surfaceEnabled": true,
+          "surfaceFresnelPower": 3.0,
+          "surfaceHighlightColor": [
+            0.41999998688697815,
+            0.949999988079071,
+            1.2000000476837158,
+            1.0
+          ],
+          "surfaceNormalStrength": 1.0500000715255737,
+          "surfaceWaveScale": 1.1800000667572021,
+          "swimUpSpeed": 12.0,
+          "type": "WaterVolume",
+          "warpStrength": 1.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 103,
+      "locked": false,
+      "modelPath": "",
+      "name": "Entity",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
         ]
       }
     }
-  ]
+  ],
+  "fishingObstacle": {
+    "colliderProfiles": []
+  },
+  "lighting": {
+    "shadowMapSize": 1024
+  },
+  "postProcess": {
+    "baseExposure": 1.0,
+    "bloomBlurIterations": 4,
+    "bloomBlurRadius": 1.0,
+    "bloomDownsampleScale": 2,
+    "bloomEnabled": false,
+    "bloomIntensity": 0.699999988079071,
+    "bloomSoftKnee": 0.5,
+    "bloomThreshold": 1.0,
+    "boxBlurEnabled": false,
+    "boxBlurKernelSize": 3,
+    "boxBlurStrength": 1.0,
+    "chromaticAberrationCenter": [
+      0.5,
+      0.5
+    ],
+    "chromaticAberrationEnabled": false,
+    "chromaticAberrationFalloff": 1.5,
+    "chromaticAberrationIntensity": 0.003000000026077032,
+    "depthOfFieldBlurStrength": 1.0,
+    "depthOfFieldEnabled": false,
+    "depthOfFieldFarStrength": 1.0,
+    "depthOfFieldFocusDistance": 10.0,
+    "depthOfFieldFocusRange": 2.0,
+    "depthOfFieldMaxRadius": 4.0,
+    "depthOfFieldNearStrength": 0.0,
+    "dissolveEdgeColor": [
+      1.0,
+      0.4000000059604645,
+      0.30000001192092896,
+      1.0
+    ],
+    "dissolveEdgeWidth": 0.029999999329447746,
+    "dissolveEnabled": false,
+    "dissolveMaskIndex": 0,
+    "dissolveThreshold": 0.0,
+    "gaussianBlurEnabled": false,
+    "gaussianBlurKernelSize": 3,
+    "gaussianBlurSigma": 1.0,
+    "gaussianBlurStrength": 1.0,
+    "grayscaleEnabled": false,
+    "motionBlurEnabled": false,
+    "motionBlurMaxRadius": 24.0,
+    "motionBlurSamples": 8,
+    "motionBlurStrength": 0.5,
+    "noiseAmount": 0.25,
+    "noiseAnimate": true,
+    "noiseEnabled": false,
+    "noiseScale": 1.0,
+    "noiseSeed": 0.0,
+    "noiseSpeed": 1.0,
+    "outlineColor": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "outlineDepthEnabled": true,
+    "outlineDepthWeight": 1.0,
+    "outlineEnabled": false,
+    "outlineLuminanceEnabled": false,
+    "outlineLuminanceWeight": 1.0,
+    "outlineSoftness": 0.05000000074505806,
+    "outlineThickness": 1.0,
+    "outlineThreshold": 0.10000000149011612,
+    "pixelationBlockSize": 4,
+    "pixelationEnabled": false,
+    "radialBlurCenter": [
+      0.5,
+      0.5
+    ],
+    "radialBlurEnabled": false,
+    "radialBlurSamples": 10,
+    "radialBlurWidth": 0.009999999776482582,
+    "toneMapMode": 0,
+    "underwaterDistortion": 0.012000000104308128,
+    "underwaterEnabled": false,
+    "underwaterFogDensity": 0.03500000014901161,
+    "underwaterIntensity": 0.6499999761581421,
+    "underwaterTintColor": [
+      0.019999999552965164,
+      0.44999998807907104,
+      0.6800000071525574,
+      1.0
+    ],
+    "vignetteEnabled": false,
+    "vignetteIntensity": 1.0,
+    "vignettePower": 0.800000011920929,
+    "vignetteScale": 16.0,
+    "waterRefractionEdgeSoftness": 0.07999999821186066,
+    "waterRefractionEnabled": false,
+    "waterRefractionStrength": 0.017999999225139618,
+    "waterRefractionTintColor": [
+      0.019999999552965164,
+      0.550000011920929,
+      0.8199999928474426,
+      1.0
+    ],
+    "waterRefractionTintStrength": 0.11999999731779099
+  },
+  "sceneName": "TITLE",
+  "teams": [],
+  "version": 27
 }

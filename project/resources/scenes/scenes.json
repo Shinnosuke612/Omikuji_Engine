@@ -9,13 +9,31 @@
     {
       "id": "gameplay",
       "name": "GAMEPLAY",
-      "path": "resources/scenes/gameplay.scene.json",
+      "path": "resources/scenes/GAMEPLAY.scene.json",
       "runtimeProfile": "RUNTIME"
     },
     {
-      "id": "gameplay_legacy",
-      "name": "GAMEPLAY LEGACY",
-      "path": "resources/scenes/gameplay_legacy.scene.json",
+      "id": "option",
+      "name": "OPTION",
+      "path": "resources/scenes/option.scene.json",
+      "runtimeProfile": "RUNTIME"
+    },
+    {
+      "id": "credit",
+      "name": "CREDIT",
+      "path": "resources/scenes/credit.scene.json",
+      "runtimeProfile": "RUNTIME"
+    },
+    {
+      "id": "result",
+      "name": "RESULT",
+      "path": "resources/scenes/RESULT.scene.json",
+      "runtimeProfile": "RUNTIME"
+    },
+    {
+      "id": "tutorial",
+      "name": "TUTORIAL",
+      "path": "resources/scenes/TUTORIAL.scene.json",
       "runtimeProfile": "RUNTIME"
     }
   ],

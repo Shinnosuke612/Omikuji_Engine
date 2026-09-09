@@ -124,6 +124,9 @@ void FullscreenCopy::Draw(
 	else if (effect == Effect::kMotionBlur) {
 		pipelineState = motionBlurPipelineState_.Get();
 	}
+	else if (effect == Effect::kIrisTransition) {
+		pipelineState = irisTransitionPipelineState_.Get();
+	}
 	commandList->SetPipelineState(pipelineState);
 	commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	commandList->SetGraphicsRootDescriptorTable(0, textureHandle);
@@ -287,6 +290,10 @@ void FullscreenCopy::CreatePipelineState() {
 	const auto chromaticAberrationPixelShader = dxCommon_->CompileShader(L"resources/shaders/ChromaticAberration.PS.hlsl", L"ps_6_0");
 	const auto pixelationPixelShader = dxCommon_->CompileShader(L"resources/shaders/Pixelation.PS.hlsl", L"ps_6_0");
 	const auto motionBlurPixelShader = dxCommon_->CompileShader(L"resources/shaders/MotionBlur.PS.hlsl", L"ps_6_0");
+	const auto irisTransitionPixelShader = dxCommon_->CompileShader(
+		L"resources/shaders/IrisTransition.PS.hlsl",
+		L"ps_6_0"
+	);
 	assert(vertexShader);
 	assert(copyPixelShader);
 	assert(grayscalePixelShader);
@@ -304,6 +311,7 @@ void FullscreenCopy::CreatePipelineState() {
 	assert(chromaticAberrationPixelShader);
 	assert(pixelationPixelShader);
 	assert(motionBlurPixelShader);
+	assert(irisTransitionPixelShader);
 
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
 	rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
@@ -476,6 +484,16 @@ void FullscreenCopy::CreatePipelineState() {
 
 	pipelineDesc.PS = { motionBlurPixelShader->GetBufferPointer(), motionBlurPixelShader->GetBufferSize() };
 	result = dxCommon_->GetDevice()->CreateGraphicsPipelineState(&pipelineDesc, IID_PPV_ARGS(&motionBlurPipelineState_));
+	assert(SUCCEEDED(result));
+
+	pipelineDesc.PS = {
+		irisTransitionPixelShader->GetBufferPointer(),
+		irisTransitionPixelShader->GetBufferSize()
+	};
+	result = dxCommon_->GetDevice()->CreateGraphicsPipelineState(
+		&pipelineDesc,
+		IID_PPV_ARGS(&irisTransitionPipelineState_)
+	);
 	assert(SUCCEEDED(result));
 
 	pipelineDesc.RTVFormats[0] = RenderFormats::kSceneHdrFormat;
