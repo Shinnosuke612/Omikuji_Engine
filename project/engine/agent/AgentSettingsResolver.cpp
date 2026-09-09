@@ -48,6 +48,8 @@ namespace AgentSettingsResolver {
 		resolved.agentMemberSeparationUpdateInterval =
 			team->agentMemberSeparationUpdateInterval;
 		resolved.agentMemberSeparationBlend = team->agentMemberSeparationBlend;
+		resolved.agentMemberMinimumDistance =
+			team->agentMemberMinimumDistance;
 		resolved.agentUseTeamHeading = team->agentUseTeamHeading;
 		resolved.agentTeamHeadingFromAverage =
 			team->agentTeamHeadingFromAverage;

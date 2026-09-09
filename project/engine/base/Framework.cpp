@@ -2,6 +2,7 @@
 #include "Framework.h"
 
 #include "../utility/Logger.h"
+#include "../text/ResourceFontInstaller.h"
 #include "D3DResourceLeadChecker.h"
 #include "WinApp.h"
 #include "DirectXCommon.h"
@@ -45,6 +46,7 @@ void Framework::Run() {
 
 void Framework::Initialize() {
 	Logger::Initialize();
+	ResourceFontInstaller::Install();
 
 	checker_ = new D3DResourceLeadChecker();
 
@@ -72,9 +74,9 @@ void Framework::Initialize() {
 	input_ = Input::GetInstance();
 	input_->GetInstance()->Initialize(winApp_);
 
-#if defined(_DEBUG) || defined(DEVELOPMENT)
 	DebugRenderer::GetInstance()->Initialize(dxCommon_);
 
+#if defined(_DEBUG) || defined(DEVELOPMENT)
 	imguiManager_ = new ImGuiManager();
 	imguiManager_->Initialize(winApp_, dxCommon_, srvManager_);
 #endif
@@ -130,9 +132,9 @@ void Framework::Finalize() {
 	delete sceneFactory_;
 	sceneFactory_ = nullptr;
 
-#if defined(_DEBUG) || defined(DEVELOPMENT)
 	DebugRenderer::GetInstance()->Finalize();
 
+#if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (imguiManager_) {
 		imguiManager_->Finalize();
 	}
@@ -184,5 +186,6 @@ void Framework::Finalize() {
 	delete checker_;
 	checker_ = nullptr;
 
+	ResourceFontInstaller::Uninstall();
 	Logger::Finalize();
 }

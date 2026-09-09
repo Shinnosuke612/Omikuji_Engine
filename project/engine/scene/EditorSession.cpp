@@ -13,6 +13,7 @@ bool EditorSession::Initialize(
 	const std::string& sceneName,
 	const std::string& sceneFilePath
 ) {
+	runtimeSessionState_.Clear();
 	editSceneId_ = sceneId;
 	editSceneFilePath_ = sceneFilePath;
 	runtimeSceneId_.clear();
@@ -93,10 +94,27 @@ bool EditorSession::LoadRuntimeScene(
 	return true;
 }
 
+bool EditorSession::AdoptPreloadedRuntimeScene(
+	const std::string& sceneId,
+	const std::string& sceneFilePath,
+	SceneDocument&& document
+) {
+	if (IsEditing() || sceneId.empty() || sceneFilePath.empty()) {
+		return false;
+	}
+
+	runtimeDocument_ = std::move(document);
+	runtimeSceneId_ = sceneId;
+	runtimeSceneFilePath_ = sceneFilePath;
+	lastLoadError_.clear();
+	return true;
+}
+
 void EditorSession::Play() {
 	if (state_ != EditorPlayState::Edit) {
 		return;
 	}
+	runtimeSessionState_.Clear();
 	runtimeDocument_ = editDocument_;
 	runtimeDocument_.MarkClean();
 	runtimeSceneId_ = editSceneId_;
@@ -122,6 +140,7 @@ void EditorSession::Stop() {
 		return;
 	}
 	state_ = EditorPlayState::Edit;
+	runtimeSessionState_.Clear();
 	runtimeDocument_.Clear();
 	runtimeSceneId_.clear();
 	runtimeSceneFilePath_.clear();
@@ -131,6 +150,28 @@ void EditorSession::Stop() {
 bool EditorSession::Save() {
 	if (!IsEditing() || editSceneFilePath_.empty()) {
 		return false;
+	}
+	const bool saved = editDocument_.Save(editSceneFilePath_);
+	if (saved) {
+		frameStartDocument_ = editDocument_;
+		frameStartRevision_ = editDocument_.GetRevision();
+		editFrameActive_ = false;
+	}
+	return saved;
+}
+
+bool EditorSession::CommitRuntimeEditAndSave(
+	const SceneDocument& beforeSnapshot
+) {
+	if (
+		(!IsPlaying() && !IsPaused()) ||
+		editSceneFilePath_.empty()
+	) {
+		return false;
+	}
+	if (editDocument_.GetRevision() != beforeSnapshot.GetRevision()) {
+		PushUndoSnapshot(beforeSnapshot);
+		redoStack_.clear();
 	}
 	const bool saved = editDocument_.Save(editSceneFilePath_);
 	if (saved) {

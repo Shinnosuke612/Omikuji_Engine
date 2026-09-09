@@ -1,6 +1,9 @@
 // 役割: SRV、UAV、CBV用DescriptorHeapの割り当てとGPUハンドル取得を管理する。
 #pragma once
 #include "../base/DirectXCommon.h"
+#include <array>
+#include <cstdint>
+#include <vector>
 class SrvManager{
 
 public:
@@ -10,6 +13,7 @@ public:
 	void Initialize(DirectXCommon* dxCommon);
 
 	uint32_t Allocate();
+	void Free(uint32_t index);
 
 	// SRV確保可能チェック
 	bool CanAllocate() const;
@@ -36,8 +40,8 @@ private:
 	DirectXCommon* directXCommon = nullptr;
 	static SrvManager* instance_;
 
-	// 最大SRV数（最大テクスチャ枚数）
-	static const uint32_t kMaxSRVCount;
+	// CBV/SRV/UAVデスクリプタヒープで確保できる最大数
+	static constexpr uint32_t kMaxSRVCount = 4096;
 	// SRV用のデスクリプタサイズ
 	uint32_t descriptorSize;
 	// SRV用デスクリプタヒープ
@@ -45,5 +49,7 @@ private:
 
 	//次に使用するSRVインデックス
 	uint32_t useIndex = 0;
+	std::array<bool, kMaxSRVCount> allocatedIndices_{};
+	std::vector<uint32_t> freeIndices_;
 };
 

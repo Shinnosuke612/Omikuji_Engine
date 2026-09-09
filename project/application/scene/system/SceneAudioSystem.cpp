@@ -26,6 +26,21 @@ namespace {
 		return AudioBus::SFX;
 	}
 
+	/// <summary>
+	/// Scene定義上のAudioSource設定から、実際に使用するAudio Busを決定します。
+	/// </summary>
+	AudioBus ResolveAudioSourceBus(const SceneComponent& component) {
+		const bool looksLikeSceneBgm =
+			component.audioBus == "UI" &&
+			component.audioSpatialMode == "TwoD" &&
+			component.audioPlayOnStart &&
+			component.audioLoop; // 既存SceneでUI Busに置かれた開始ループ音源をBGM扱いにする判定。
+		if (looksLikeSceneBgm) {
+			return AudioBus::BGM;
+		}
+		return ToAudioBus(component.audioBus);
+	}
+
 	Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
 		return Math::Length(value) > 0.0001f
 			? Math::Normalize(value)
@@ -152,7 +167,7 @@ Audio::PlaybackHandle SceneAudioSystem::Play(
 		return Audio::GetInstance()->PlayAudioStream(
 			component.audioClipPath.c_str(),
 			{
-				ToAudioBus(component.audioBus), component.audioVolume,
+				ResolveAudioSourceBus(component), component.audioVolume,
 				component.audioPitch, component.audioLoop, true
 			},
 			&error
@@ -171,7 +186,7 @@ Audio::PlaybackHandle SceneAudioSystem::Play(
 		return {};
 	}
 	return Audio::GetInstance()->PlayAudioClip(clip, {
-		ToAudioBus(component.audioBus), component.audioVolume,
+		ResolveAudioSourceBus(component), component.audioVolume,
 		component.audioPitch, component.audioLoop, true
 	});
 }
@@ -224,6 +239,8 @@ void SceneAudioSystem::Sync(
 				} else {
 					Audio::GetInstance()->SoundStop(binding.handle);
 				}
+				binding.eventPaused = false;
+				binding.policyPaused = false;
 			}
 			if (active && !playSessionStarted_ && component.audioPlayOnStart) {
 				if (binding.persistent) {
@@ -234,6 +251,7 @@ void SceneAudioSystem::Sync(
 				} else {
 					binding.handle = Play(component, binding);
 				}
+				binding.eventPaused = false;
 			}
 			binding.wasActive = active;
 		}
@@ -257,7 +275,7 @@ void SceneAudioSystem::Sync(
 				persistentPlayOnStartKey,
 				persistentPlayOnStart->audioClipPath,
 				{
-					ToAudioBus(persistentPlayOnStart->audioBus),
+					ResolveAudioSourceBus(*persistentPlayOnStart),
 					persistentPlayOnStart->audioVolume,
 					persistentPlayOnStart->audioPitch,
 					persistentPlayOnStart->audioLoop,
@@ -405,7 +423,7 @@ void SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::v
 				Audio::GetInstance()->ResolvePersistentBgm({
 					sceneOwnerId_, bindingKey, component->audioClipPath,
 					{
-						ToAudioBus(component->audioBus), component->audioVolume,
+						ResolveAudioSourceBus(*component), component->audioVolume,
 						component->audioPitch, component->audioLoop, true
 					},
 					component->audioBgmFadeSeconds
@@ -414,15 +432,45 @@ void SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::v
 				Audio::GetInstance()->SoundStop(binding.handle);
 				binding.handle = Play(*component, binding);
 			}
+			binding.eventPaused = false;
 		} else if (request.type == SceneAudioRequestType::Stop) {
 			if (binding.persistent) Audio::GetInstance()->StopPersistentBgm(sceneOwnerId_, bindingKey);
 			else Audio::GetInstance()->SoundStop(binding.handle);
+			binding.eventPaused = false;
+			binding.policyPaused = false;
 		} else if (request.type == SceneAudioRequestType::Pause) {
 			if (binding.persistent) Audio::GetInstance()->PausePersistentBgm(sceneOwnerId_, bindingKey);
 			else Audio::GetInstance()->Pause(binding.handle);
+			binding.eventPaused = true;
 		} else if (request.type == SceneAudioRequestType::Resume) {
-			if (binding.persistent) Audio::GetInstance()->ResumePersistentBgm(sceneOwnerId_, bindingKey);
-			else Audio::GetInstance()->Resume(binding.handle);
+			binding.eventPaused = false;
+			if (!binding.policyPaused) {
+				if (binding.persistent) Audio::GetInstance()->ResumePersistentBgm(sceneOwnerId_, bindingKey);
+				else Audio::GetInstance()->Resume(binding.handle);
+			}
+		}
+	}
+}
+
+void SceneAudioSystem::ApplyProcessPolicy(
+	const SceneDocument& document,
+	const std::function<bool(uint64_t)>& shouldProcess
+) {
+	(void)document;
+	for (auto& [bindingKey, binding] : bindings_) {
+		const bool allowed = !shouldProcess || shouldProcess(binding.entityId);
+		if (!allowed && !binding.policyPaused) {
+			if (!binding.eventPaused) {
+				if (binding.persistent) Audio::GetInstance()->PausePersistentBgm(sceneOwnerId_, bindingKey);
+				else Audio::GetInstance()->Pause(binding.handle);
+			}
+			binding.policyPaused = true;
+		} else if (allowed && binding.policyPaused) {
+			binding.policyPaused = false;
+			if (!binding.eventPaused) {
+				if (binding.persistent) Audio::GetInstance()->ResumePersistentBgm(sceneOwnerId_, bindingKey);
+				else Audio::GetInstance()->Resume(binding.handle);
+			}
 		}
 	}
 }

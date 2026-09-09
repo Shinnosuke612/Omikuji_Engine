@@ -15,12 +15,18 @@
 #include "system/SceneHitReactionSystem.h"
 #include "system/SceneHitStopSystem.h"
 #include "system/SceneGameFlowSystem.h"
+#include "system/SceneFishingScoreAttackSystem.h"
+#include "system/SceneFishingResultPresentationSystem.h"
 #include "system/SceneEffectRenderSystem.h"
 #include "system/SceneEnvironmentSystem.h"
 #include "system/SceneLightingSystem.h"
+#include "system/SceneMiniMapSystem.h"
 #include "system/SceneMonitorSystem.h"
 #include "system/SceneObjectSystem.h"
 #include "system/SceneParticleSystem.h"
+#include "system/SceneOptionMenuSystem.h"
+#include "system/ScenePauseMenuSystem.h"
+#include "system/ScenePauseSystem.h"
 #include "system/ScenePostProcessProfileSystem.h"
 #include "system/ScenePhysicsSystem.h"
 #include "system/ScenePrefabAnimationSystem.h"
@@ -28,8 +34,11 @@
 #include "system/SceneRuntimeEffectSystem.h"
 #include "system/SceneStatSystem.h"
 #include "system/SceneStateMachineSystem.h"
+#include "system/SceneSpriteMotionSystem.h"
 #include "system/SceneTextRenderSystem.h"
 #include "system/SceneTextMotionSystem.h"
+#include "system/SceneTitleBoatMotionSystem.h"
+#include "system/SceneTitleMenuSystem.h"
 #include "system/SceneTransitionSystem.h"
 
 #include <cstdint>
@@ -49,6 +58,10 @@ public:
 	void PrepareForSceneTransition() override;
 	void Update(float deltaTime) override;
 	void UpdatePaused() override;
+	/// <summary>
+	/// メニュー操作で発生したゲーム終了要求を返し、内部状態を消費します。
+	/// </summary>
+	bool ConsumeExitRequest() override;
 	void Draw() override;
 	Camera* GetRenderCamera() const override;
 	void DrawWithCamera(Camera* viewCamera) override;
@@ -62,6 +75,7 @@ public:
 	bool HasScreenOverlay() const override;
 	void DrawScreenOverlay(uint32_t width, uint32_t height) override;
 	void DrawOffscreenViews() override;
+	void SetRenderAspectRatio(float aspectRatio) override;
 	void DrawShadow() override;
 	void CollectShadowCasters(std::vector<Object3d*>& shadowCasters) override;
 	void RenderShadowCasters(
@@ -81,6 +95,25 @@ private:
 		Camera* viewCamera,
 		uint64_t skipEntityId
 	);
+	/// <summary>
+	/// タイトルのSTART決定後に退出演出を開始します。
+	/// </summary>
+	void BeginTitleStartTransition();
+
+	/// <summary>
+	/// タイトル退出演出を進め、遷移可能になったかを返します。
+	/// </summary>
+	bool UpdateTitleStartTransition(float deltaTime);
+
+	/// <summary>
+	/// タイトル退出演出の進行度を0から1で返します。
+	/// </summary>
+	float GetTitleStartTransitionProgress() const;
+
+	/// <summary>
+	/// タイトル退出演出の状態を初期化します。
+	/// </summary>
+	void ClearTitleStartTransition();
 	bool ShouldHidePlayerModelForCamera(Camera* viewCamera) const;
 	void ApplyRenderCamera(Camera* viewCamera);
 	Camera* GetSceneViewCamera() const;
@@ -89,6 +122,10 @@ private:
 	Camera* debugCamera_ = nullptr;
 	Player* player_ = nullptr;
 	std::vector<SceneRuntimeObjectBinding> runtimeObjectBindings_;
+	bool exitRequested_ = false; // 上位のGameへ渡すゲーム終了要求。
+	bool titleStartTransitionActive_ = false; // タイトルSTART後の退出演出中か。
+	float titleStartTransitionElapsedSeconds_ = 0.0f; // タイトル退出演出の経過時間。
+	bool creditBackInputArmed_ = false; // Credit Sceneで戻り入力を受け付ける準備ができているか。
 
 	SceneAgentSystem agentSystem_;
 	SceneAudioSystem audioSystem_;
@@ -100,16 +137,22 @@ private:
 	SceneEnemySystem enemySystem_;
 	SceneEnemySpawnerSystem enemySpawnerSystem_;
 	SceneGameFlowSystem gameFlowSystem_;
+	SceneFishingScoreAttackSystem fishingScoreAttackSystem_;
+	SceneFishingResultPresentationSystem fishingResultPresentationSystem_;
 	SceneEventSystem eventSystem_;
 	SceneHitReactionSystem hitReactionSystem_;
 	SceneHitStopSystem hitStopSystem_;
 	SceneEffectRenderSystem effectRenderSystem_;
 	SceneEnvironmentSystem environmentSystem_;
 	SceneLightingSystem lightingSystem_;
+	SceneMiniMapSystem miniMapSystem_;
 	SceneMonitorSystem monitorSystem_;
 	SceneObjectSystem objectSystem_;
+	SceneOptionMenuSystem optionMenuSystem_;
+	ScenePauseMenuSystem pauseMenuSystem_;
 	SceneTransitionSystem transitionSystem_;
 	SceneParticleSystem particleSystem_;
+	ScenePauseSystem pauseSystem_;
 	ScenePostProcessProfileSystem postProcessProfileSystem_;
 	ScenePhysicsSystem physicsSystem_;
 	ScenePrefabAnimationSystem prefabAnimationSystem_;
@@ -117,7 +160,10 @@ private:
 	SceneRuntimeEffectSystem runtimeEffectSystem_;
 	SceneStatSystem statSystem_;
 	SceneStateMachineSystem stateMachineSystem_;
+	SceneSpriteMotionSystem spriteMotionSystem_;
 	SceneTextMotionSystem textMotionSystem_;
 	SceneTextRenderSystem textRenderSystem_;
+	SceneTitleBoatMotionSystem titleBoatMotionSystem_;
+	SceneTitleMenuSystem titleMenuSystem_;
 };
 

@@ -6,6 +6,8 @@
 #include "../../engine/math/Vector3.h"
 #include "../../engine/math/Transform.h"
 
+#include <string>
+
 class Object3d;
 class Object3dCommon;
 class Camera;
@@ -17,7 +19,8 @@ public:
 	void Initialize(Object3d* object);
 	void Update(
 		const Camera* camera,
-		bool acceptGameplayInput
+		bool acceptGameplayInput,
+		float deltaTime
 	);
 	void PostPhysicsUpdate();
 	void Draw();
@@ -30,13 +33,31 @@ public:
 	Object3d* GetObject() const { return object_; }
 	void SetCollider(Collider* collider);
 	void SetTransform(const Transform& transform);
+	bool RestorePlanarPosition(const Vector3& position);
+	bool RestorePlanarPose(const Vector3& position, float yaw);
+	bool ApplyPlanarMotionConstraint(
+		const Vector3& position,
+		float yaw,
+		const Vector3& velocity
+	);
+	bool ClampToWaterBounds(
+		const Vector3& center,
+		float yaw,
+		float halfSizeX,
+		float halfSizeZ
+	);
 	void SetBehaviorSettings(
 		float moveSpeed,
 		float jumpVelocity,
 		float turnResponsiveness,
 		float dashMultiplier,
 		bool cameraRelativeMove,
-		bool allowJump
+		bool allowJump,
+		bool autoForward
+	);
+	void SetInputDeviceSettings(
+		const std::string& inputMode,
+		float gamepadDeadzone
 	);
 	void SetWaterState(
 		bool inWater,
@@ -46,7 +67,7 @@ public:
 
 private:
 	void ApplyPosition();
-	void SyncRotationStateFromObject();
+	float GetYaw() const;
 
 private:
 	Object3d* object_ = nullptr;
@@ -58,13 +79,13 @@ private:
 	float turnResponsiveness_ = 0.018f;
 	float jumpVelocity_ = 37.2f;
 	float dashMultiplier_ = 1.65f;
-	float currentYaw_ = 0.0f;
-	float currentPitch_ = 0.0f;
-	Quaternion currentRotation_ = { 0.0f, 0.0f, 0.0f, 1.0f };
-	bool rotationInitialized_ = false;
 	bool cameraRelativeMove_ = true;
 	bool allowJump_ = true;
 	bool inWater_ = false;
 	float waterMoveSpeedMultiplier_ = 0.45f;
 	float waterSwimUpSpeed_ = 12.0f;
+	float targetYaw_ = 0.0f;
+	bool autoForward_ = false;
+	std::string inputMode_ = "KeyboardMouse";
+	float gamepadDeadzone_ = 0.20f;
 };

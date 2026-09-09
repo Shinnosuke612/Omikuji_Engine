@@ -13,10 +13,13 @@
 #include "../../../engine/scene/SceneDocument.h"
 #include "../../../engine/scene/SceneEntityQuery.h"
 #include "../../../engine/scene/SceneTransformResolver.h"
+#include "SceneScreenOverlayCanvasLayout.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
+#include <random>
 #include <sstream>
 #include <unordered_set>
 
@@ -26,6 +29,15 @@ namespace {
 	using SceneEntityQuery::HasComponent;
 	using SceneEntityQuery::IsEntityActiveInHierarchy;
 	using SceneTransformResolver::ResolveScene2DTransform;
+
+	constexpr std::array<const char*, 6> kFishingObstacleRockModelPaths = {
+		"rock/Rock_Chunky.obj",
+		"rock/Rock_Flat.obj",
+		"rock/Rock_Round.obj",
+		"rock/Rock_Spire.obj",
+		"rock/Rock_Tall.obj",
+		"rock/Rock_Wide.obj"
+	};
 
 	std::string BuildMaterialOverrideSignature(
 		const std::vector<SceneMeshMaterialOverride>& overrides
@@ -51,6 +63,176 @@ namespace {
 		}
 		return Object3dCommon::CullMode::kBack;
 	}
+
+	const SceneFishingObstacleColliderProfile*
+	FindFishingObstacleColliderProfile(
+		const SceneFishingObstacleSettings& settings,
+		const std::string& modelPath
+	) {
+		const auto found = std::find_if(
+			settings.colliderProfiles.begin(),
+			settings.colliderProfiles.end(),
+			[&modelPath](const SceneFishingObstacleColliderProfile& profile) {
+				return profile.enabled && profile.modelPath == modelPath;
+			}
+		);
+		return found == settings.colliderProfiles.end()
+			? nullptr
+			: &(*found);
+	}
+
+	// Play用Documentだけを書き換えるため、Editorで保存している岩配置には影響しない。
+	// WaterVolumeの範囲内で、十分な間隔を空けながらXZ座標を抽選する。
+	void RandomizeFishingObstacleLayout(
+		SceneDocument& document,
+		std::mt19937& randomEngine
+	) {
+		std::vector<SceneEntity*> obstacles;
+		const SceneEntity* waterEntity = nullptr;
+		const SceneComponent* waterVolume = nullptr;
+		const SceneEntity* playerEntity = nullptr;
+		for (SceneEntity& entity : document.GetEntities()) {
+			if (FindEnabledComponent(entity, "FishingObstacle")) {
+				obstacles.push_back(&entity);
+			}
+			if (!playerEntity && FindEnabledComponent(entity, "PlayerBehavior")) {
+				playerEntity = &entity;
+			}
+			// 水域は描画を止めるためEntity自体をinactiveにする場合がある。
+			// WaterVolume Componentが有効なら、配置範囲としては使用する。
+			if (!waterEntity) {
+				if (const SceneComponent* candidate =
+					FindEnabledComponent(entity, "WaterVolume")) {
+					waterEntity = &entity;
+					waterVolume = candidate;
+				}
+			}
+		}
+		if (obstacles.size() < 2 || !waterEntity || !waterVolume) {
+			return;
+		}
+
+		const Transform waterTransform =
+			SceneTransformResolver::ResolveScene3DTransform(document, *waterEntity);
+		const float halfSizeX = waterVolume->waterHalfSize.x *
+			(std::max)(std::abs(waterTransform.scale.x), 0.001f);
+		const float halfSizeZ = waterVolume->waterHalfSize.z *
+			(std::max)(std::abs(waterTransform.scale.z), 0.001f);
+		if (halfSizeX < 0.001f || halfSizeZ < 0.001f) {
+			return;
+		}
+
+		const float yaw = waterTransform.rotate.y;
+		const float cosine = std::cos(yaw);
+		const float sine = std::sin(yaw);
+		const Vector3 playerSpawnPosition = playerEntity
+			? SceneTransformResolver::ResolveScene3DTransform(
+				document, *playerEntity
+			).translate
+			: Vector3{};
+		const Vector3 waterCenter = {
+			waterTransform.translate.x +
+				waterVolume->waterOffset.x * cosine +
+				waterVolume->waterOffset.z * sine,
+			waterTransform.translate.y + waterVolume->waterOffset.y,
+			waterTransform.translate.z -
+				waterVolume->waterOffset.x * sine +
+				waterVolume->waterOffset.z * cosine
+		};
+		// 岩Colliderが水域外にはみ出さないための余白。
+		const float edgePadding = (std::min)(
+			24.0f, (std::min)(halfSizeX, halfSizeZ) * 0.25f
+		);
+		std::uniform_real_distribution<float> xDistribution(
+			-halfSizeX + edgePadding, halfSizeX - edgePadding
+		);
+		std::uniform_real_distribution<float> zDistribution(
+			-halfSizeZ + edgePadding, halfSizeZ - edgePadding
+		);
+		std::uniform_real_distribution<float> yawDistribution(
+			0.0f, 6.28318530717958647692f
+		);
+		std::uniform_real_distribution<float> scaleDistribution(0.8f, 1.2f);
+		std::vector<Vector3> placedPositions;
+		placedPositions.reserve(obstacles.size());
+		constexpr int kPlacementAttempts = 128;
+		// 最大スケール時でも現在の岩Collider同士が重なりにくい距離を確保する。
+		constexpr float kInitialMinimumDistance = 56.0f;
+		// スポーン直後の移動不能を防ぐため、プレイヤー開始地点の周囲を空ける。
+		constexpr float kPlayerSpawnExclusionRadius = 50.0f;
+		for (SceneEntity* obstacle : obstacles) {
+			const Transform obstacleWorld =
+				SceneTransformResolver::ResolveScene3DTransform(document, *obstacle);
+			Vector3 selectedPosition = obstacleWorld.translate;
+			bool placed = false;
+			for (const float minimumDistance : {
+				kInitialMinimumDistance,
+				kInitialMinimumDistance * 0.8f,
+				kInitialMinimumDistance * 0.6f
+			}) {
+				const float minimumDistanceSquared =
+					minimumDistance * minimumDistance;
+				for (int attempt = 0; attempt < kPlacementAttempts; ++attempt) {
+					const float localX = xDistribution(randomEngine);
+					const float localZ = zDistribution(randomEngine);
+					const Vector3 candidate = {
+						waterCenter.x + localX * cosine + localZ * sine,
+						obstacleWorld.translate.y,
+						waterCenter.z - localX * sine + localZ * cosine
+					};
+					const float playerDeltaX = candidate.x - playerSpawnPosition.x;
+					const float playerDeltaZ = candidate.z - playerSpawnPosition.z;
+					const bool overlapsPlayerSpawn = playerEntity &&
+						playerDeltaX * playerDeltaX + playerDeltaZ * playerDeltaZ <
+							kPlayerSpawnExclusionRadius * kPlayerSpawnExclusionRadius;
+					const bool overlapsObstacle = std::any_of(
+						placedPositions.begin(),
+						placedPositions.end(),
+						[&candidate, minimumDistanceSquared](const Vector3& placedPosition) {
+							const float deltaX = candidate.x - placedPosition.x;
+							const float deltaZ = candidate.z - placedPosition.z;
+							return deltaX * deltaX + deltaZ * deltaZ <
+								minimumDistanceSquared;
+						}
+					);
+					if (!overlapsPlayerSpawn && !overlapsObstacle) {
+						selectedPosition = candidate;
+						placed = true;
+						break;
+					}
+				}
+				if (placed) {
+					break;
+				}
+			}
+			Transform targetWorld = obstacleWorld;
+			targetWorld.translate = selectedPosition;
+			Vector3 randomRotation = MakeEulerFromQuaternion(
+				obstacleWorld.quaternionRotate
+			);
+			randomRotation.y = yawDistribution(randomEngine);
+			targetWorld.rotate = randomRotation;
+			targetWorld.useQuaternionRotation = true;
+			targetWorld.quaternionRotate = MakeQuaternionFromEuler(
+				randomRotation
+			);
+			const float scaleMultiplier = scaleDistribution(randomEngine);
+			targetWorld.scale = {
+				obstacleWorld.scale.x * scaleMultiplier,
+				obstacleWorld.scale.y * scaleMultiplier,
+				obstacleWorld.scale.z * scaleMultiplier
+			};
+			Transform targetLocal{};
+			if (SceneTransformResolver::TryConvertSceneWorldTransformToLocal(
+				document, *obstacle, targetWorld, targetLocal
+			)) {
+				obstacle->transform.scale = targetLocal.scale;
+				obstacle->transform.rotate = targetLocal.quaternionRotate;
+				obstacle->transform.translate = targetLocal.translate;
+			}
+			placedPositions.push_back(selectedPosition);
+		}
+	}
 }
 
 SceneObjectSystem::SceneObjectSystem() = default;
@@ -71,14 +253,44 @@ void SceneObjectSystem::SyncModels(
 		ClearModels();
 		return;
 	}
+	// 編集中はSceneに保存されたModel/配置をそのまま表示する。Playへ切り替わった
+	// 最初の同期でだけ岩を抽選し、その実行中は同じ結果を維持する。
+	if (editing) {
+		fishingObstacleModelPaths_.clear();
+		fishingObstacleModelDocument_ = document;
+		fishingObstacleLayoutRandomizedForCurrentPlay_ = false;
+	} else if (!fishingObstacleLayoutRandomizedForCurrentPlay_) {
+		fishingObstacleModelPaths_.clear();
+		fishingObstacleModelDocument_ = document;
+		RandomizeFishingObstacleLayout(*document, fishingObstacleRandomEngine_);
+		fishingObstacleLayoutRandomizedForCurrentPlay_ = true;
+	} else {
+		// 先行初期化したDocumentをRuntime Sessionへ移送すると格納先だけが
+		// 変わる。Play中に同じ岩配置を再抽選しないよう参照先だけ更新する。
+		fishingObstacleModelDocument_ = document;
+	}
 
 	std::unordered_set<uint64_t> requiredIds;
 	for (const SceneEntity& entity : document->GetEntities()) {
 		const SceneComponent* meshRenderer =
 			FindEnabledComponent(entity, "MeshRenderer");
-		const std::string modelPath = meshRenderer
+		std::string modelPath = meshRenderer
 			? meshRenderer->modelPath
 			: std::string{};
+		if (!editing && FindEnabledComponent(entity, "FishingObstacle")) {
+			auto [assignment, inserted] = fishingObstacleModelPaths_.try_emplace(
+				entity.id
+			);
+			if (inserted) {
+				std::uniform_int_distribution<size_t> distribution(
+					0, kFishingObstacleRockModelPaths.size() - 1
+				);
+				assignment->second = kFishingObstacleRockModelPaths[
+					distribution(fishingObstacleRandomEngine_)
+				];
+			}
+			modelPath = assignment->second;
+		}
 		const bool hasRenderer = !modelPath.empty();
 		requiredIds.insert(entity.id);
 		auto found = models_.find(entity.id);
@@ -109,6 +321,8 @@ void SceneObjectSystem::SyncModels(
 		const SceneComponent* animator =
 			FindEnabledComponent(entity, "Animator");
 		ModelRuntime& runtime = found->second;
+		runtime.isWaterVolume = HasComponent(entity, "WaterVolume");
+		runtime.hasPlayerBehavior = HasComponent(entity, "PlayerBehavior");
 		const bool hasAnimator = animator && runtime.object->HasAnimation();
 		const size_t clipCount = runtime.object->GetAnimationClipCount();
 		const int defaultClip = clipCount > 0
@@ -184,9 +398,11 @@ void SceneObjectSystem::SyncModels(
 		runtimeTransform.translate = entity.transform.translate;
 		runtimeTransform.useQuaternionRotation = true;
 		runtimeTransform.quaternionRotate = entity.transform.rotate;
-		const bool isWaterVolume = HasComponent(entity, "WaterVolume");
+		runtime.object->SetVisualLocalRotation(
+			meshRenderer ? meshRenderer->meshVisualRotation : Vector3{}
+		);
 		runtime.object->SetCullMode(
-			isWaterVolume
+			runtime.isWaterVolume
 				? Object3dCommon::CullMode::kNone
 				: (
 					meshRenderer
@@ -194,7 +410,7 @@ void SceneObjectSystem::SyncModels(
 						: Object3dCommon::CullMode::kBack
 				)
 		);
-		if (isWaterVolume) {
+		if (runtime.isWaterVolume) {
 			runtime.object->SetColor({ 0.08f, 0.48f, 0.95f, 0.34f });
 			runtime.object->SetEnableLighting(false);
 			runtime.object->SetEnvironmentCoefficient(0.0f);
@@ -263,7 +479,7 @@ void SceneObjectSystem::SyncModels(
 			runtime.object->SetMaterialOverrides(objectOverrides);
 			runtime.materialOverrideSignature = materialOverrideSignature;
 		}
-		if (HasComponent(entity, "PlayerBehavior")) {
+		if (runtime.hasPlayerBehavior) {
 			runtime.object->SetDissolve(0.0f);
 		}
 
@@ -271,31 +487,50 @@ void SceneObjectSystem::SyncModels(
 			FindEnabledComponent(entity, "OBBCollider");
 		runtime.hasCollider = obbCollider != nullptr;
 		if (obbCollider) {
+			const SceneFishingObstacleColliderProfile* obstacleProfile =
+				FindEnabledComponent(entity, "FishingObstacle")
+				? FindFishingObstacleColliderProfile(
+					document->GetFishingObstacleSettings(), modelPath
+				)
+				: nullptr;
+			const Vector3 colliderOffset = obstacleProfile
+				? obstacleProfile->colliderOffset
+				: obbCollider->colliderOffset;
+			const Vector3 colliderSizeMultiplier = obstacleProfile
+				? obstacleProfile->colliderSizeMultiplier
+				: obbCollider->colliderSizeMultiplier;
+			const Vector3 colliderRotation = obstacleProfile
+				? obstacleProfile->colliderRotation
+				: Vector3{};
+			const float colliderSphereRadius = obstacleProfile
+				? obstacleProfile->colliderSphereRadius
+				: obbCollider->colliderSphereRadius;
 			Collider* runtimeCollider = obbCollider->colliderShape == "Sphere"
 				? static_cast<Collider*>(&runtime.sphereCollider)
 				: static_cast<Collider*>(&runtime.boxCollider);
 			runtimeCollider->SetWorldMatrix(&runtime.object->GetWorldMatrix());
-			runtimeCollider->SetOffset(obbCollider->colliderOffset);
+			runtimeCollider->SetOffset(colliderOffset);
 			runtimeCollider->SetTrigger(obbCollider->colliderIsTrigger);
 			runtimeCollider->SetActive(obbCollider->colliderActive);
 			runtimeCollider->SetCollisionAttribute(obbCollider->colliderLayer);
 			runtimeCollider->SetCollisionMask(obbCollider->colliderMask);
 			if (obbCollider->colliderShape == "Sphere") {
 				runtime.sphereCollider.SetRadius(
-					(std::max)(obbCollider->colliderSphereRadius, 0.001f)
+					(std::max)(colliderSphereRadius, 0.001f)
 				);
 			} else {
+				runtime.boxCollider.SetLocalRotation(colliderRotation);
 				runtime.boxCollider.SetHalfSize({
 					(std::max)(
-						std::abs(obbCollider->colliderSizeMultiplier.x),
+						std::abs(colliderSizeMultiplier.x),
 						0.001f
 					),
 					(std::max)(
-						std::abs(obbCollider->colliderSizeMultiplier.y),
+						std::abs(colliderSizeMultiplier.y),
 						0.001f
 					),
 					(std::max)(
-						std::abs(obbCollider->colliderSizeMultiplier.z),
+						std::abs(colliderSizeMultiplier.z),
 						0.001f
 					)
 				});
@@ -383,44 +618,87 @@ void SceneObjectSystem::SyncSprites(const SceneDocument* document) {
 	for (const SceneEntity& entity : document->GetEntities()) {
 		const SceneComponent* spriteRenderer =
 			FindEnabledComponent(entity, "SpriteRenderer");
-		if (!spriteRenderer || spriteRenderer->texturePath.empty()) {
+		const auto overrideIterator = spriteOverrides_.find(entity.id);
+		const SceneSpriteRuntimeOverride* runtimeOverride =
+			overrideIterator != spriteOverrides_.end()
+			? &overrideIterator->second
+			: nullptr;
+		const auto presentationIterator =
+			spritePresentationOverrides_.find(entity.id);
+		const SceneSpritePresentationOverride* presentationOverride =
+			presentationIterator != spritePresentationOverrides_.end()
+			? &presentationIterator->second
+			: nullptr;
+		if (!spriteRenderer) {
+			continue;
+		}
+		const std::string& texturePath = runtimeOverride
+			? runtimeOverride->texturePath
+			: spriteRenderer->texturePath;
+		const bool visible = runtimeOverride
+			? runtimeOverride->visible
+			: true;
+		if (!visible || texturePath.empty()) {
 			continue;
 		}
 
-		requiredIds.insert(entity.id);
 		auto found = sprites_.find(entity.id);
 		if (
 			found != sprites_.end() &&
-			found->second.texturePath != spriteRenderer->texturePath
+			found->second.texturePath != texturePath
 		) {
 			sprites_.erase(found);
 			found = sprites_.end();
 		}
 
 		if (found == sprites_.end()) {
-			TextureManager::GetInstance()->LoadTexture(
-				spriteRenderer->texturePath
-			);
+			if (!TextureManager::GetInstance()->LoadTexture(texturePath)) {
+				continue;
+			}
 			SpriteRuntime runtime{};
 			runtime.sprite = std::make_unique<Sprite>();
 			runtime.sprite->Initialize(
 				SpriteCommon::GetInstance(),
-				spriteRenderer->texturePath
+				texturePath
 			);
-			runtime.texturePath = spriteRenderer->texturePath;
+			runtime.texturePath = texturePath;
 			found = sprites_.emplace(entity.id, std::move(runtime)).first;
 		}
 
+		requiredIds.insert(entity.id);
 		Sprite* sprite = found->second.sprite.get();
 		const Transform transform = ResolveScene2DTransform(*document, entity);
-		sprite->SetPosition({ transform.translate.x, transform.translate.y });
-		sprite->SetRotation(transform.rotate.z);
+		const Vector2 size = runtimeOverride
+			? runtimeOverride->size
+			: spriteRenderer->spriteSize;
+		const Vector4 color = runtimeOverride
+			? runtimeOverride->color
+			: spriteRenderer->spriteColor;
+		const Vector2 positionOffset = presentationOverride
+			? presentationOverride->positionOffset
+			: Vector2{};
+		const float rotationOffset = presentationOverride
+			? presentationOverride->rotationOffset
+			: 0.0f;
+		const Vector2 scaleMultiplier = presentationOverride
+			? presentationOverride->scaleMultiplier
+			: Vector2{ 1.0f, 1.0f };
+		const float opacityMultiplier = presentationOverride
+			? presentationOverride->opacityMultiplier
+			: 1.0f;
+		sprite->SetPosition({
+			transform.translate.x + positionOffset.x,
+			transform.translate.y + positionOffset.y
+		});
+		sprite->SetRotation(transform.rotate.z + rotationOffset);
 		sprite->SetSize({
-			spriteRenderer->spriteSize.x * transform.scale.x,
-			spriteRenderer->spriteSize.y * transform.scale.y
+			size.x * transform.scale.x * scaleMultiplier.x,
+			size.y * transform.scale.y * scaleMultiplier.y
 		});
 		sprite->SetAnchorPoint(spriteRenderer->spriteAnchor);
-		sprite->SetColor(spriteRenderer->spriteColor);
+		Vector4 composedColor = color;
+		composedColor.w *= opacityMultiplier;
+		sprite->SetColor(composedColor);
 		sprite->SetIsFlipX(spriteRenderer->spriteFlipX);
 		sprite->SetIsFlipY(spriteRenderer->spriteFlipY);
 		if (IsEntityActiveInHierarchy(*document, entity)) {
@@ -437,6 +715,32 @@ void SceneObjectSystem::SyncSprites(const SceneDocument* document) {
 	}
 }
 
+void SceneObjectSystem::ClearSpriteOverrides() {
+	spriteOverrides_.clear();
+}
+
+void SceneObjectSystem::ClearSpritePresentationOverrides() {
+	spritePresentationOverrides_.clear();
+}
+
+void SceneObjectSystem::SetSpriteRuntimeOverride(
+	const SceneSpriteRuntimeOverride& overrideValue
+) {
+	if (overrideValue.entityId == 0) {
+		return;
+	}
+	spriteOverrides_[overrideValue.entityId] = overrideValue;
+}
+
+void SceneObjectSystem::SetSpritePresentationOverride(
+	const SceneSpritePresentationOverride& overrideValue
+) {
+	if (overrideValue.entityId == 0) {
+		return;
+	}
+	spritePresentationOverrides_[overrideValue.entityId] = overrideValue;
+}
+
 void SceneObjectSystem::BuildBindings(
 	SceneDocument& document,
 	std::vector<SceneRuntimeObjectBinding>& bindings
@@ -450,14 +754,74 @@ void SceneObjectSystem::BuildBindings(
 			continue;
 		}
 		bindings.push_back(SceneRuntimeObjectBinding{
+			entity.id,
 			&entity,
 			runtime->object.get(),
 			runtime->hasCollider ? runtime->collider : nullptr,
-		runtime->hasPhysicsBody
+			runtime->hasPhysicsBody
 				? &runtime->physicsBody
 				: nullptr
 		});
 	}
+}
+
+bool SceneObjectSystem::ValidateBindings(
+	const SceneDocument& document,
+	const std::vector<SceneRuntimeObjectBinding>& bindings,
+	std::string& diagnostic
+) const {
+	diagnostic.clear();
+	const std::vector<SceneEntity>& entities = document.GetEntities();
+	if (bindings.size() != entities.size()) {
+		diagnostic = "binding count=" + std::to_string(bindings.size()) +
+			" entity count=" + std::to_string(entities.size());
+		return false;
+	}
+
+	std::unordered_set<uint64_t> entityIds;
+	entityIds.reserve(bindings.size());
+	for (const SceneRuntimeObjectBinding& binding : bindings) {
+		if (binding.entityId == 0) {
+			diagnostic = "binding entityId is zero";
+			return false;
+		}
+		if (!entityIds.insert(binding.entityId).second) {
+			diagnostic = "duplicate binding entityId=" +
+				std::to_string(binding.entityId);
+			return false;
+		}
+
+		const SceneEntity* entity = document.FindEntity(binding.entityId);
+		if (!entity || entity != binding.entity) {
+			diagnostic = "entity pointer mismatch entityId=" +
+				std::to_string(binding.entityId);
+			return false;
+		}
+
+		const ModelRuntime* runtime = FindModelRuntime(binding.entityId);
+		if (!runtime || binding.object != runtime->object.get()) {
+			diagnostic = "object pointer mismatch entityId=" +
+				std::to_string(binding.entityId);
+			return false;
+		}
+		const Collider* expectedCollider = runtime->hasCollider
+			? runtime->collider
+			: nullptr;
+		if (binding.collider != expectedCollider) {
+			diagnostic = "collider pointer mismatch entityId=" +
+				std::to_string(binding.entityId);
+			return false;
+		}
+		const PhysicsBody* expectedBody = runtime->hasPhysicsBody
+			? &runtime->physicsBody
+			: nullptr;
+		if (binding.body != expectedBody) {
+			diagnostic = "body pointer mismatch entityId=" +
+				std::to_string(binding.entityId);
+			return false;
+		}
+	}
+	return true;
 }
 
 void SceneObjectSystem::ApplyRenderCamera(Camera* camera) {
@@ -482,15 +846,21 @@ void SceneObjectSystem::DrawModels(
 	for (const SceneEntity& entity : document.GetEntities()) {
 		if (
 			entity.id == skipEntityId ||
-			!IsEntityActiveInHierarchy(document, entity) ||
-			HasComponent(entity, "WaterVolume") ||
-			(hidePlayerModel && HasComponent(entity, "PlayerBehavior"))
+			!IsEntityActiveInHierarchy(document, entity)
 		) {
 			continue;
 		}
-		if (Object3d* object = FindObject(entity.id)) {
-			object->Draw();
+		const ModelRuntime* runtime = FindModelRuntime(entity.id); // 同期済みModel情報。
+		if (!runtime || !runtime->object || !runtime->hasRenderer) {
+			continue;
 		}
+		if (
+			runtime->isWaterVolume ||
+			(hidePlayerModel && runtime->hasPlayerBehavior)
+		) {
+			continue;
+		}
+		runtime->object->Draw();
 	}
 }
 
@@ -509,10 +879,138 @@ void SceneObjectSystem::DrawSprites(
 			entity.id != skipEntityId &&
 			found != sprites_.end() &&
 			IsEntityActiveInHierarchy(document, entity) &&
-			found->second.sprite
+			found->second.sprite &&
+			[&entity]() {
+				const SceneComponent* spriteRenderer =
+					FindEnabledComponent(entity, "SpriteRenderer");
+				return spriteRenderer &&
+					spriteRenderer->spriteRenderSpace != "ScreenOverlay";
+			}()
 		) {
 			found->second.sprite->Draw();
 		}
+	}
+}
+
+bool SceneObjectSystem::HasScreenOverlaySprites(
+	const SceneDocument& document
+) const {
+	for (const SceneEntity& entity : document.GetEntities()) {
+		const auto found = sprites_.find(entity.id); // 同期済みSprite。
+		if (found == sprites_.end() || !found->second.sprite) {
+			continue;
+		}
+		const SceneComponent* spriteRenderer =
+			FindEnabledComponent(entity, "SpriteRenderer");
+		if (
+			spriteRenderer &&
+			spriteRenderer->spriteRenderSpace == "ScreenOverlay" &&
+			IsEntityActiveInHierarchy(document, entity)
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void SceneObjectSystem::DrawScreenOverlaySprites(
+	const SceneDocument& document,
+	uint32_t viewportWidth,
+	uint32_t viewportHeight
+) const {
+	if (!HasScreenOverlaySprites(document)) {
+		return;
+	}
+
+	SpriteCommon::GetInstance()->SetCommonRenderState();
+	for (const SceneEntity& entity : document.GetEntities()) {
+		const SceneComponent* spriteRenderer =
+			FindEnabledComponent(entity, "SpriteRenderer");
+		const auto found = sprites_.find(entity.id);
+		if (
+			!spriteRenderer ||
+			spriteRenderer->spriteRenderSpace != "ScreenOverlay" ||
+			found == sprites_.end() ||
+			!found->second.sprite ||
+			!IsEntityActiveInHierarchy(document, entity)
+		) {
+			continue;
+		}
+
+		const auto overrideIterator = spriteOverrides_.find(entity.id);
+		const SceneSpriteRuntimeOverride* runtimeOverride =
+			overrideIterator != spriteOverrides_.end()
+			? &overrideIterator->second
+			: nullptr;
+		const auto presentationIterator =
+			spritePresentationOverrides_.find(entity.id);
+		const SceneSpritePresentationOverride* presentationOverride =
+			presentationIterator != spritePresentationOverrides_.end()
+			? &presentationIterator->second
+			: nullptr;
+		if (runtimeOverride && !runtimeOverride->visible) {
+			continue;
+		}
+		const Transform transform = ResolveScene2DTransform(document, entity);
+		const Vector2 size = runtimeOverride
+			? runtimeOverride->size
+			: spriteRenderer->spriteSize;
+		const Vector4 color = runtimeOverride
+			? runtimeOverride->color
+			: spriteRenderer->spriteColor;
+		const Vector2 positionOffset = presentationOverride
+			? presentationOverride->positionOffset
+			: Vector2{};
+		const float rotationOffset = presentationOverride
+			? presentationOverride->rotationOffset
+			: 0.0f;
+		const Vector2 scaleMultiplier = presentationOverride
+			? presentationOverride->scaleMultiplier
+			: Vector2{ 1.0f, 1.0f };
+		const float opacityMultiplier = presentationOverride
+			? presentationOverride->opacityMultiplier
+			: 1.0f;
+		const SceneScreenOverlayCanvasLayout layout =
+			ResolveSceneScreenOverlayCanvasLayout(
+				document,
+				*spriteRenderer,
+				viewportWidth,
+				viewportHeight
+			);
+		const Vector2 scaledMotionOffset = layout.ScalePixelOffset(positionOffset);
+		Sprite* sprite = found->second.sprite.get();
+		if (runtimeOverride && runtimeOverride->hasViewportPositionOverride) {
+			const Vector2 runtimePositionOffset = layout.ScalePixelOffset(
+				runtimeOverride->positionOffsetPixels
+			);
+			sprite->SetPosition({
+				runtimeOverride->viewportPosition.x * viewportWidth +
+				runtimePositionOffset.x + scaledMotionOffset.x,
+				runtimeOverride->viewportPosition.y * viewportHeight +
+				runtimePositionOffset.y + scaledMotionOffset.y
+			});
+		} else {
+			sprite->SetPosition(layout.ResolvePosition(
+				spriteRenderer->spriteViewportAnchor,
+				{
+					transform.translate.x + positionOffset.x,
+					transform.translate.y + positionOffset.y
+				}
+			));
+		}
+		sprite->SetRotation(transform.rotate.z + rotationOffset);
+		sprite->SetSize(layout.ScaleSize({
+			size.x * transform.scale.x * scaleMultiplier.x,
+			size.y * transform.scale.y * scaleMultiplier.y
+		}));
+		sprite->SetAnchorPoint(spriteRenderer->spriteAnchor);
+		Vector4 composedColor = color;
+		composedColor.w *= opacityMultiplier;
+		sprite->SetColor(composedColor);
+		sprite->SetIsFlipX(spriteRenderer->spriteFlipX);
+		sprite->SetIsFlipY(spriteRenderer->spriteFlipY);
+		sprite->Update(viewportWidth, viewportHeight);
+		sprite->Draw();
 	}
 }
 
@@ -524,16 +1022,23 @@ void SceneObjectSystem::CollectShadowCasters(
 	shadowCasters.clear();
 	shadowCasters.reserve(models_.size());
 	for (const SceneEntity& entity : document.GetEntities()) {
+		if (!IsEntityActiveInHierarchy(document, entity)) {
+			continue;
+		}
+		const ModelRuntime* runtime = FindModelRuntime(entity.id); // 同期済みModel情報。
+		if (!runtime || !runtime->object || !runtime->hasRenderer) {
+			continue;
+		}
+		const SceneComponent* meshRenderer =
+			FindEnabledComponent(entity, "MeshRenderer"); // Mesh描画設定。
 		if (
-			!IsEntityActiveInHierarchy(document, entity) ||
-			HasComponent(entity, "WaterVolume") ||
-			(hidePlayerModel && HasComponent(entity, "PlayerBehavior"))
+			runtime->isWaterVolume ||
+			(meshRenderer && !meshRenderer->meshCastsShadow) ||
+			(hidePlayerModel && runtime->hasPlayerBehavior)
 		) {
 			continue;
 		}
-		if (Object3d* object = FindObject(entity.id)) {
-			shadowCasters.push_back(object);
-		}
+		shadowCasters.push_back(runtime->object.get());
 	}
 }
 
@@ -569,10 +1074,15 @@ const SceneObjectSystem::ModelRuntime* SceneObjectSystem::FindModelRuntime(
 
 void SceneObjectSystem::ClearModels() {
 	models_.clear();
+	fishingObstacleModelPaths_.clear();
+	fishingObstacleModelDocument_ = nullptr;
+	fishingObstacleLayoutRandomizedForCurrentPlay_ = false;
 }
 
 void SceneObjectSystem::ClearSprites() {
 	sprites_.clear();
+	spriteOverrides_.clear();
+	spritePresentationOverrides_.clear();
 }
 
 void SceneObjectSystem::Finalize() {

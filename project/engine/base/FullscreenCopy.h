@@ -24,10 +24,11 @@ public:
 		kDepthOfField,
 		kUnderwater,
 		kWaterRefraction,
-		kWaterLightShafts
-		,kPixelation
-		,kChromaticAberration
-		,kMotionBlur
+		kWaterLightShafts,
+		kPixelation,
+		kChromaticAberration,
+		kMotionBlur,
+		kIrisTransition
 	};
 
 	enum class OutputFormat {
@@ -134,6 +135,7 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> pixelationPipelineState_;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> chromaticAberrationPipelineState_;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> motionBlurPipelineState_;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> irisTransitionPipelineState_;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState>
 		waterRefractionSceneHdrPipelineState_;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState>

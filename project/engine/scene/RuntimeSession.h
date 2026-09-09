@@ -14,6 +14,11 @@ public:
 		const std::string& sceneId,
 		const std::string& sceneFilePath
 	) override;
+	bool AdoptPreloadedRuntimeScene(
+		const std::string& sceneId,
+		const std::string& sceneFilePath,
+		SceneDocument&& document
+	) override;
 
 	SceneDocument& GetActiveDocument() override { return document_; }
 	const SceneDocument& GetActiveDocument() const override { return document_; }
@@ -25,10 +30,17 @@ public:
 	bool IsEditing() const override { return false; }
 	bool IsPlaying() const override { return true; }
 	bool IsPaused() const override { return false; }
+	SceneRuntimeSessionState& GetRuntimeSessionState() override {
+		return runtimeSessionState_;
+	}
+	const SceneRuntimeSessionState& GetRuntimeSessionState() const override {
+		return runtimeSessionState_;
+	}
 
 private:
 	SceneDocument document_;
 	std::string sceneId_;
 	std::string sceneFilePath_;
 	std::string lastLoadError_;
+	SceneRuntimeSessionState runtimeSessionState_;
 };

@@ -80,7 +80,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+			<AdditionalOptions>/utf-8 /FS /bigobj %(AdditionalOptions)</AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalIncludeDirectories>$(ProjectDir)externals\DirectXTex\;$(ProjectDir)externals\assimp\include;$(ProjectDir)Vector;$(ProjectDir)externals\imgui\;$(ProjectDir)externals\ImGuizmo\</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -102,7 +102,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+			<AdditionalOptions>/utf-8 /FS /bigobj %(AdditionalOptions)</AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <AdditionalIncludeDirectories>$(ProjectDir)externals\DirectXTex\;$(ProjectDir)externals\assimp\include;$(ProjectDir)externals\imgui\;$(ProjectDir)externals\ImGuizmo\;$(ProjectDir);$(ProjectDir)Vector;$(ProjectDir)Matrix</AdditionalIncludeDirectories>
@@ -126,7 +126,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+			<AdditionalOptions>/utf-8 /FS /bigobj %(AdditionalOptions)</AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <AdditionalIncludeDirectories>$(ProjectDir)externals\DirectXTex\;$(ProjectDir)externals\assimp\include;$(ProjectDir)externals\imgui\;$(ProjectDir)externals\ImGuizmo\;$(ProjectDir);$(ProjectDir)Vector;$(ProjectDir)Matrix</AdditionalIncludeDirectories>
@@ -179,6 +179,7 @@
     <ClCompile Include="engine\math\Quaternion.cpp" />
     <ClCompile Include="engine\math\Matrix4x4.cpp" />
     <ClCompile Include="engine\utility\Logger.cpp" />
+	<ClCompile Include="engine\text\ResourceFontInstaller.cpp" />
     <ClCompile Include="engine\utility\SystemPerformanceMonitor.cpp" />
     <ClCompile Include="engine\base\EditorLocalization.cpp" />
     <ClCompile Include="engine\base\EditorComponentCatalog.cpp" />
@@ -199,6 +200,7 @@
     <ClCompile Include="application\Game.cpp" />
     <ClCompile Include="application\PrefabPreviewRenderer.cpp" />
     <ClCompile Include="application\scene\RuntimeScene.cpp" />
+    <ClCompile Include="application\scene\SceneRuntimeInput.cpp" />
     <ClCompile Include="application\scene\system\SceneAgentSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneAttachmentSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneCameraSystem.cpp" />
@@ -208,7 +210,13 @@
 	<ClCompile Include="application\scene\system\SceneRuntimeEffectSystem.cpp" />
 	<ClCompile Include="application\scene\system\SceneTextRenderSystem.cpp" />
 	<ClCompile Include="application\scene\system\SceneTextMotionSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneSpriteMotionSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneTitleBoatMotionSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneTitleMenuSystem.cpp" />
 	<ClCompile Include="application\scene\system\SceneGameFlowSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneFishingScoreAttackSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneFishingResultPresentationSystem.cpp" />
+	<ClCompile Include="application\scene\system\FishingFormationMotion.cpp" />
 	<ClCompile Include="application\scene\system\SceneAudioSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneDebugSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneEnemySystem.cpp" />
@@ -220,9 +228,14 @@
     <ClCompile Include="application\scene\system\SceneEffectRenderSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneEnvironmentSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneLightingSystem.cpp" />
+    <ClCompile Include="application\scene\system\SceneMiniMapSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneMonitorSystem.cpp" />
-    <ClCompile Include="application\scene\system\SceneObjectSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneObjectSystem.cpp" />
+	<ClCompile Include="application\scene\system\SceneScreenOverlayCanvasLayout.cpp" />
+	<ClCompile Include="application\scene\system\SceneOptionMenuSystem.cpp" />
+	<ClCompile Include="application\scene\system\ScenePauseMenuSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneParticleSystem.cpp" />
+	<ClCompile Include="application\scene\system\ScenePauseSystem.cpp" />
     <ClCompile Include="application\scene\system\ScenePhysicsSystem.cpp" />
     <ClCompile Include="application\scene\system\ScenePrefabAnimationSystem.cpp" />
     <ClCompile Include="application\scene\system\SceneProjectileSystem.cpp" />
@@ -248,6 +261,8 @@
     <ClCompile Include="engine\2d\SpriteCommon.cpp" />
 	<ClCompile Include="engine\2d\TextSprite.cpp" />
 	<ClCompile Include="engine\text\TextRasterizer.cpp" />
+	<ClCompile Include="engine\text\TextResourceFontRasterizer.cpp" />
+	<ClCompile Include="engine\text\TextFontRegistry.cpp" />
     <ClCompile Include="engine\3d\SrvManager.cpp" />
     <ClCompile Include="engine\utility\StringUtility.cpp" />
     <ClCompile Include="engine\2d\TextureManager.cpp" />
@@ -261,6 +276,7 @@
     <ClCompile Include="engine\scene\SceneManager.cpp" />
 	<ClCompile Include="engine\scene\SceneInstance.cpp" />
     <ClCompile Include="engine\scene\RuntimeSession.cpp" />
+	<ClCompile Include="engine\scene\SceneRuntimeSessionState.cpp" />
     <ClCompile Include="engine\scene\SceneDocumentMigrator.cpp" />
     <ClCompile Include="engine\scene\SceneValidator.cpp" />
     <ClCompile Include="engine\scene\SceneAssetService.cpp" />
@@ -277,6 +293,9 @@
 	<ClCompile Include="engine\3d\Skybox.cpp" />
 	<ClCompile Include="engine\3d\StarFieldGenerator.cpp" />
   </ItemGroup>
+	<ItemGroup>
+		<ResourceCompile Include="resources\WindowIcon.rc" />
+	</ItemGroup>
   <ItemGroup>
 	<FxCompile Include="resources\shaders\ChromaticAberration.PS.hlsl">
 	  <ShaderType>Pixel</ShaderType>
@@ -372,6 +391,7 @@
   </ItemGroup>
   <ItemGroup>
 	<ClInclude Include="externals\ImGuizmo\ImGuizmo.h" />
+	<ClInclude Include="resources\WindowIcon.h" />
     <ClInclude Include="engine\collision\Collider.h" />
     <ClInclude Include="engine\collision\OBBCollider.h" />
     <ClInclude Include="engine\collision\SphereCollider.h" />
@@ -413,6 +433,7 @@
     <ClInclude Include="engine\math\Vector3.h" />
     <ClInclude Include="engine\math\Vector4.h" />
     <ClInclude Include="engine\utility\Logger.h" />
+	<ClInclude Include="engine\text\ResourceFontInstaller.h" />
     <ClInclude Include="engine\utility\EditableResourcePath.h" />
     <ClInclude Include="engine\utility\ResourceTextureCatalog.h" />
     <ClInclude Include="engine\utility\SystemPerformanceMonitor.h" />
@@ -432,6 +453,8 @@
     <ClInclude Include="engine\2d\SpriteCommon.h" />
 	<ClInclude Include="engine\2d\TextSprite.h" />
 	<ClInclude Include="engine\text\TextRasterizer.h" />
+	<ClInclude Include="engine\text\TextResourceFontRasterizer.h" />
+	<ClInclude Include="engine\text\TextFontRegistry.h" />
     <ClInclude Include="engine\3d\SrvManager.h" />
     <ClInclude Include="engine\utility\StringUtility.h" />
     <ClInclude Include="engine\2d\TextureManager.h" />
@@ -460,6 +483,7 @@
     <ClInclude Include="application\Game.h" />
     <ClInclude Include="application\PrefabPreviewRenderer.h" />
     <ClInclude Include="application\scene\RuntimeScene.h" />
+    <ClInclude Include="application\scene\SceneRuntimeInput.h" />
     <ClInclude Include="application\scene\SceneRuntimeObjectBinding.h" />
     <ClInclude Include="application\scene\system\SceneAgentSystem.h" />
     <ClInclude Include="application\scene\system\SceneAttachmentSystem.h" />
@@ -470,20 +494,31 @@
 	<ClInclude Include="application\scene\system\SceneRuntimeEffectSystem.h" />
 	<ClInclude Include="application\scene\system\SceneTextRenderSystem.h" />
 	<ClInclude Include="application\scene\system\SceneTextMotionSystem.h" />
+	<ClInclude Include="application\scene\system\SceneSpriteMotionSystem.h" />
+	<ClInclude Include="application\scene\system\SceneTitleBoatMotionSystem.h" />
+	<ClInclude Include="application\scene\system\SceneTitleMenuSystem.h" />
 	<ClInclude Include="application\scene\system\SceneGameFlowSystem.h" />
+	<ClInclude Include="application\scene\system\SceneFishingScoreAttackSystem.h" />
+	<ClInclude Include="application\scene\system\SceneFishingResultPresentationSystem.h" />
+	<ClInclude Include="application\scene\system\FishingFormationMotion.h" />
+	<ClInclude Include="application\scene\system\SceneSoundEffectPlayer.h" />
 	<ClInclude Include="application\scene\system\SceneAudioSystem.h" />
     <ClInclude Include="application\scene\system\SceneDebugSystem.h" />
     <ClInclude Include="application\scene\system\SceneEnemySystem.h" />
 	<ClInclude Include="application\scene\system\SceneEnemySpawnerSystem.h" />
     <ClInclude Include="application\scene\system\SceneEventSystem.h" />
-	<ClInclude Include="application\scene\system\ScenePostProcessProfileSystem.h" />
+	<ClInclude Include="application\scene\system\ScenePauseSystem.h" />
+    <ClInclude Include="application\scene\system\ScenePostProcessProfileSystem.h" />
 	<ClInclude Include="application\scene\system\SceneAttackRunnerSystem.h" />
     <ClInclude Include="application\scene\system\SceneStateMachineSystem.h" />
     <ClInclude Include="application\scene\system\SceneEffectRenderSystem.h" />
     <ClInclude Include="application\scene\system\SceneEnvironmentSystem.h" />
     <ClInclude Include="application\scene\system\SceneLightingSystem.h" />
+    <ClInclude Include="application\scene\system\SceneMiniMapSystem.h" />
     <ClInclude Include="application\scene\system\SceneMonitorSystem.h" />
     <ClInclude Include="application\scene\system\SceneObjectSystem.h" />
+	<ClInclude Include="application\scene\system\SceneOptionMenuSystem.h" />
+	<ClInclude Include="application\scene\system\ScenePauseMenuSystem.h" />
     <ClInclude Include="application\scene\system\SceneParticleSystem.h" />
     <ClInclude Include="application\scene\system\ScenePhysicsSystem.h" />
     <ClInclude Include="application\scene\system\ScenePrefabAnimationSystem.h" />
@@ -497,6 +532,7 @@
 	<ClInclude Include="engine\scene\SceneEntityReference.h" />
     <ClInclude Include="engine\scene\SceneExecutionContext.h" />
     <ClInclude Include="engine\scene\RuntimeSession.h" />
+	<ClInclude Include="engine\scene\SceneRuntimeSessionState.h" />
     <ClInclude Include="engine\scene\SceneDocumentMigrator.h" />
     <ClInclude Include="engine\scene\SceneValidator.h" />
     <ClInclude Include="engine\scene\SceneAssetService.h" />
@@ -543,6 +579,7 @@
     <None Include="resources\shaders\UpdateGpuParticle.CS.hlsl" />
     <None Include="resources\shaders\RadialBlur.PS.hlsl" />
     <None Include="resources\shaders\Grayscale.PS.hlsl" />
+    <None Include="resources\shaders\IrisTransition.PS.hlsl" />
     <None Include="resources\shaders\Noise.PS.hlsl" />
     <None Include="resources\shaders\Outline.PS.hlsl" />
     <None Include="resources\shaders\Skinning.CS.hlsl" />

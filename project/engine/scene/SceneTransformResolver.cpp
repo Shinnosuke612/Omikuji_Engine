@@ -110,4 +110,49 @@ namespace SceneTransformResolver {
 		}
 		return result;
 	}
+
+	bool TryConvertSceneWorldTransformToLocal(
+		const SceneDocument& document,
+		const SceneEntity& entity,
+		const Transform& worldTransform,
+		Transform& localTransform
+	) {
+		const Quaternion worldRotation = worldTransform.useQuaternionRotation
+			? worldTransform.quaternionRotate
+			: MakeQuaternionFromEuler(worldTransform.rotate);
+		const Matrix4x4 worldMatrix = MakeAffineMatrix(
+			worldTransform.scale,
+			worldRotation,
+			worldTransform.translate
+		);
+		Matrix4x4 localMatrix = worldMatrix;
+		if (entity.parentId != 0) {
+			const SceneEntity* parent = document.FindEntity(entity.parentId);
+			if (!parent) {
+				return false;
+			}
+			const Matrix4x4 parentWorld = ResolveSceneWorldMatrix(document, *parent);
+			if (std::abs(Determinant(parentWorld)) < 0.000001f) {
+				return false;
+			}
+			localMatrix = Multiply(worldMatrix, Inverse(parentWorld));
+		}
+		Vector3 localScale{};
+		Quaternion localRotation = MakeIdentityQuaternion();
+		Vector3 localTranslate{};
+		if (!DecomposeAffineMatrix(
+			localMatrix,
+			localScale,
+			localRotation,
+			localTranslate
+		)) {
+			return false;
+		}
+		localTransform.scale = localScale;
+		localTransform.rotate = MakeEulerFromQuaternion(localRotation);
+		localTransform.translate = localTranslate;
+		localTransform.useQuaternionRotation = true;
+		localTransform.quaternionRotate = localRotation;
+		return true;
+	}
 }

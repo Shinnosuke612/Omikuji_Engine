@@ -3,30 +3,11 @@
 
 #include "../../engine/3d/Object3d.h"
 #include "../../engine/3d/Object3dCommon.h"
-#include "../../engine/3d/Camera.h"
 #include "../../engine/io/Input.h"
 #include "../../engine/math/Math.h"
-#include "../../engine/math/Matrix4x4.h"
-#include "../../engine/math/Quaternion.h"
 
 #include <algorithm>
 #include <cmath>
-
-namespace {
-	constexpr float kMaxWaterPitch = 1.15f;
-
-	Vector3 FlattenAndNormalize(Vector3 value) {
-		value.y = 0.0f;
-		if (Math::Length(value) < 0.000001f) {
-			return { 0.0f, 0.0f, 0.0f };
-		}
-		return Math::Normalize(value);
-	}
-
-	float RotationFollowAmount(float responsiveness) {
-		return Math::EaseOutCubic(std::clamp(responsiveness, 0.0f, 1.0f));
-	}
-}
 
 void Player::Initialize(Object3dCommon* object3dCommon, const char* modelName) {
 	object_ = new Object3d();
@@ -53,6 +34,7 @@ void Player::Initialize(Object3d* object) {
 		return;
 	}
 	position_ = object_->GetTransform().translate;
+	targetYaw_ = GetYaw();
 	physicsBody_.type = PhysicsBodyType::Dynamic;
 	physicsBody_.transform = &object_->GetTransform();
 	physicsBody_.collider = collider_;
@@ -68,77 +50,113 @@ void Player::SetCollider(Collider* collider) {
 }
 
 void Player::Update(
-	const Camera* camera,
-	bool acceptGameplayInput
+	const Camera*,
+	bool acceptGameplayInput,
+	float deltaTime
 ) {
 	if (!object_) {
 		return;
 	}
-	if (!rotationInitialized_) {
-		SyncRotationStateFromObject();
-	}
-	Vector3 inputMove{};
+	const float dt = std::clamp(deltaTime, 0.0f, 0.1f);
 	Input* input = acceptGameplayInput ? Input::GetInstance() : nullptr;
+	const bool allowKeyboardMouse = inputMode_ != "Gamepad";
+	const bool allowGamepad = inputMode_ == "Gamepad" || inputMode_ == "Both";
+	Vector3 keyboardMove{};
+	if (input && allowKeyboardMouse && input->PushKey(DIK_W)) {
+		keyboardMove.x += 1.0f;
+	}
+	if (input && allowKeyboardMouse && input->PushKey(DIK_S)) {
+		keyboardMove.x -= 1.0f;
+	}
+	if (input && allowKeyboardMouse && input->PushKey(DIK_A)) {
+		keyboardMove.z += 1.0f;
+	}
+	if (input && allowKeyboardMouse && input->PushKey(DIK_D)) {
+		keyboardMove.z -= 1.0f;
+	}
 
-	if (input && input->PushKey(DIK_W)) {
-		inputMove.z += 1.0f;
+	Vector3 gamepadMove{};
+	if (input && allowGamepad) {
+		const Vector2 stick = input->GetGamepadLeftStick(gamepadDeadzone_);
+		// Existing Player axes are W/S = +X/-X and A/D = +Z/-Z.
+		gamepadMove.x = stick.y;
+		gamepadMove.z = -stick.x;
 	}
-	if (input && input->PushKey(DIK_S)) {
-		inputMove.z -= 1.0f;
-	}
-	if (input && input->PushKey(DIK_A)) {
-		inputMove.x -= 1.0f;
-	}
-	if (input && input->PushKey(DIK_D)) {
-		inputMove.x += 1.0f;
+
+	Vector3 inputMove{};
+	const float keyboardLength = Math::Length(keyboardMove);
+	const float gamepadLength = Math::Length(gamepadMove);
+	if (keyboardLength > 0.000001f && gamepadLength > 0.000001f) {
+		inputMove = input->GetLastActiveInputDevice() ==
+			Input::InputDeviceKind::Gamepad
+			? gamepadMove
+			: keyboardMove;
+	} else if (keyboardLength > 0.000001f) {
+		inputMove = keyboardMove;
+	} else if (gamepadLength > 0.000001f) {
+		inputMove = gamepadMove;
 	}
 
 	Vector3 desiredVelocity = physicsBody_.velocity;
 	desiredVelocity.x = 0.0f;
 	desiredVelocity.z = 0.0f;
 
-	Vector3 cameraForward = { 0.0f, 0.0f, 1.0f };
-	Vector3 cameraRight = { 1.0f, 0.0f, 0.0f };
-	if (acceptGameplayInput && cameraRelativeMove_ && camera) {
-		const Matrix4x4& cameraWorld = camera->GetWorldMatrix();
-		cameraRight = {
-			cameraWorld.m[0][0],
-			cameraWorld.m[0][1],
-			cameraWorld.m[0][2]
-		};
-		cameraForward = {
-			cameraWorld.m[2][0],
-			cameraWorld.m[2][1],
-			cameraWorld.m[2][2]
-		};
-	}
-
-	Vector3 movementRight = cameraRight;
-	Vector3 movementForward = cameraForward;
-	if (!inWater_) {
-		movementRight = FlattenAndNormalize(movementRight);
-		movementForward = FlattenAndNormalize(movementForward);
-	} else {
-		movementRight.y = 0.0f;
-		movementRight = Math::Length(movementRight) > 0.000001f
-			? Math::Normalize(movementRight)
-			: Vector3{ 1.0f, 0.0f, 0.0f };
-		movementForward = Math::Length(movementForward) > 0.000001f
-			? Math::Normalize(movementForward)
-			: Vector3{ 0.0f, 0.0f, 1.0f };
-	}
-	if (Math::Length(movementRight) < 0.000001f) {
-		movementRight = { 1.0f, 0.0f, 0.0f };
-	}
-	if (Math::Length(movementForward) < 0.000001f) {
-		movementForward = { 0.0f, 0.0f, 1.0f };
-	}
+	const Vector3 movementRight = { 1.0f, 0.0f, 0.0f };
+	const Vector3 movementForward = { 0.0f, 0.0f, 1.0f };
 
 	const bool dash =
-		input && (input->PushKey(DIK_LSHIFT) || input->PushKey(DIK_RSHIFT));
+		(input && allowKeyboardMouse &&
+			(input->PushKey(DIK_LSHIFT) || input->PushKey(DIK_RSHIFT))) ||
+		(input && allowGamepad &&
+			input->PushGamepad(Input::GamepadButton::LeftShoulder));
 	const float speedMultiplier = dash ? dashMultiplier_ : 1.0f;
 
-	if (Math::Length(inputMove) > 0.000001f) {
+	const float inputLength = Math::Length(inputMove);
+	if (autoForward_ && acceptGameplayInput) {
+		const float currentYaw = GetYaw();
+		if (inputLength > 0.000001f) {
+			const Vector3 inputDirection = Math::Normalize(
+				Math::Add(
+					Math::Multiply(movementRight, inputMove.x),
+					Math::Multiply(movementForward, inputMove.z)
+				)
+			);
+			targetYaw_ = std::atan2(inputDirection.x, inputDirection.z);
+		} else {
+			// 方向入力を離したら旋回目標を現在向きへ戻し、前進だけを継続する。
+			targetYaw_ = currentYaw;
+		}
+		const float responsiveness = std::clamp(
+			turnResponsiveness_,
+			0.0f,
+			1.0f
+		);
+		const float turnAlpha = responsiveness <= 0.0f
+			? 0.0f
+			: responsiveness >= 1.0f
+				? 1.0f
+				: 1.0f - std::pow(1.0f - responsiveness, dt * 60.0f);
+		const float yaw = inputLength > 0.000001f
+			? currentYaw + std::atan2(
+				std::sin(targetYaw_ - currentYaw),
+				std::cos(targetYaw_ - currentYaw)
+			) * turnAlpha
+			: currentYaw;
+		const float activeMoveSpeed =
+			moveSpeed_ * speedMultiplier *
+			(inWater_ ? waterMoveSpeedMultiplier_ : 1.0f);
+		const Vector3 move = {
+			std::sin(yaw) * activeMoveSpeed,
+			0.0f,
+			std::cos(yaw) * activeMoveSpeed
+		};
+		desiredVelocity.x = move.x;
+		desiredVelocity.z = move.z;
+		object_->SetRotate({ 0.0f, yaw, 0.0f });
+		if (inWater_) {
+			desiredVelocity.y = move.y;
+		}
+	} else if (inputLength > 0.000001f) {
 		Vector3 move = Math::Add(
 			Math::Multiply(movementRight, inputMove.x),
 			Math::Multiply(movementForward, inputMove.z)
@@ -150,52 +168,18 @@ void Player::Update(
 		move = Math::Multiply(Math::Normalize(move), activeMoveSpeed);
 		desiredVelocity.x = move.x;
 		desiredVelocity.z = move.z;
+		object_->SetRotate({ 0.0f, std::atan2(move.x, move.z), 0.0f });
 		if (inWater_) {
 			desiredVelocity.y = move.y;
 		}
-	}
-
-	if (acceptGameplayInput && cameraRelativeMove_ && camera) {
-		Vector3 facing = cameraForward;
-		if (!inWater_) {
-			facing = FlattenAndNormalize(facing);
-		} else if (Math::Length(facing) > 0.000001f) {
-			facing = Math::Normalize(facing);
-		}
-		if (Math::Length(facing) > 0.000001f) {
-			const float horizontalLength = std::sqrt(
-				facing.x * facing.x + facing.z * facing.z
-			);
-			const float targetYaw = horizontalLength > 0.000001f
-				? std::atan2(facing.x, facing.z)
-				: currentYaw_;
-			const float targetPitch = inWater_
-				? std::clamp(
-					-std::atan2(
-						facing.y,
-						(std::max)(horizontalLength, 0.000001f)
-					),
-					-kMaxWaterPitch,
-					kMaxWaterPitch
-				)
-				: 0.0f;
-			const float yawT = RotationFollowAmount(turnResponsiveness_);
-			const float pitchT = inWater_
-				? yawT
-				: Math::SmoothStep(yawT);
-			const Quaternion targetRotation =
-				MakeLookRotationQuaternion(facing, { 0.0f, 1.0f, 0.0f });
-			currentYaw_ = Math::LerpAngle(currentYaw_, targetYaw, yawT);
-			currentPitch_ = Math::Lerp(currentPitch_, targetPitch, pitchT);
-			currentRotation_ = Slerp(currentRotation_, targetRotation, yawT);
-			object_->SetRotate({ currentPitch_, currentYaw_, 0.0f });
-			object_->SetRotateQuaternion(currentRotation_);
-		}
+		targetYaw_ = std::atan2(move.x, move.z);
+	} else {
+		targetYaw_ = GetYaw();
 	}
 
 	if (acceptGameplayInput && inWater_) {
-		const bool swimUp = input && input->PushKey(DIK_SPACE);
-		const bool swimDown = input && input->PushKey(DIK_LCONTROL);
+		const bool swimUp = input && allowKeyboardMouse && input->PushKey(DIK_SPACE);
+		const bool swimDown = input && allowKeyboardMouse && input->PushKey(DIK_LCONTROL);
 		if (swimUp) {
 			desiredVelocity.y = waterSwimUpSpeed_ * speedMultiplier;
 			physicsBody_.isGrounded = false;
@@ -209,7 +193,8 @@ void Player::Update(
 				waterSwimUpSpeed_ * 0.35f * speedMultiplier
 			);
 		}
-	} else if (input && allowJump_ && physicsBody_.isGrounded && input->TriggerKey(DIK_SPACE)) {
+	} else if (input && allowKeyboardMouse && allowJump_ &&
+		physicsBody_.isGrounded && input->TriggerKey(DIK_SPACE)) {
 		desiredVelocity.y = jumpVelocity_;
 		physicsBody_.isGrounded = false;
 	}
@@ -254,9 +239,120 @@ void Player::SetTransform(const Transform& transform) {
 	physicsBody_.velocity = {};
 	physicsBody_.isGrounded = false;
 	object_->GetTransform() = transform;
-	SyncRotationStateFromObject();
+	targetYaw_ = GetYaw();
 	ApplyPosition();
 	object_->Update();
+}
+
+bool Player::RestorePlanarPosition(const Vector3& position) {
+	if (!object_ || !std::isfinite(position.x) || !std::isfinite(position.z)) {
+		return false;
+	}
+	position_.x = position.x;
+	position_.z = position.z;
+	physicsBody_.velocity.x = 0.0f;
+	physicsBody_.velocity.z = 0.0f;
+	ApplyPosition();
+	object_->Update();
+	return true;
+}
+
+bool Player::RestorePlanarPose(const Vector3& position, float yaw) {
+	if (!object_ || !std::isfinite(position.x) ||
+		!std::isfinite(position.z) || !std::isfinite(yaw)) {
+		return false;
+	}
+	position_.x = position.x;
+	position_.z = position.z;
+	physicsBody_.velocity.x = 0.0f;
+	physicsBody_.velocity.z = 0.0f;
+	object_->SetRotate({ 0.0f, yaw, 0.0f });
+	targetYaw_ = yaw;
+	ApplyPosition();
+	object_->Update();
+	return true;
+}
+
+bool Player::ApplyPlanarMotionConstraint(
+	const Vector3& position,
+	float yaw,
+	const Vector3& velocity
+) {
+	if (!object_ ||
+		!std::isfinite(position.x) || !std::isfinite(position.z) ||
+		!std::isfinite(yaw) ||
+		!std::isfinite(velocity.x) || !std::isfinite(velocity.z)) {
+		return false;
+	}
+	position_.x = position.x;
+	position_.z = position.z;
+	physicsBody_.velocity.x = velocity.x;
+	physicsBody_.velocity.z = velocity.z;
+	object_->SetRotate({ 0.0f, yaw, 0.0f });
+	targetYaw_ = yaw;
+	ApplyPosition();
+	object_->Update();
+	return true;
+}
+
+bool Player::ClampToWaterBounds(
+	const Vector3& center,
+	float yaw,
+	float halfSizeX,
+	float halfSizeZ
+) {
+	if (!object_ || !std::isfinite(yaw) ||
+		!std::isfinite(halfSizeX) || !std::isfinite(halfSizeZ)) {
+		return false;
+	}
+	const float cosine = std::cos(yaw);
+	const float sine = std::sin(yaw);
+	const Vector3 worldDelta = {
+		position_.x - center.x,
+		0.0f,
+		position_.z - center.z
+	};
+	const float localX = worldDelta.x * cosine - worldDelta.z * sine;
+	const float localZ = worldDelta.x * sine + worldDelta.z * cosine;
+	const float clampedX = std::clamp(localX, -halfSizeX, halfSizeX);
+	const float clampedZ = std::clamp(localZ, -halfSizeZ, halfSizeZ);
+	if (clampedX == localX && clampedZ == localZ) {
+		return false;
+	}
+	position_.x = center.x + clampedX * cosine + clampedZ * sine;
+	position_.z = center.z - clampedX * sine + clampedZ * cosine;
+	if (autoForward_) {
+		const float localVelocityX =
+			physicsBody_.velocity.x * cosine - physicsBody_.velocity.z * sine;
+		const float localVelocityZ =
+			physicsBody_.velocity.x * sine + physicsBody_.velocity.z * cosine;
+		float correctedVelocityX = localVelocityX;
+		float correctedVelocityZ = localVelocityZ;
+		if (
+			(clampedX != localX) &&
+			((localX > halfSizeX && correctedVelocityX > 0.0f) ||
+				(localX < -halfSizeX && correctedVelocityX < 0.0f))
+		) {
+			correctedVelocityX = 0.0f;
+		}
+		if (
+			(clampedZ != localZ) &&
+			((localZ > halfSizeZ && correctedVelocityZ > 0.0f) ||
+				(localZ < -halfSizeZ && correctedVelocityZ < 0.0f))
+		) {
+			correctedVelocityZ = 0.0f;
+		}
+		physicsBody_.velocity.x =
+			correctedVelocityX * cosine + correctedVelocityZ * sine;
+		physicsBody_.velocity.z =
+			-correctedVelocityX * sine + correctedVelocityZ * cosine;
+	} else {
+		physicsBody_.velocity.x = 0.0f;
+		physicsBody_.velocity.z = 0.0f;
+	}
+	ApplyPosition();
+	object_->Update();
+	return true;
 }
 
 void Player::SetBehaviorSettings(
@@ -265,7 +361,8 @@ void Player::SetBehaviorSettings(
 	float turnResponsiveness,
 	float dashMultiplier,
 	bool cameraRelativeMove,
-	bool allowJump
+	bool allowJump,
+	bool autoForward
 ) {
 	moveSpeed_ = (std::max)(moveSpeed, 0.0f);
 	jumpVelocity_ = (std::max)(jumpVelocity, 0.0f);
@@ -273,6 +370,28 @@ void Player::SetBehaviorSettings(
 	dashMultiplier_ = (std::max)(dashMultiplier, 1.0f);
 	cameraRelativeMove_ = cameraRelativeMove;
 	allowJump_ = allowJump;
+	if (autoForward && !autoForward_ && object_) {
+		targetYaw_ = GetYaw();
+	}
+	autoForward_ = autoForward;
+}
+
+void Player::SetInputDeviceSettings(
+	const std::string& inputMode,
+	float gamepadDeadzone
+) {
+	if (
+		inputMode == "KeyboardMouse" ||
+		inputMode == "Gamepad" ||
+		inputMode == "Both"
+	) {
+		inputMode_ = inputMode;
+	} else {
+		inputMode_ = "KeyboardMouse";
+	}
+	gamepadDeadzone_ = std::isfinite(gamepadDeadzone)
+		? std::clamp(gamepadDeadzone, 0.0f, 0.95f)
+		: 0.20f;
 }
 
 void Player::SetWaterState(
@@ -291,14 +410,22 @@ void Player::ApplyPosition() {
 	}
 }
 
-void Player::SyncRotationStateFromObject() {
+float Player::GetYaw() const {
 	if (!object_) {
-		return;
+		return targetYaw_;
 	}
-	currentYaw_ = object_->GetRotate().y;
-	currentPitch_ = object_->GetRotate().x;
-	currentRotation_ = object_->UsesQuaternionRotation()
-		? object_->GetRotateQuaternion()
-		: MakeQuaternionFromEuler(object_->GetRotate());
-	rotationInitialized_ = true;
+	const Transform& transform = object_->GetTransform();
+	if (transform.useQuaternionRotation) {
+		const Matrix4x4 rotationMatrix = MakeRotateMatrix(
+			transform.quaternionRotate
+		);
+		const float yaw = std::atan2(
+			rotationMatrix.m[2][0],
+			rotationMatrix.m[2][2]
+		);
+		return std::isfinite(yaw) ? yaw : targetYaw_;
+	}
+	return std::isfinite(transform.rotate.y)
+		? transform.rotate.y
+		: targetYaw_;
 }

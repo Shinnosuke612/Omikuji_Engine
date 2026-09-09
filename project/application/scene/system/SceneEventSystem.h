@@ -2,11 +2,14 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "../../../engine/scene/SceneRuntimeSessionState.h"
 #include "SceneTextMotionSystem.h"
+#include "ScenePauseSystem.h"
 
 class SceneDocument;
 class SceneStatSystem;
@@ -62,18 +65,27 @@ struct SceneTextMotionRequest {
 	std::string clipId;
 };
 
+struct SceneFishingFishCountRequest {
+	uint64_t directorEntityId = 0;
+	int delta = 0;
+};
+
 struct SceneEventRuntimeSignals {
 	uint64_t completedCameraPathEntityId = 0;
 	std::vector<uint64_t> finishedAudioEntityIds;
 	std::vector<SceneTextMotionCompletion> textMotionCompletions;
+	uint64_t fishingResultInputReadyDirectorEntityId = 0;
 };
 
 struct SceneEventResult {
 	std::string sceneTransitionId;
+	bool sceneTransitionUseEffect = true;
 	ScenePostProcessRequest postProcessRequest;
 	std::vector<SceneCameraRequest> cameraRequests;
 	std::vector<SceneAudioRequest> audioRequests;
 	std::vector<SceneTextMotionRequest> textMotionRequests;
+	std::vector<SceneFishingFishCountRequest> fishingFishCountRequests;
+	std::vector<ScenePauseRequest> pauseRequests;
 };
 
 class SceneEventSystem {
@@ -82,8 +94,11 @@ public:
 		SceneDocument& document,
 		SceneStatSystem& statSystem,
 		SceneStateMachineSystem& stateMachineSystem,
+		const ScenePauseSystem& pauseSystem,
+		const SceneRuntimeSessionState* runtimeSessionState,
 		float deltaTime,
-		const SceneEventRuntimeSignals& signals
+		const SceneEventRuntimeSignals& signals,
+		const std::function<bool(uint64_t)>& shouldProcess
 	);
 	void Clear();
 
@@ -93,6 +108,7 @@ private:
 		bool initialized = false;
 		bool wasConditionTrue = false;
 		bool fired = false;
+		uint64_t lastObservedFishingResultGeneration = 0;
 	};
 
 	std::unordered_map<uint64_t, std::vector<BindingRuntime>> runtimes_;
