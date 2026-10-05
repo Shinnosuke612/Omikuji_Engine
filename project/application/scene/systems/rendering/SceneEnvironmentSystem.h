@@ -41,6 +41,8 @@ public:
 private:
 	std::unique_ptr<Skybox> skybox_;
 	std::unique_ptr<WaterSurfaceRenderer> waterSurfaceRenderer_;
+	// 保存元pathと描画用keyを分離し、HDR変換cache keyをSceneへ保存しない。
+	std::string environmentSourcePath_;
 	std::string environmentMapPath_;
 	float reflectionIntensity_ = 0.3f;
 	StarFieldGenerator starFieldGenerator_;

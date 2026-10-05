@@ -1,0 +1,30 @@
+{
+  "dependencies": {
+    "lock": "dependencies/lock.json",
+    "manifest": "dependencies/manifest.json"
+  },
+  "displayName": "Weapon Hunter",
+  "engine": {
+    "mode": "snapshot",
+    "provenance": {
+      "repository": "",
+      "revision": ""
+    }
+  },
+  "ide": {
+    "preferredVisualStudioMajor": 18
+  },
+  "paths": {
+    "developmentExecutable": "generated/outputs/WeaponHunter/Development/WeaponHunter.exe",
+    "msbuildProject": "project/build/generated/WeaponHunter/WeaponHunter.vcxproj",
+    "sceneCatalog": "project/resources/scenes/scenes.json",
+    "solution": "project/build/generated/WeaponHunter/WeaponHunter.sln"
+  },
+  "projectId": "WeaponHunter",
+  "schemaVersion": 1,
+  "template": {
+    "id": "empty-game",
+    "schemaVersion": 1,
+    "sourceKind": "snapshot"
+  }
+}

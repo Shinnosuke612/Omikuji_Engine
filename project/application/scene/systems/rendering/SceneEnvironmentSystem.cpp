@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <utility>
 
 namespace {
 	float ResolveReflectionIntensity(
@@ -96,14 +97,19 @@ void SceneEnvironmentSystem::Sync(
 
 	if (!skyboxEnabled || texturePath.empty()) {
 		skybox_.reset();
+		environmentSourcePath_.clear();
 		environmentMapPath_.clear();
 		reflectionIntensity_ = 0.0f;
-	} else if (texturePath != environmentMapPath_) {
-		if (TextureManager::GetInstance()->LoadTexture(texturePath)) {
-			skybox_ = std::make_unique<Skybox>();
-			skybox_->Initialize(Object3dCommon::GetInstance(), texturePath);
-			skybox_->SetScale({ 100.0f, 100.0f, 100.0f });
-			environmentMapPath_ = texturePath;
+	} else if (texturePath != environmentSourcePath_) {
+		std::string runtimeTextureKey;
+		if (TextureManager::GetInstance()->LoadEnvironmentTexture(texturePath, runtimeTextureKey)) {
+			// 変換/登録に成功したkeyだけをSkyboxとObjectへ同時に反映する。
+			auto skybox = std::make_unique<Skybox>();
+			skybox->Initialize(Object3dCommon::GetInstance(), runtimeTextureKey);
+			skybox->SetScale({ 100.0f, 100.0f, 100.0f });
+			skybox_ = std::move(skybox);
+			environmentSourcePath_ = texturePath;
+			environmentMapPath_ = runtimeTextureKey;
 			reflectionIntensity_ = requestedReflectionIntensity;
 		}
 	} else {
@@ -131,15 +137,20 @@ void SceneEnvironmentSystem::Sync(
 			);
 		const bool monitorSurface =
 			SceneEntityQuery::HasComponent(*binding.entity, "MonitorRenderer");
-		binding.object->SetEnvironmentMap(
-			environmentMapPath_,
-			monitorSurface
-				? 0.0f
-				: ResolveReflectionIntensity(
-					meshRenderer,
-					reflectionIntensity_
-				)
-		);
+		if (environmentMapPath_.empty()) {
+			// Drawは反射0でもSRVを参照するため、既存の有効keyへ空keyを上書きしない。
+			binding.object->SetEnvironmentCoefficient(0.0f);
+		} else {
+			binding.object->SetEnvironmentMap(
+				environmentMapPath_,
+				monitorSurface
+					? 0.0f
+					: ResolveReflectionIntensity(
+						meshRenderer,
+						reflectionIntensity_
+					)
+			);
+		}
 		if (monitorSurface) {
 			binding.object->SetEnableLighting(false);
 		}
@@ -249,6 +260,7 @@ void SceneEnvironmentSystem::Finalize() {
 		waterSurfaceRenderer_.reset();
 	}
 	skybox_.reset();
+	environmentSourcePath_.clear();
 	environmentMapPath_.clear();
 	reflectionIntensity_ = 0.3f;
 }

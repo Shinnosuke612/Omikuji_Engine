@@ -1,4 +1,4 @@
-// 役割: テクスチャの読み込み、SRV割り当て、キャッシュを管理する。
+// 役割: テクスチャとHDR環境CubeMapの読み込み、SRV割り当て、キャッシュを管理する。
 #pragma once
 #include <string>
 #include <DirectXTex.h>
@@ -56,6 +56,14 @@ public:
 	bool LoadTexture(
 		const std::string& filePath,
 		TextureColorSpace colorSpace = TextureColorSpace::Automatic
+	);
+	// GPU所有threadでDDS Cube/HDR(2:1)を読み、成功時だけ描画用keyを返す。
+	// sourcePathとoutTextureKeyは別string。HDR Cubeは通常2D cacheとは分離し、
+	// TextureManager終了まで共有する。同じHDRの内容変更は再起動で再生成する。
+	// 失敗時はoutTextureKeyと既存登録を保持し、Project Refresh後に再試行できる。
+	bool LoadEnvironmentTexture(
+		const std::string& sourcePath,
+		std::string& outTextureKey
 	);
 	bool ReloadTexture(
 		const std::string& filePath,

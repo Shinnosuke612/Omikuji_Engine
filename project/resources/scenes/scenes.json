@@ -19,7 +19,7 @@
       "runtimeProfile": "RUNTIME"
     }
   ],
-  "startScene": "title",
+  "startScene": "gameplay",
   "startup": {
     "debug": "EDITOR",
     "development": "EDITOR",

@@ -526,8 +526,8 @@ namespace {
 			{ "Drop Texture Here", "テクスチャをここへドロップ" },
 			{ "Cull Mode", "カリング" }, { "Reflection Intensity", "反射の強さ" },
 			{ "Override Environment Reflection", "Environment反射を上書き" },
-			{ "Skybox Enabled", "Skyboxを有効化" }, { "Skybox DDS", "Skybox DDS" },
-			{ "Skybox Intensity", "Skyboxの強さ" }, { "Drop DDS Skybox Here", "DDS Skyboxをここへドロップ" },
+			{ "Skybox Enabled", "Skyboxを有効化" }, { "Skybox DDS / HDR", "Skybox DDS / HDR" },
+			{ "Skybox Intensity", "Skyboxの強さ" }, { "Drop DDS / HDR Skybox Here", "DDS / HDR Skyboxをここへドロップ" },
 			{ "Size", "サイズ" },
 			{ "Anchor", "アンカー" }, { "Flip X", "X反転" }, { "Flip Y", "Y反転" },
 			{ "Text", "テキスト" }, { "Font Family", "フォント" },
@@ -8935,7 +8935,6 @@ void ImGuiManager::DrawInspectorWindow() {
 						return;
 					}
 					component.environmentSkyboxPath = texturePath;
-					TextureManager::GetInstance()->LoadTexture(texturePath);
 					environmentChanged = true;
 					editorSession_->RequestSceneReload();
 				};
@@ -8944,7 +8943,7 @@ void ImGuiManager::DrawInspectorWindow() {
 					component.environmentSkyboxPath.empty()
 					? "None"
 					: component.environmentSkyboxPath.c_str();
-				if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Skybox DDS"), currentSkybox)) {
+				if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Skybox DDS / HDR"), currentSkybox)) {
 					if (ImGui::Selectable(
 						"None",
 						component.environmentSkyboxPath.empty()
@@ -8961,7 +8960,7 @@ void ImGuiManager::DrawInspectorWindow() {
 							extension.begin(),
 							::tolower
 						);
-						if (extension != ".dds") {
+						if (extension != ".dds" && extension != ".hdr") {
 							continue;
 						}
 						if (ImGui::Selectable(
@@ -8973,7 +8972,7 @@ void ImGuiManager::DrawInspectorWindow() {
 					}
 					ImGui::EndCombo();
 				}
-				ImGui::Button(LocalizedComponentWidgetLabel(editorLanguage_, "Drop DDS Skybox Here"), ImVec2(-1.0f, 38.0f));
+				ImGui::Button(LocalizedComponentWidgetLabel(editorLanguage_, "Drop DDS / HDR Skybox Here"), ImVec2(-1.0f, 38.0f));
 				if (ImGui::BeginDragDropTarget()) {
 					if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
 						"PROJECT_TEXTURE_PATH"
@@ -8990,7 +8989,7 @@ void ImGuiManager::DrawInspectorWindow() {
 								extension.begin(),
 								::tolower
 							);
-							if (extension == ".dds") {
+							if (extension == ".dds" || extension == ".hdr") {
 								assignSkybox(GetProjectResourcePath(droppedPath));
 							}
 						}

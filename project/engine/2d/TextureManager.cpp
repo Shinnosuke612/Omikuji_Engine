@@ -1,4 +1,4 @@
-// 役割: DirectXTexを使ったテクスチャ読み込みとGPUリソース生成を実装する。
+// 役割: テクスチャとHDR環境CubeMapの読み込み・生成・GPU登録を実装する。
 #include "TextureManager.h"
 #include "TextureFormat.h"
 #include "../base/DirectXCommon.h"
@@ -6,7 +6,13 @@
 #include "../utility/StringUtility.h"
 #include "../utility/Logger.h"
 #include "../utility/EditableResourcePath.h"
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cmath>
+#include <cstdint>
+#include <exception>
+#include <limits>
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
@@ -74,6 +80,145 @@ namespace {
 		stream << "0x" << std::uppercase << std::hex
 			<< static_cast<unsigned long>(result);
 		return stream.str();
+	}
+
+	struct EnvironmentDirection {
+		double x, y, z;
+	};
+
+	struct EnvironmentFaceBasis {
+		EnvironmentDirection forward, right, down;
+	};
+
+	// DirectX Cube面順。既存StarFieldGeneratorと同じbasisでShader側の回転を不要にする。
+	constexpr std::array<EnvironmentFaceBasis, 6> kEnvironmentFaces = {{
+		{{ 1, 0, 0 }, { 0, 0,-1 }, { 0,-1, 0 }},
+		{{-1, 0, 0 }, { 0, 0, 1 }, { 0,-1, 0 }},
+		{{ 0, 1, 0 }, { 1, 0, 0 }, { 0, 0, 1 }},
+		{{ 0,-1, 0 }, { 1, 0, 0 }, { 0, 0,-1 }},
+		{{ 0, 0, 1 }, { 1, 0, 0 }, { 0,-1, 0 }},
+		{{ 0, 0,-1 }, {-1, 0, 0 }, { 0,-1, 0 }}
+	}};
+
+	bool IsValidEnvironmentFloatImage(const DirectX::Image& image) {
+		constexpr size_t pixelBytes = sizeof(float) * 4;
+		const size_t maxSize = (std::numeric_limits<size_t>::max)();
+		return image.pixels && image.format == DXGI_FORMAT_R32G32B32A32_FLOAT &&
+			image.width > 0 && image.height > 0 && image.width <= maxSize / pixelBytes &&
+			image.rowPitch >= image.width * pixelBytes &&
+			image.height <= maxSize / image.rowPitch &&
+			image.slicePitch >= image.height * image.rowPitch;
+	}
+
+	bool SampleEnvironmentPanorama(
+		const DirectX::Image& image, double u, double v, std::array<float, 4>& output
+	) {
+		const double px = u * static_cast<double>(image.width) - 0.5;
+		const double py = v * static_cast<double>(image.height) - 0.5;
+		const int64_t x0 = static_cast<int64_t>(std::floor(px));
+		const int64_t y0 = static_cast<int64_t>(std::floor(py));
+		const int64_t width = static_cast<int64_t>(image.width);
+		const int64_t height = static_cast<int64_t>(image.height);
+		const double tx = px - static_cast<double>(x0);
+		const double ty = py - static_cast<double>(y0);
+		std::array<double, 3> rgb{};
+		// 水平seamは負indexもwrapし、極はclamp。paddingを含むrowPitchで参照する。
+		for (int row = 0; row < 2; ++row) {
+			const size_t y = static_cast<size_t>(std::clamp(y0 + row, int64_t{0}, height - 1));
+			for (int column = 0; column < 2; ++column) {
+				const size_t x = static_cast<size_t>(((x0 + column) % width + width) % width);
+				std::array<float, 4> pixel{};
+				std::memcpy(pixel.data(), image.pixels + y * image.rowPitch + x * sizeof(pixel), sizeof(pixel));
+				const double weight = (row == 0 ? 1.0 - ty : ty) * (column == 0 ? 1.0 - tx : tx);
+				for (size_t channel = 0; channel < rgb.size(); ++channel) {
+					if (!std::isfinite(pixel[channel])) {
+						return false;
+					}
+					rgb[channel] += static_cast<double>(pixel[channel]) * weight;
+				}
+			}
+		}
+		for (size_t channel = 0; channel < rgb.size(); ++channel) {
+			output[channel] = static_cast<float>(rgb[channel]);
+			if (!std::isfinite(output[channel])) {
+				return false;
+			}
+		}
+		output[3] = 1.0f;
+		return true;
+	}
+
+	HRESULT BuildEnvironmentCubemap(
+		const DirectX::ScratchImage& panorama, DirectX::ScratchImage& mipChain
+	) {
+		const auto& metadata = panorama.GetMetadata();
+		if (metadata.dimension != DirectX::TEX_DIMENSION_TEXTURE2D ||
+			metadata.arraySize != 1 || metadata.depth != 1 || metadata.mipLevels != 1 ||
+			panorama.GetImageCount() != 1 || metadata.width < 4 || metadata.height < 2 ||
+			metadata.height > (std::numeric_limits<size_t>::max)() / 2 ||
+			metadata.width != metadata.height * 2) {
+			return E_INVALIDARG;
+		}
+		const DirectX::Image* source = panorama.GetImage(0, 0, 0);
+		if (!source) {
+			return E_INVALIDARG;
+		}
+		DirectX::ScratchImage converted;
+		if (source->format != DXGI_FORMAT_R32G32B32A32_FLOAT) {
+			const HRESULT hr = DirectX::Convert(*source, DXGI_FORMAT_R32G32B32A32_FLOAT,
+				DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, converted);
+			if (FAILED(hr)) {
+				return hr;
+			}
+			source = converted.GetImage(0, 0, 0);
+		}
+		if (!source || !IsValidEnvironmentFloatImage(*source)) {
+			return E_INVALIDARG;
+		}
+
+		const size_t faceSize = (std::min)(metadata.width / 4, size_t{1024});
+		DirectX::ScratchImage cube;
+		const HRESULT initializeResult = cube.InitializeCube(
+			DXGI_FORMAT_R32G32B32A32_FLOAT, faceSize, faceSize, 1, 1);
+		if (FAILED(initializeResult)) {
+			return initializeResult;
+		}
+		constexpr double pi = 3.14159265358979323846;
+		for (size_t face = 0; face < kEnvironmentFaces.size(); ++face) {
+			const DirectX::Image* target = cube.GetImage(0, face, 0);
+			if (!target || !IsValidEnvironmentFloatImage(*target)) {
+				return E_INVALIDARG;
+			}
+			const auto& basis = kEnvironmentFaces[face];
+			for (size_t y = 0; y < faceSize; ++y) {
+				const double b = 2.0 * (static_cast<double>(y) + 0.5) / static_cast<double>(faceSize) - 1.0;
+				for (size_t x = 0; x < faceSize; ++x) {
+					const double a = 2.0 * (static_cast<double>(x) + 0.5) / static_cast<double>(faceSize) - 1.0;
+					EnvironmentDirection direction{
+						basis.forward.x + a * basis.right.x + b * basis.down.x,
+						basis.forward.y + a * basis.right.y + b * basis.down.y,
+						basis.forward.z + a * basis.right.z + b * basis.down.z
+					};
+					const double length = std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+					// 元HDR中央を+X、上を+Yとするゼロ回転。-Xは水平seamになる。
+					const double u = 0.5 + std::atan2(direction.z, direction.x) / (2.0 * pi);
+					const double v = std::acos(std::clamp(direction.y / length, -1.0, 1.0)) / pi;
+					std::array<float, 4> pixel{};
+					if (!SampleEnvironmentPanorama(*source, u, v, pixel)) {
+						return E_INVALIDARG;
+					}
+					std::memcpy(target->pixels + y * target->rowPitch + x * sizeof(pixel), pixel.data(), sizeof(pixel));
+				}
+			}
+		}
+		if (faceSize == 1) {
+			// 1pixel面は基底だけで全ミップ。DirectXTexは追加levelなしの生成を拒否する。
+			mipChain = std::move(cube);
+			return S_OK;
+		}
+		// 通常のLinear縮小。PBR prefilterではなく、失敗時に単一ミップへ縮退しない。
+		return DirectX::GenerateMipMaps(cube.GetImages(), cube.GetImageCount(),
+			cube.GetMetadata(), DirectX::TEX_FILTER_DEFAULT, 0, mipChain);
 	}
 
 }
@@ -163,6 +308,79 @@ bool TextureManager::LoadTexture(
 		failedTextureKeys.insert(filePath);
 	}
 	return registered;
+}
+
+bool TextureManager::LoadEnvironmentTexture(
+	const std::string& sourcePath,
+	std::string& outTextureKey
+) {
+	if (sourcePath.empty() || &sourcePath == &outTextureKey) {
+		return false;
+	}
+	// 解決失敗にも負のcacheを用意し、通常の2D keyを失敗扱いにしない。
+	const std::string prefix = "runtime://environment-cubemap/v1/";
+	std::string environmentKey = prefix + sourcePath;
+	if (failedTextureKeys.contains(environmentKey)) {
+		return false;
+	}
+	const auto fail = [&](const std::string& reason) {
+		if (failedTextureKeys.insert(environmentKey).second) {
+			Logger::Log("Failed to load environment: " + sourcePath + " (" + reason + ")\n");
+		}
+		return false;
+	};
+	try {
+		const auto sourceFilePath = StringUtility::ToPath(sourcePath);
+		const auto resolvedPath = std::filesystem::absolute(
+			EditableResourcePath::ResolveResource(sourceFilePath)).lexically_normal();
+		environmentKey = prefix + StringUtility::ToUtf8(resolvedPath);
+		if (failedTextureKeys.contains(environmentKey)) {
+			return false;
+		}
+		const auto* format = TextureFormat::FindByPath(sourceFilePath);
+		if (!format || (format->decoder != TextureFormat::Decoder::Dds &&
+			format->decoder != TextureFormat::Decoder::Hdr)) {
+			return fail("expected a cubemap DDS or a 2:1 HDR panorama");
+		}
+		if (format->decoder == TextureFormat::Decoder::Dds) {
+			if (!LoadTexture(sourcePath)) {
+				// 通常decoder/登録側が原因を記録済み。Environment再試行だけ抑止する。
+				failedTextureKeys.insert(environmentKey);
+				return false;
+			}
+			if (!GetMetaData(sourcePath).IsCubemap()) {
+				return fail("DDS is not a cubemap");
+			}
+			outTextureKey = sourcePath;
+			return true;
+		}
+		if (const auto existing = textureDatas.find(environmentKey); existing != textureDatas.end()) {
+			if (!existing->second.metadata.IsCubemap()) {
+				return fail("runtime key is not a cubemap");
+			}
+			outTextureKey = environmentKey;
+			return true;
+		}
+		DirectX::ScratchImage panorama;
+		HRESULT hr = DirectX::LoadFromHDRFile(resolvedPath.c_str(), nullptr, panorama);
+		if (FAILED(hr)) {
+			return fail("HDR decode HRESULT " + FormatHResult(hr));
+		}
+		DirectX::ScratchImage cube;
+		hr = BuildEnvironmentCubemap(panorama, cube);
+		if (FAILED(hr)) {
+			return fail("2:1 HDR cubemap conversion HRESULT " + FormatHResult(hr));
+		}
+		// 生成物は既存TextureManager寿命で共有し、Scene切替では解放しない。
+		if (!RegisterTexture(environmentKey, cube, cube.GetMetadata())) {
+			failedTextureKeys.insert(environmentKey);
+			return false;
+		}
+		outTextureKey = environmentKey;
+		return true;
+	} catch (const std::exception& error) {
+		return fail(error.what());
+	}
 }
 
 bool TextureManager::ReloadTexture(
