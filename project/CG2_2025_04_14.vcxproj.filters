@@ -126,92 +126,92 @@
     <ClCompile Include="application\scene\RuntimeScene.cpp">
       <Filter>Application\Scene</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneAgentSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\ai\SceneAgentSystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\ai</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneAttachmentSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\animation\SceneAttachmentSystem.cpp">
+      <Filter>Application\Scene\Systems\animation</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneCameraSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\camera\SceneCameraSystem.cpp">
+      <Filter>Application\Scene\Systems\camera</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneCombatSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\combat\SceneCombatSystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClCompile>
-	<ClCompile Include="application\scene\system\SceneHitReactionSystem.cpp">
-	  <Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\gameplay\combat\SceneHitReactionSystem.cpp">
+	  <Filter>Application\Scene\Systems\gameplay\combat</Filter>
 	</ClCompile>
-	<ClCompile Include="application\scene\system\SceneHitStopSystem.cpp">
-		<Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\gameplay\combat\SceneHitStopSystem.cpp">
+		<Filter>Application\Scene\Systems\gameplay\combat</Filter>
 	</ClCompile>
-	<ClCompile Include="application\scene\system\SceneRuntimeEffectSystem.cpp">
-		<Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\effects\SceneRuntimeEffectSystem.cpp">
+		<Filter>Application\Scene\Systems\effects</Filter>
 	</ClCompile>
-	<ClCompile Include="application\scene\system\SceneTextRenderSystem.cpp">
-		<Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\text\SceneTextRenderSystem.cpp">
+		<Filter>Application\Scene\Systems\text</Filter>
 	</ClCompile>
-	<ClCompile Include="application\scene\system\SceneTextMotionSystem.cpp">
-		<Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\text\SceneTextMotionSystem.cpp">
+		<Filter>Application\Scene\Systems\text</Filter>
 	</ClCompile>
-	<ClCompile Include="application\scene\system\SceneGameFlowSystem.cpp">
-		<Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\gameplay\flow\SceneGameFlowSystem.cpp">
+		<Filter>Application\Scene\Systems\gameplay\flow</Filter>
 	</ClCompile>
-	<ClCompile Include="application\scene\system\SceneAudioSystem.cpp">
-		<Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\audio\SceneAudioSystem.cpp">
+		<Filter>Application\Scene\Systems\audio</Filter>
 	</ClCompile>
-    <ClCompile Include="application\scene\system\SceneDebugSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\debug\SceneDebugSystem.cpp">
+      <Filter>Application\Scene\Systems\debug</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneEnemySystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\ai\SceneEnemySystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\ai</Filter>
     </ClCompile>
-	<ClCompile Include="application\scene\system\SceneEnemySpawnerSystem.cpp">
-	  <Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\gameplay\ai\SceneEnemySpawnerSystem.cpp">
+	  <Filter>Application\Scene\Systems\gameplay\ai</Filter>
 	</ClCompile>
-    <ClCompile Include="application\scene\system\SceneEventSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\events\SceneEventSystem.cpp">
+      <Filter>Application\Scene\Systems\events</Filter>
     </ClCompile>
-	<ClCompile Include="application\scene\system\ScenePostProcessProfileSystem.cpp">
-	  <Filter>Application\Scene\System</Filter>
+	<ClCompile Include="application\scene\systems\effects\ScenePostProcessProfileSystem.cpp">
+	  <Filter>Application\Scene\Systems\effects</Filter>
 	</ClCompile>
-    <ClCompile Include="application\scene\system\SceneAttackRunnerSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\combat\SceneAttackRunnerSystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneStateMachineSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\state\SceneStateMachineSystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\state</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneEffectRenderSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\effects\SceneEffectRenderSystem.cpp">
+      <Filter>Application\Scene\Systems\effects</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneEnvironmentSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\rendering\SceneEnvironmentSystem.cpp">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneLightingSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\rendering\SceneLightingSystem.cpp">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneMonitorSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\rendering\SceneMonitorSystem.cpp">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneObjectSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\rendering\SceneObjectSystem.cpp">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneParticleSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\effects\SceneParticleSystem.cpp">
+      <Filter>Application\Scene\Systems\effects</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\ScenePhysicsSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\physics\ScenePhysicsSystem.cpp">
+      <Filter>Application\Scene\Systems\physics</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\ScenePrefabAnimationSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\animation\ScenePrefabAnimationSystem.cpp">
+      <Filter>Application\Scene\Systems\animation</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneProjectileSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\combat\SceneProjectileSystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneStatSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\gameplay\combat\SceneStatSystem.cpp">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClCompile>
-    <ClCompile Include="application\scene\system\SceneTransitionSystem.cpp">
-      <Filter>Application\Scene\System</Filter>
+    <ClCompile Include="application\scene\systems\events\SceneTransitionSystem.cpp">
+      <Filter>Application\Scene\Systems\events</Filter>
     </ClCompile>
     <ClCompile Include="engine\scene\BaseScene.cpp">
       <Filter>Engine\Scene</Filter>
@@ -407,92 +407,92 @@
     <ClInclude Include="application\scene\SceneRuntimeObjectBinding.h">
       <Filter>Application\Scene</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneAgentSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\ai\SceneAgentSystem.h">
+      <Filter>Application\Scene\Systems\gameplay\ai</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneAttachmentSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\animation\SceneAttachmentSystem.h">
+      <Filter>Application\Scene\Systems\animation</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneCameraSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\camera\SceneCameraSystem.h">
+      <Filter>Application\Scene\Systems\camera</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneCombatSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\combat\SceneCombatSystem.h">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClInclude>
-	<ClInclude Include="application\scene\system\SceneHitReactionSystem.h">
-	  <Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\gameplay\combat\SceneHitReactionSystem.h">
+	  <Filter>Application\Scene\Systems\gameplay\combat</Filter>
 	</ClInclude>
-	<ClInclude Include="application\scene\system\SceneHitStopSystem.h">
-		<Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\gameplay\combat\SceneHitStopSystem.h">
+		<Filter>Application\Scene\Systems\gameplay\combat</Filter>
 	</ClInclude>
-	<ClInclude Include="application\scene\system\SceneRuntimeEffectSystem.h">
-		<Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\effects\SceneRuntimeEffectSystem.h">
+		<Filter>Application\Scene\Systems\effects</Filter>
 	</ClInclude>
-	<ClInclude Include="application\scene\system\SceneTextRenderSystem.h">
-		<Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\text\SceneTextRenderSystem.h">
+		<Filter>Application\Scene\Systems\text</Filter>
 	</ClInclude>
-	<ClInclude Include="application\scene\system\SceneTextMotionSystem.h">
-		<Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\text\SceneTextMotionSystem.h">
+		<Filter>Application\Scene\Systems\text</Filter>
 	</ClInclude>
-	<ClInclude Include="application\scene\system\SceneGameFlowSystem.h">
-		<Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\gameplay\flow\SceneGameFlowSystem.h">
+		<Filter>Application\Scene\Systems\gameplay\flow</Filter>
 	</ClInclude>
-	<ClInclude Include="application\scene\system\SceneAudioSystem.h">
-		<Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\audio\SceneAudioSystem.h">
+		<Filter>Application\Scene\Systems\audio</Filter>
 	</ClInclude>
-    <ClInclude Include="application\scene\system\SceneDebugSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\debug\SceneDebugSystem.h">
+      <Filter>Application\Scene\Systems\debug</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneEnemySystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\ai\SceneEnemySystem.h">
+      <Filter>Application\Scene\Systems\gameplay\ai</Filter>
     </ClInclude>
-	<ClInclude Include="application\scene\system\SceneEnemySpawnerSystem.h">
-	  <Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\gameplay\ai\SceneEnemySpawnerSystem.h">
+	  <Filter>Application\Scene\Systems\gameplay\ai</Filter>
 	</ClInclude>
-    <ClInclude Include="application\scene\system\SceneEventSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\events\SceneEventSystem.h">
+      <Filter>Application\Scene\Systems\events</Filter>
     </ClInclude>
-	<ClInclude Include="application\scene\system\ScenePostProcessProfileSystem.h">
-	  <Filter>Application\Scene\System</Filter>
+	<ClInclude Include="application\scene\systems\effects\ScenePostProcessProfileSystem.h">
+	  <Filter>Application\Scene\Systems\effects</Filter>
 	</ClInclude>
-    <ClInclude Include="application\scene\system\SceneAttackRunnerSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\combat\SceneAttackRunnerSystem.h">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneStateMachineSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\state\SceneStateMachineSystem.h">
+      <Filter>Application\Scene\Systems\gameplay\state</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneEffectRenderSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\effects\SceneEffectRenderSystem.h">
+      <Filter>Application\Scene\Systems\effects</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneEnvironmentSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\rendering\SceneEnvironmentSystem.h">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneLightingSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\rendering\SceneLightingSystem.h">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneMonitorSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\rendering\SceneMonitorSystem.h">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneObjectSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\rendering\SceneObjectSystem.h">
+      <Filter>Application\Scene\Systems\rendering</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneParticleSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\effects\SceneParticleSystem.h">
+      <Filter>Application\Scene\Systems\effects</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\ScenePhysicsSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\physics\ScenePhysicsSystem.h">
+      <Filter>Application\Scene\Systems\physics</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\ScenePrefabAnimationSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\animation\ScenePrefabAnimationSystem.h">
+      <Filter>Application\Scene\Systems\animation</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneProjectileSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\combat\SceneProjectileSystem.h">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneStatSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\gameplay\combat\SceneStatSystem.h">
+      <Filter>Application\Scene\Systems\gameplay\combat</Filter>
     </ClInclude>
-    <ClInclude Include="application\scene\system\SceneTransitionSystem.h">
-      <Filter>Application\Scene\System</Filter>
+    <ClInclude Include="application\scene\systems\events\SceneTransitionSystem.h">
+      <Filter>Application\Scene\Systems\events</Filter>
     </ClInclude>
     <ClInclude Include="engine\scene\BaseScene.h">
       <Filter>Engine\Scene</Filter>
@@ -620,9 +620,23 @@
     <Filter Include="Application\Scene">
       <UniqueIdentifier>{FB70A086-2C87-43F4-A0B6-515D38DC2FB1}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Application\Scene\System">
+    <Filter Include="Application\Scene\Systems">
       <UniqueIdentifier>{9300C74C-1B4D-4D56-90B4-7D8B0FDC40AB}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Application\Scene\Systems\animation" />
+    <Filter Include="Application\Scene\Systems\audio" />
+    <Filter Include="Application\Scene\Systems\camera" />
+    <Filter Include="Application\Scene\Systems\debug" />
+    <Filter Include="Application\Scene\Systems\effects" />
+    <Filter Include="Application\Scene\Systems\events" />
+    <Filter Include="Application\Scene\Systems\gameplay" />
+    <Filter Include="Application\Scene\Systems\gameplay\ai" />
+    <Filter Include="Application\Scene\Systems\gameplay\combat" />
+    <Filter Include="Application\Scene\Systems\gameplay\flow" />
+    <Filter Include="Application\Scene\Systems\gameplay\state" />
+    <Filter Include="Application\Scene\Systems\physics" />
+    <Filter Include="Application\Scene\Systems\rendering" />
+    <Filter Include="Application\Scene\Systems\text" />
     <Filter Include="Application\Player">
       <UniqueIdentifier>{B036426C-18BA-46FA-AF76-09C613290F87}</UniqueIdentifier>
     </Filter>
