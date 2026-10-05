@@ -84,20 +84,22 @@ void SceneParticleSystem::DrawEditor(const std::string& sceneId) {
 
 	if (editingEffect_.name == primaryEffect_.name && primaryEmitter_) {
 		primaryEffect_ = editingEffect_;
-		ParticleEffectResource::PrepareParticleGroup(primaryEffect_, false);
-		ParticleEffectResource::ApplyToEmitter(
-			*primaryEmitter_,
-			primaryEffect_
-		);
+		if (ParticleEffectResource::PrepareParticleGroup(primaryEffect_, false)) {
+			ParticleEffectResource::ApplyToEmitter(
+				*primaryEmitter_,
+				primaryEffect_
+			);
+		}
 	} else if (
 		editingEffect_.name == secondaryEffect_.name && secondaryEmitter_
 	) {
 		secondaryEffect_ = editingEffect_;
-		ParticleEffectResource::PrepareParticleGroup(secondaryEffect_, false);
-		ParticleEffectResource::ApplyToEmitter(
-			*secondaryEmitter_,
-			secondaryEffect_
-		);
+		if (ParticleEffectResource::PrepareParticleGroup(secondaryEffect_, false)) {
+			ParticleEffectResource::ApplyToEmitter(
+				*secondaryEmitter_,
+				secondaryEffect_
+			);
+		}
 	}
 #else
 	(void)sceneId;

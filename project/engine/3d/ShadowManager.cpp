@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 namespace {
 	constexpr float kPi = 3.1415926535f;
@@ -54,6 +55,13 @@ namespace {
 	}
 }
 
+ShadowManager::~ShadowManager() {
+	if (srvManager_ && srvIndex_ != UINT32_MAX) {
+		srvManager_->Free(srvIndex_);
+		srvIndex_ = UINT32_MAX;
+	}
+}
+
 void ShadowManager::Initialize(DirectXCommon* dxCommon, SrvManager* srvManager) {
 	Initialize(dxCommon, srvManager, kDefaultShadowMapSize);
 }
@@ -65,15 +73,22 @@ void ShadowManager::Initialize(
 ) {
 	assert(dxCommon);
 	assert(srvManager);
+	assert(!initialized_);
+	if (!dxCommon || !srvManager || initialized_) {
+		return;
+	}
 
 	dxCommon_ = dxCommon;
 	srvManager_ = srvManager;
 	shadowMapSize_ = NormalizeShadowMapSize(shadowMapSize);
 
-	CreateResources();
-	CreateDsv();
-	CreateSrv();
-	CreateShadowDataResource();
+	if (!CreateShadowDataResource()) {
+		throw std::runtime_error("ShadowManager shadow constant buffer initialization failed");
+	}
+	if (!CreateResources() || !CreateDsv() || !CreateSrv()) {
+		DisableShadowRendering();
+		return;
+	}
 
 	initialized_ = true;
 }
@@ -91,12 +106,13 @@ void ShadowManager::SetShadowMapSize(uint32_t shadowMapSize) {
 
 	shadowMapResource_.Reset();
 	dsvHeap_.Reset();
-	CreateResources();
-	CreateDsv();
-	CreateSrv();
+	if (!CreateResources() || !CreateDsv() || !CreateSrv()) {
+		DisableShadowRendering();
+		return;
+	}
 }
 
-void ShadowManager::CreateResources() {
+bool ShadowManager::CreateResources() {
 	D3D12_RESOURCE_DESC resourceDesc{};
 	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	resourceDesc.Width = shadowMapSize_;
@@ -123,16 +139,25 @@ void ShadowManager::CreateResources() {
 		&clearValue,
 		IID_PPV_ARGS(&shadowMapResource_)
 	);
-	assert(SUCCEEDED(hr));
+	if (FAILED(hr) || !shadowMapResource_) {
+		return false;
+	}
+	return true;
 }
 
-void ShadowManager::CreateDsv() {
+bool ShadowManager::CreateDsv() {
 	dsvHeap_ = dxCommon_->CreateDescriptorHeap(
 		D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
 		kShadowMapCount,
 		false
 	);
+	if (!dsvHeap_) {
+		return false;
+	}
 	descriptorSizeDSV_ = dxCommon_->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+	if (descriptorSizeDSV_ == 0) {
+		return false;
+	}
 
 	for (uint32_t i = 0; i < kShadowMapCount; ++i) {
 		D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
@@ -147,25 +172,56 @@ void ShadowManager::CreateDsv() {
 			GetDsvHandle(i)
 		);
 	}
+	return true;
 }
 
-void ShadowManager::CreateSrv() {
+bool ShadowManager::CreateSrv() {
 	if (srvIndex_ == UINT32_MAX) {
-		assert(srvManager_->CanAllocate());
-		srvIndex_ = srvManager_->Allocate();
+		if (!srvManager_ || !srvManager_->TryAllocate(srvIndex_)) {
+			return false;
+		}
 	}
-	srvManager_->CreateSRVforTexture2DArray(
+	if (!srvManager_ || !srvManager_->IsAllocated(srvIndex_)) {
+		return false;
+	}
+	const bool created = srvManager_->CreateSRVforTexture2DArray(
 		srvIndex_,
 		shadowMapResource_.Get(),
 		DXGI_FORMAT_R32_FLOAT,
 		1,
 		kShadowMapCount
 	);
+	if (!created) {
+		srvManager_->Free(srvIndex_);
+		srvIndex_ = SrvManager::kInvalidIndex;
+	}
+	return created;
 }
 
-void ShadowManager::CreateShadowDataResource() {
+bool ShadowManager::CreateShadowDataResource() {
 	shadowDataResource_ = dxCommon_->CreateBufferResource(sizeof(ShadowForGPU));
-	shadowDataResource_->Map(0, nullptr, reinterpret_cast<void**>(&shadowData_));
+	if (!shadowDataResource_) {
+		return false;
+	}
+	const HRESULT hr = shadowDataResource_->Map(
+		0,
+		nullptr,
+		reinterpret_cast<void**>(&shadowData_)
+	);
+	if (FAILED(hr) || !shadowData_) {
+		shadowDataResource_.Reset();
+		shadowData_ = nullptr;
+		return false;
+	}
+	ResetShadowData();
+	return true;
+}
+
+void ShadowManager::ResetShadowData() {
+	assert(shadowData_);
+	if (!shadowData_) {
+		return;
+	}
 	*shadowData_ = {};
 	shadowData_->directional = MakeDisabledShadowInfo();
 	for (auto& info : shadowData_->spotLights) {
@@ -173,14 +229,25 @@ void ShadowManager::CreateShadowDataResource() {
 	}
 }
 
+void ShadowManager::DisableShadowRendering() {
+	if (srvManager_ && srvIndex_ != SrvManager::kInvalidIndex) {
+		srvManager_->Free(srvIndex_);
+	}
+	srvIndex_ = SrvManager::kInvalidIndex;
+	shadowMapResource_.Reset();
+	dsvHeap_.Reset();
+	initialized_ = false;
+	hasRenderableShadow_ = false;
+	activeMaps_.fill(false);
+	descriptorSizeDSV_ = 0;
+	ResetShadowData();
+}
+
 void ShadowManager::UpdateShadowData(const LightManager& lightManager) {
 	hasRenderableShadow_ = false;
 	activeMaps_.fill(false);
 
-	shadowData_->directional = MakeDisabledShadowInfo();
-	for (auto& info : shadowData_->spotLights) {
-		info = MakeDisabledShadowInfo();
-	}
+	ResetShadowData();
 
 	const auto& directionalLight = lightManager.GetDirectionalLight();
 	const auto& directionalShadow = lightManager.GetDirectionalShadowSettings();
@@ -268,11 +335,17 @@ void ShadowManager::Render(const LightManager& lightManager, Object3d* const* ob
 }
 
 void ShadowManager::Bind(ID3D12GraphicsCommandList* commandList, UINT shadowTextureRootIndex, UINT shadowDataRootIndex) {
-	if (!initialized_) {
-		return;
+	if (!commandList || !srvManager_ || !shadowDataResource_) {
+		throw std::runtime_error("ShadowManager fallback binding is unavailable");
 	}
 
-	commandList->SetGraphicsRootDescriptorTable(shadowTextureRootIndex, srvManager_->GetGPUDescriptorHandle(srvIndex_));
+	const D3D12_GPU_DESCRIPTOR_HANDLE shadowHandle = initialized_
+		? srvManager_->GetGPUDescriptorHandle(srvIndex_)
+		: srvManager_->GetShadowFallbackDescriptorHandle();
+	if (shadowHandle.ptr == 0) {
+		throw std::runtime_error("ShadowManager fallback descriptor is unavailable");
+	}
+	commandList->SetGraphicsRootDescriptorTable(shadowTextureRootIndex, shadowHandle);
 	commandList->SetGraphicsRootConstantBufferView(shadowDataRootIndex, shadowDataResource_->GetGPUVirtualAddress());
 }
 

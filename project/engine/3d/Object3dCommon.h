@@ -30,8 +30,9 @@ public: //メンバ関数
 	void SetCommonRenderState(CullMode cullMode);
 	void SetSkinningRenderState();
 	void SetSkinningRenderState(CullMode cullMode);
-	void SetShadowRenderState();
-	void SetSkinningShadowRenderState();
+	// Shadow passのCullModeに対応するPSOを設定する。既定Backは既存callerとの互換用。
+	void SetShadowRenderState(CullMode cullMode = CullMode::kBack);
+	void SetSkinningShadowRenderState(CullMode cullMode = CullMode::kBack);
 	void DispatchSkinning(SkinCluster& skinCluster);
 
 public:
@@ -81,8 +82,10 @@ private://メンバ変数
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> skinningComputeRootSignature_ = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> skinningComputePipelineState_ = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> shadowRootSignature_ = nullptr;
-	Microsoft::WRL::ComPtr<ID3D12PipelineState> shadowPipelineState_ = nullptr;
-	Microsoft::WRL::ComPtr<ID3D12PipelineState> skinningShadowPipelineState_ = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> shadowPipelineStates_
+		[static_cast<uint32_t>(CullMode::kCount)];
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> skinningShadowPipelineStates_
+		[static_cast<uint32_t>(CullMode::kCount)];
 	//デフォルトカメラ
 	Camera* defaultCamera = nullptr;
 

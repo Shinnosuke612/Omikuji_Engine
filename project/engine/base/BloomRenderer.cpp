@@ -9,12 +9,15 @@
 #include "../3d/SrvManager.h"
 #include "../utility/Logger.h"
 
-void BloomRenderer::Initialize(
+bool BloomRenderer::Initialize(
 	DirectXCommon* dxCommon,
 	SrvManager* srvManager
 ) {
 	assert(dxCommon);
 	assert(srvManager);
+	if (!dxCommon || !srvManager || initialized_) {
+		return false;
+	}
 
 	dxCommon_ = dxCommon;
 	srvManager_ = srvManager;
@@ -33,8 +36,24 @@ void BloomRenderer::Initialize(
 		*parameterData_[index] = {};
 	}
 
-	Resize(1, 1, downsampleScale_);
+	SceneRenderTarget::Desc desc{};
+	desc.width = 1;
+	desc.height = 1;
+	desc.format = RenderFormats::kSceneHdrFormat;
+	desc.createDepth = false;
+	desc.clearColor[0] = 0.0f;
+	desc.clearColor[1] = 0.0f;
+	desc.clearColor[2] = 0.0f;
+	desc.clearColor[3] = 1.0f;
+	if (
+		!brightTarget_.Initialize(dxCommon_, srvManager_, desc) ||
+		!blurTargets_[0].Initialize(dxCommon_, srvManager_, desc) ||
+		!blurTargets_[1].Initialize(dxCommon_, srvManager_, desc)
+	) {
+		return false;
+	}
 	initialized_ = true;
+	return true;
 }
 
 void BloomRenderer::Resize(
@@ -42,6 +61,9 @@ void BloomRenderer::Resize(
 	uint32_t height,
 	uint32_t downsampleScale
 ) {
+	if (!initialized_) {
+		return;
+	}
 	width_ = (std::max)(width, 1u);
 	height_ = (std::max)(height, 1u);
 	downsampleScale_ = std::clamp(downsampleScale, 1u, 8u);
@@ -51,25 +73,9 @@ void BloomRenderer::Resize(
 	const uint32_t bloomHeight =
 		(std::max)(height_ / downsampleScale_, 1u);
 
-	SceneRenderTarget::Desc desc{};
-	desc.width = bloomWidth;
-	desc.height = bloomHeight;
-	desc.format = RenderFormats::kSceneHdrFormat;
-	desc.createDepth = false;
-	desc.clearColor[0] = 0.0f;
-	desc.clearColor[1] = 0.0f;
-	desc.clearColor[2] = 0.0f;
-	desc.clearColor[3] = 1.0f;
-
-	if (!initialized_) {
-		brightTarget_.Initialize(dxCommon_, srvManager_, desc);
-		blurTargets_[0].Initialize(dxCommon_, srvManager_, desc);
-		blurTargets_[1].Initialize(dxCommon_, srvManager_, desc);
-	} else {
-		brightTarget_.Resize(bloomWidth, bloomHeight);
-		blurTargets_[0].Resize(bloomWidth, bloomHeight);
-		blurTargets_[1].Resize(bloomWidth, bloomHeight);
-	}
+	brightTarget_.Resize(bloomWidth, bloomHeight);
+	blurTargets_[0].Resize(bloomWidth, bloomHeight);
+	blurTargets_[1].Resize(bloomWidth, bloomHeight);
 }
 
 void BloomRenderer::BeginFrame() {

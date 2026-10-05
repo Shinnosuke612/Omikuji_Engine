@@ -347,7 +347,25 @@ void Game::Initialize() {
 	sceneTargetDesc.clearColor[1] = 0.2f;
 	sceneTargetDesc.clearColor[2] = 0.8f;
 	sceneTargetDesc.clearColor[3] = 1.0f;
-	sceneRenderTarget_->Initialize(dxCommon_, srvManager_, sceneTargetDesc);
+	auto initializeRequiredRenderTarget = [this, &showSceneStartupError](
+		SceneRenderTarget* renderTarget,
+		const SceneRenderTarget::Desc& desc,
+		const char* name
+	) {
+		if (renderTarget->Initialize(dxCommon_, srvManager_, desc)) {
+			return true;
+		}
+		showSceneStartupError(
+			SceneStartupErrorKind::RenderResource,
+			std::string("Failed to allocate SRV descriptors for ") + name
+		);
+		return false;
+	};
+	if (!initializeRequiredRenderTarget(
+		sceneRenderTarget_, sceneTargetDesc, "the scene render target"
+	)) {
+		return;
+	}
 	for (SceneRenderTarget*& renderTarget : postProcessRenderTargets_) {
 		renderTarget = new SceneRenderTarget();
 		SceneRenderTarget::Desc postTargetDesc{};
@@ -359,7 +377,11 @@ void Game::Initialize() {
 		postTargetDesc.clearColor[1] = 0.0f;
 		postTargetDesc.clearColor[2] = 0.0f;
 		postTargetDesc.clearColor[3] = 1.0f;
-		renderTarget->Initialize(dxCommon_, srvManager_, postTargetDesc);
+		if (!initializeRequiredRenderTarget(
+			renderTarget, postTargetDesc, "a post-process render target"
+		)) {
+			return;
+		}
 	}
 
 	textOverlayRenderTarget_ = new SceneRenderTarget();
@@ -369,7 +391,11 @@ void Game::Initialize() {
 	textOverlayDesc.format = RenderFormats::kDisplayFormat;
 	textOverlayDesc.createDepth = false;
 	textOverlayDesc.clearColor[3] = 1.0f;
-	textOverlayRenderTarget_->Initialize(dxCommon_, srvManager_, textOverlayDesc);
+	if (!initializeRequiredRenderTarget(
+		textOverlayRenderTarget_, textOverlayDesc, "the text overlay render target"
+	)) {
+		return;
+	}
 	motionBlurHistoryRenderTarget_ = new SceneRenderTarget();
 	SceneRenderTarget::Desc motionBlurHistoryDesc{};
 	motionBlurHistoryDesc.width = dxCommon_->GetClientWidth();
@@ -377,9 +403,13 @@ void Game::Initialize() {
 	motionBlurHistoryDesc.format = RenderFormats::kDisplayFormat;
 	motionBlurHistoryDesc.createDepth = false;
 	motionBlurHistoryDesc.clearColor[3] = 1.0f;
-	motionBlurHistoryRenderTarget_->Initialize(
-		dxCommon_, srvManager_, motionBlurHistoryDesc
-	);
+	if (!initializeRequiredRenderTarget(
+		motionBlurHistoryRenderTarget_,
+		motionBlurHistoryDesc,
+		"the motion blur history render target"
+	)) {
+		return;
+	}
 	foregroundComposeRenderTarget_ = new SceneRenderTarget();
 	SceneRenderTarget::Desc foregroundComposeDesc{};
 	foregroundComposeDesc.width = dxCommon_->GetClientWidth();
@@ -390,15 +420,20 @@ void Game::Initialize() {
 	foregroundComposeDesc.clearColor[1] = 0.0f;
 	foregroundComposeDesc.clearColor[2] = 0.0f;
 	foregroundComposeDesc.clearColor[3] = 1.0f;
-	foregroundComposeRenderTarget_->Initialize(
-		dxCommon_,
-		srvManager_,
-		foregroundComposeDesc
-	);
+	if (!initializeRequiredRenderTarget(
+		foregroundComposeRenderTarget_,
+		foregroundComposeDesc,
+		"the foreground compose render target"
+	)) {
+		return;
+	}
 	fullscreenCopy_ = new FullscreenCopy();
 	fullscreenCopy_->Initialize(dxCommon_);
 	bloomRenderer_ = new BloomRenderer();
-	bloomRenderer_->Initialize(dxCommon_, srvManager_);
+	if (!bloomRenderer_->Initialize(dxCommon_, srvManager_)) {
+		delete bloomRenderer_;
+		bloomRenderer_ = nullptr;
+	}
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (editorSession_) {
@@ -412,11 +447,12 @@ void Game::Initialize() {
 		modelPreviewDesc.clearColor[1] = 0.04f;
 		modelPreviewDesc.clearColor[2] = 0.05f;
 		modelPreviewDesc.clearColor[3] = 1.0f;
-		modelPreviewRenderTarget_->Initialize(
-			dxCommon_,
-			srvManager_,
-			modelPreviewDesc
-		);
+		if (!modelPreviewRenderTarget_->Initialize(
+			dxCommon_, srvManager_, modelPreviewDesc
+		)) {
+			delete modelPreviewRenderTarget_;
+			modelPreviewRenderTarget_ = nullptr;
+		} else {
 		modelPreviewCamera_ = new Camera();
 		modelPreviewCamera_->SetOrbitMode(true);
 		modelPreviewCamera_->SetFovY(0.7f);
@@ -428,8 +464,12 @@ void Game::Initialize() {
 		modelPreviewObject_->SetCamera(modelPreviewCamera_);
 		// Asset previews must not depend on the active scene's light bindings.
 		modelPreviewObject_->SetEnableLighting(false);
+		}
 		prefabPreviewRenderer_ = new PrefabPreviewRenderer();
-		prefabPreviewRenderer_->Initialize(dxCommon_, srvManager_);
+		if (!prefabPreviewRenderer_->Initialize(dxCommon_, srvManager_)) {
+			delete prefabPreviewRenderer_;
+			prefabPreviewRenderer_ = nullptr;
+		}
 	}
 #endif
 	baseExposure_ = bloomParameters_.exposure;
@@ -1676,12 +1716,25 @@ void Game::Draw() {
 		);
 	}
 
-	bloomRenderer_->BeginFrame();
-	bloomRenderer_->SetParameters(bloomParameters_);
-	bloomRenderer_->Apply(
-		sceneRenderTarget_->GetSrvGpuHandle(),
-		postProcessRenderTargets_[0]
-	);
+	if (bloomRenderer_) {
+		bloomRenderer_->BeginFrame();
+		bloomRenderer_->SetParameters(bloomParameters_);
+		bloomRenderer_->Apply(
+			sceneRenderTarget_->GetSrvGpuHandle(),
+			postProcessRenderTargets_[0]
+		);
+	} else {
+		postProcessRenderTargets_[0]->Begin();
+		srvManager_->PreDraw();
+		fullscreenCopy_->SetParameters({});
+		fullscreenCopy_->Draw(
+			sceneRenderTarget_->GetSrvGpuHandle(),
+			depthHandle,
+			maskHandle,
+			FullscreenCopy::Effect::kCopy
+		);
+		postProcessRenderTargets_[0]->End();
+	}
 	D3D12_GPU_DESCRIPTOR_HANDLE sourceHandle =
 		postProcessRenderTargets_[0]->GetSrvGpuHandle();
 	int passIndex = 1;

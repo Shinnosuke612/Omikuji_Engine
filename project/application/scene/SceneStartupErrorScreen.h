@@ -10,7 +10,8 @@ enum class SceneStartupErrorKind {
 	CatalogValidation,
 	StartScene,
 	EditorStartup,
-	RuntimeStartup
+	RuntimeStartup,
+	RenderResource
 };
 
 class SceneStartupErrorScreen final {

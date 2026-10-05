@@ -198,7 +198,6 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 			bitmap.width,
 			bitmap.height
 		)) {
-			runtime.bitmapSize = {};
 			continue;
 		}
 		if (!runtime.sprite) {
@@ -218,6 +217,9 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 	}
 	for (auto iterator = texts_.begin(); iterator != texts_.end();) {
 		if (!requiredIds.contains(iterator->first)) {
+			if (!iterator->second.textureKey.empty()) {
+				TextureManager::GetInstance()->ReleaseTexture(iterator->second.textureKey);
+			}
 			iterator = texts_.erase(iterator);
 		} else {
 			++iterator;
@@ -318,6 +320,11 @@ bool SceneTextRenderSystem::HasScreenOverlay(const SceneDocument& document) cons
 }
 
 void SceneTextRenderSystem::Finalize() {
+	for (const auto& entry : texts_) {
+		if (!entry.second.textureKey.empty()) {
+			TextureManager::GetInstance()->ReleaseTexture(entry.second.textureKey);
+		}
+	}
 	texts_.clear();
 	textOverrides_.clear();
 	presentationOverrides_.clear();

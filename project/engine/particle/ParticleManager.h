@@ -451,12 +451,12 @@ public:
 	);
 	void Draw(bool drawGpuParticles = true);
 
-	void CreateParticleGroup(const std::string& name, const std::string& textureFilePath);
+	bool CreateParticleGroup(const std::string& name, const std::string& textureFilePath);
 
 	bool HasParticleGroup(const std::string& name) const;
 	void ClearParticleGroup(const std::string& name);
 	void ClearActiveParticles();
-	void CreateParticleGroupIfNeeded(
+	bool CreateParticleGroupIfNeeded(
 		const std::string& name,
 		const std::string& textureFilePath
 	);
@@ -490,7 +490,7 @@ public:
 	void SetGroupRenderDesc(const std::string& name, const ParticleRenderDesc& render);
 	void SetGpuParticleEnabled(bool enabled);
 	bool IsGpuParticleEnabled() const { return gpuParticleEnabled_; }
-	void ApplyGpuParticleEffect(const ParticleEffectDesc& effect);
+	bool ApplyGpuParticleEffect(const ParticleEffectDesc& effect);
 	void ClearGpuParticles();
 	void ClearGpuParticlePreview();
 	void RequestGpuParticleReset();
@@ -557,7 +557,7 @@ private:
 	bool LoadPlacementEmitterSettings(SceneParticlePlacement& placement);
 	GpuParticle* GetOrCreateGpuParticle(const std::string& key);
 	GpuParticle* FindGpuParticle(const std::string& key);
-	void ApplyGpuParticleEffectToKey(
+	bool ApplyGpuParticleEffectToKey(
 		const std::string& key,
 		const ParticleEffectDesc& effect
 	);

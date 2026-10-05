@@ -209,7 +209,7 @@ public:
 		float frequencyTime = 0.0f;
 	};
 
-	void Initialize(
+	bool Initialize(
 		ParticleCommon* particleCommon,
 		SrvManager* srvManager,
 		const std::string& textureFilePath = "resources/circle.png"
@@ -226,10 +226,10 @@ public:
 	bool LoadConfig(const std::string& filePath);
 	bool SaveConfig(const std::string& filePath) const;
 	const Config& GetConfig() const { return config_; }
-	bool IsInitialized() const { return particleResource_ != nullptr; }
+	bool IsInitialized() const;
 
 private:
-	void CreateParticleResource();
+	bool CreateParticleResource();
 	void CreateConstantBuffers();
 	void CreateRootSignatures();
 	void CreatePipelineStates();
@@ -250,11 +250,11 @@ private:
 	DirectXCommon* dxCommon_ = nullptr;
 
 	std::string textureFilePath_;
-	uint32_t textureSrvIndex_ = 0;
-	uint32_t particleSrvIndex_ = 0;
-	uint32_t particleUavIndex_ = 0;
-	uint32_t freeListIndexUavIndex_ = 0;
-	uint32_t freeListUavIndex_ = 0;
+	uint32_t textureSrvIndex_ = UINT32_MAX;
+	uint32_t particleSrvIndex_ = UINT32_MAX;
+	uint32_t particleUavIndex_ = UINT32_MAX;
+	uint32_t freeListIndexUavIndex_ = UINT32_MAX;
+	uint32_t freeListUavIndex_ = UINT32_MAX;
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> particleResource_;
 	D3D12_RESOURCE_STATES particleResourceState_ = D3D12_RESOURCE_STATE_COMMON;

@@ -53,6 +53,11 @@ bool SceneStartupErrorScreen::Show(
 		guidance_ =
 			L"Check the Release start Scene asset and its runtimeProfile before rebuilding.";
 		break;
+	case SceneStartupErrorKind::RenderResource:
+		heading_ = L"Required render resource could not be created";
+		guidance_ =
+			L"Close other descriptor-heavy features, restart the application, and try again.";
+		break;
 	}
 
 	const HINSTANCE instance = GetModuleHandleW(nullptr);

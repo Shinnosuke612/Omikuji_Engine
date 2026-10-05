@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 namespace {
 
@@ -272,9 +273,11 @@ bool TextureManager::RegisterTexture(
 		return false;
 	}
 
-	const bool reusesExistingDescriptor = textureDatas.contains(textureKey);
-	if (!reusesExistingDescriptor) {
-		assert(srvManager->CanAllocate());
+	auto existing = textureDatas.find(textureKey);
+	const bool reusesExistingDescriptor = existing != textureDatas.end();
+	if (reusesExistingDescriptor && !srvManager->IsAllocated(existing->second.srvIndex)) {
+		Logger::Log("Texture has an invalid SRV slot: " + textureKey + "\n");
+		return false;
 	}
 
 	DirectX::ScratchImage mipImages{};
@@ -299,50 +302,62 @@ bool TextureManager::RegisterTexture(
 		}
 	}
 
-	TextureData& textureData = textureDatas[textureKey];
-
-	textureData.metadata = uploadImage->GetMetadata();
-	textureData.resource = dxCommon->CreateTextureResource(textureData.metadata);
+	TextureData candidate{};
+	candidate.metadata = uploadImage->GetMetadata();
+	candidate.resource = dxCommon->CreateTextureResource(candidate.metadata);
 
 	// 既存keyの更新はDescriptorを再利用し、Runtime編集でSRVを増やさない。
-	if (!reusesExistingDescriptor) {
-		textureData.srvIndex = srvManager->Allocate();
-		textureData.srvHandleCPU = srvManager->GetCPUDescriptorHandle(textureData.srvIndex);
-		textureData.srvHandleGPU = srvManager->GetGPUDescriptorHandle(textureData.srvIndex);
+	if (reusesExistingDescriptor) {
+		candidate.srvIndex = existing->second.srvIndex;
+		candidate.srvHandleCPU = existing->second.srvHandleCPU;
+		candidate.srvHandleGPU = existing->second.srvHandleGPU;
+	} else {
+		if (!srvManager->TryAllocate(candidate.srvIndex)) {
+			Logger::Log("No SRV slot available for texture: " + textureKey + "\n");
+			return false;
+		}
+		candidate.srvHandleCPU = srvManager->GetCPUDescriptorHandle(candidate.srvIndex);
+		candidate.srvHandleGPU = srvManager->GetGPUDescriptorHandle(candidate.srvIndex);
 	}
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-	srvDesc.Format = textureData.metadata.format;
+	srvDesc.Format = candidate.metadata.format;
 	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
-	if (textureData.metadata.IsCubemap()) {
+	if (candidate.metadata.IsCubemap()) {
 		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
 		srvDesc.TextureCube.MostDetailedMip = 0;
-		srvDesc.TextureCube.MipLevels = UINT(textureData.metadata.mipLevels);
+		srvDesc.TextureCube.MipLevels = UINT(candidate.metadata.mipLevels);
 		srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
 	}
 	else {
 		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MipLevels = UINT(textureData.metadata.mipLevels);
+		srvDesc.Texture2D.MipLevels = UINT(candidate.metadata.mipLevels);
 	}
-
-	dxCommon->GetDevice()->CreateShaderResourceView(
-		textureData.resource.Get(),
-		&srvDesc,
-		textureData.srvHandleCPU
-	);
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource;
 	intermediateResource.Attach(
-		dxCommon->UploadTextureData(textureData.resource, *uploadImage)
+		dxCommon->UploadTextureData(candidate.resource, *uploadImage)
 	);
 	if (!intermediateResource) {
-		textureDatas.erase(textureKey);
+		if (!reusesExistingDescriptor && !srvManager->Free(candidate.srvIndex)) {
+			Logger::Log("Failed to return SRV slot for texture: " + textureKey + "\n");
+		}
 		Logger::Log("Failed to upload texture: " + textureKey + "\n");
 		return false;
 	}
 
 	dxCommon->ExecuteCommandListAndWait();
+	dxCommon->GetDevice()->CreateShaderResourceView(
+		candidate.resource.Get(),
+		&srvDesc,
+		candidate.srvHandleCPU
+	);
+	if (reusesExistingDescriptor) {
+		existing->second = std::move(candidate);
+	} else {
+		textureDatas.emplace(textureKey, std::move(candidate));
+	}
 	return true;
 }
 
@@ -396,6 +411,16 @@ bool TextureManager::UpdateTextureFromPixels(
 
 bool TextureManager::HasTexture(const std::string& textureKey) const {
 	return textureDatas.contains(textureKey);
+}
+
+bool TextureManager::ReleaseTexture(const std::string& textureKey) {
+	const auto found = textureDatas.find(textureKey);
+	if (found == textureDatas.end() || !srvManager->Free(found->second.srvIndex)) {
+		return false;
+	}
+	textureDatas.erase(found);
+	failedTextureKeys.erase(textureKey);
+	return true;
 }
 
 void TextureManager::ClearFailedTextureCache() {

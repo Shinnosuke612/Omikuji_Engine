@@ -8,7 +8,25 @@
 #include "RenderFormats.h"
 #include "../3d/SrvManager.h"
 
-void SceneRenderTarget::Initialize(
+SceneRenderTarget::~SceneRenderTarget() {
+	ReleaseDescriptors();
+}
+
+void SceneRenderTarget::ReleaseDescriptors() {
+	if (srvManager_) {
+		if (depthSrvIndex_ != SrvManager::kInvalidIndex) {
+			srvManager_->Free(depthSrvIndex_);
+			depthSrvIndex_ = SrvManager::kInvalidIndex;
+		}
+		if (srvIndex_ != SrvManager::kInvalidIndex) {
+			srvManager_->Free(srvIndex_);
+			srvIndex_ = SrvManager::kInvalidIndex;
+		}
+	}
+	srvManager_ = nullptr;
+}
+
+bool SceneRenderTarget::Initialize(
 	DirectXCommon* dxCommon,
 	SrvManager* srvManager,
 	uint32_t width,
@@ -17,31 +35,40 @@ void SceneRenderTarget::Initialize(
 	Desc desc{};
 	desc.width = width;
 	desc.height = height;
-	Initialize(dxCommon, srvManager, desc);
+	return Initialize(dxCommon, srvManager, desc);
 }
 
-void SceneRenderTarget::Initialize(
+bool SceneRenderTarget::Initialize(
 	DirectXCommon* dxCommon,
 	SrvManager* srvManager,
 	const Desc& desc
 ) {
 	assert(dxCommon);
 	assert(srvManager);
+	if (!dxCommon || !srvManager || initialized_) {
+		return false;
+	}
+
+	uint32_t srvIndex = SrvManager::kInvalidIndex;
+	if (!srvManager->TryAllocate(srvIndex)) {
+		return false;
+	}
+	srvManager_ = srvManager;
+	srvIndex_ = srvIndex;
+
+	uint32_t depthSrvIndex = SrvManager::kInvalidIndex;
+	if (desc.createDepth && !srvManager->TryAllocate(depthSrvIndex)) {
+		ReleaseDescriptors();
+		return false;
+	}
 
 	dxCommon_ = dxCommon;
-	srvManager_ = srvManager;
+	depthSrvIndex_ = depthSrvIndex;
 	format_ = desc.format;
 	createDepth_ = desc.createDepth;
 	for (uint32_t index = 0; index < 4; ++index) {
 		clearColor_[index] = desc.clearColor[index];
 	}
-	assert(srvManager_->CanAllocate());
-	srvIndex_ = srvManager_->Allocate();
-	if (createDepth_) {
-		assert(srvManager_->CanAllocate());
-		depthSrvIndex_ = srvManager_->Allocate();
-	}
-
 	rtvHeap_ = dxCommon_->CreateDescriptorHeap(
 		D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
 		1,
@@ -57,8 +84,17 @@ void SceneRenderTarget::Initialize(
 
 	width_ = (std::max)(desc.width, 1u);
 	height_ = (std::max)(desc.height, 1u);
-	CreateResources();
+	if (!CreateResources()) {
+		colorResource_.Reset();
+		depthResource_.Reset();
+		rtvHeap_.Reset();
+		dsvHeap_.Reset();
+		ReleaseDescriptors();
+		dxCommon_ = nullptr;
+		return false;
+	}
 	initialized_ = true;
+	return true;
 }
 
 void SceneRenderTarget::Resize(uint32_t width, uint32_t height) {
@@ -74,7 +110,9 @@ void SceneRenderTarget::Resize(uint32_t width, uint32_t height) {
 	depthResource_.Reset();
 	colorReadable_ = true;
 	depthReadable_ = false;
-	CreateResources();
+	if (!CreateResources()) {
+		initialized_ = false;
+	}
 }
 
 void SceneRenderTarget::Begin() {
@@ -209,7 +247,7 @@ DXGI_FORMAT ToResourceFormat(DXGI_FORMAT format) {
 }
 }
 
-void SceneRenderTarget::CreateResources() {
+bool SceneRenderTarget::CreateResources() {
 	D3D12_HEAP_PROPERTIES heapProperties{};
 	heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -238,6 +276,9 @@ void SceneRenderTarget::CreateResources() {
 		IID_PPV_ARGS(&colorResource_)
 	);
 	assert(SUCCEEDED(result));
+	if (!colorResource_ || !rtvHeap_) {
+		return false;
+	}
 
 	D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
 	rtvDesc.Format = format_;
@@ -249,13 +290,12 @@ void SceneRenderTarget::CreateResources() {
 	);
 
 	if (!createDepth_) {
-		srvManager_->CreateSRVforTexture2D(
+		return srvManager_->CreateSRVforTexture2D(
 			srvIndex_,
 			colorResource_.Get(),
 			format_,
 			1
 		);
-		return;
 	}
 
 	D3D12_RESOURCE_DESC depthDesc{};
@@ -281,6 +321,9 @@ void SceneRenderTarget::CreateResources() {
 		IID_PPV_ARGS(&depthResource_)
 	);
 	assert(SUCCEEDED(result));
+	if (!depthResource_ || !dsvHeap_) {
+		return false;
+	}
 
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
 	dsvDesc.Format = RenderFormats::kDepthDsvFormat;
@@ -291,16 +334,17 @@ void SceneRenderTarget::CreateResources() {
 		dsvHeap_->GetCPUDescriptorHandleForHeapStart()
 	);
 
-	srvManager_->CreateSRVforTexture2D(
+	const bool colorSrvCreated = srvManager_->CreateSRVforTexture2D(
 		srvIndex_,
 		colorResource_.Get(),
 		format_,
 		1
 	);
-	srvManager_->CreateSRVforTexture2D(
+	const bool depthSrvCreated = srvManager_->CreateSRVforTexture2D(
 		depthSrvIndex_,
 		depthResource_.Get(),
 		RenderFormats::kDepthSrvFormat,
 		1
 	);
+	return colorSrvCreated && depthSrvCreated;
 }

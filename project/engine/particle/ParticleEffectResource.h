@@ -41,7 +41,7 @@ bool Save(const std::string& filePath, const ParticleEffectDesc& effect);
 
 // ParticleManager側にGroupを用意し、BlendModeを反映する
 // clearParticlesがtrueなら、既存粒子だけ消してから使う
-void PrepareParticleGroup(const ParticleEffectDesc& effect, bool clearParticles = true);
+bool PrepareParticleGroup(const ParticleEffectDesc& effect, bool clearParticles = true);
 
 // 既存Emitterに設定を流し込む
 void ApplyToEmitter(ParticleEmitter& emitter, const ParticleEffectDesc& effect);

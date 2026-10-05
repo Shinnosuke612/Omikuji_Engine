@@ -57,6 +57,9 @@ private:
 		Vector3 debugTargetRotate{};
 		bool debugTargetIsMain = false;
 		bool debugTargetHasPlayerBehavior = false;
+		bool failedTargetSize = false;
+		uint32_t failedWidth = 0;
+		uint32_t failedHeight = 0;
 		uint64_t debugSrvPtr = 0;
 		uint64_t debugAppliedTextureOverridePtr = 0;
 		std::string debugStatus = "Waiting for offscreen pass";

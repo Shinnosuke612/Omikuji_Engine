@@ -38,7 +38,9 @@ namespace {
 			return;
 		}
 		// CreateEmitterは同名Groupを消去するため、既存粒子を保つPrepare+Emitを使う。
-		ParticleEffectResource::PrepareParticleGroup(effect, false);
+		if (!ParticleEffectResource::PrepareParticleGroup(effect, false)) {
+			return;
+		}
 		ParticleManager::GetInstance()->Emit(
 			effect.name,
 			position,

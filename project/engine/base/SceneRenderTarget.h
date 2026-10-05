@@ -12,6 +12,13 @@ class SrvManager;
 
 class SceneRenderTarget {
 public:
+	SceneRenderTarget() = default;
+	~SceneRenderTarget();
+	SceneRenderTarget(const SceneRenderTarget&) = delete;
+	SceneRenderTarget& operator=(const SceneRenderTarget&) = delete;
+	SceneRenderTarget(SceneRenderTarget&&) = delete;
+	SceneRenderTarget& operator=(SceneRenderTarget&&) = delete;
+
 	struct Desc {
 		uint32_t width = 1;
 		uint32_t height = 1;
@@ -20,13 +27,13 @@ public:
 		float clearColor[4]{ 0.1f, 0.2f, 0.8f, 1.0f };
 	};
 
-	void Initialize(
+	bool Initialize(
 		DirectXCommon* dxCommon,
 		SrvManager* srvManager,
 		uint32_t width,
 		uint32_t height
 	);
-	void Initialize(
+	bool Initialize(
 		DirectXCommon* dxCommon,
 		SrvManager* srvManager,
 		const Desc& desc
@@ -43,7 +50,8 @@ public:
 	D3D12_GPU_DESCRIPTOR_HANDLE GetDepthSrvGpuHandle() const;
 
 private:
-	void CreateResources();
+	bool CreateResources();
+	void ReleaseDescriptors();
 
 	DirectXCommon* dxCommon_ = nullptr;
 	SrvManager* srvManager_ = nullptr;
@@ -53,8 +61,8 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap_;
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;
 
-	uint32_t srvIndex_ = 0;
-	uint32_t depthSrvIndex_ = 0;
+	uint32_t srvIndex_ = UINT32_MAX;
+	uint32_t depthSrvIndex_ = UINT32_MAX;
 	uint32_t width_ = 1;
 	uint32_t height_ = 1;
 	DXGI_FORMAT format_ = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;

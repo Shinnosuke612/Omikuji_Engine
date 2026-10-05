@@ -14,6 +14,7 @@
 #include "../utility/Logger.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -310,13 +311,16 @@ Vector4 ReadCsvVector4(
 
 } // namespace
 
-void GpuParticle::Initialize(
+bool GpuParticle::Initialize(
 	ParticleCommon* particleCommon,
 	SrvManager* srvManager,
 	const std::string& textureFilePath
 ) {
 	assert(particleCommon);
 	assert(srvManager);
+	if (!particleCommon || !srvManager || IsInitialized()) {
+		return false;
+	}
 
 	particleCommon_ = particleCommon;
 	srvManager_ = srvManager;
@@ -326,9 +330,15 @@ void GpuParticle::Initialize(
 	textureFilePath_ = textureFilePath;
 
 	const bool loaded = ApplyTexture(textureFilePath_);
-	assert(loaded);
+	if (!loaded) {
+		Reset();
+		return false;
+	}
 
-	CreateParticleResource();
+	if (!CreateParticleResource()) {
+		Reset();
+		return false;
+	}
 	CreateConstantBuffers();
 	CreateRootSignatures();
 	CreatePipelineStates();
@@ -338,6 +348,7 @@ void GpuParticle::Initialize(
 	CopyStringsToBuffers();
 
 	needsInitialize_ = true;
+	return true;
 }
 
 void GpuParticle::Reset() {
@@ -370,11 +381,11 @@ void GpuParticle::Reset() {
 	srvManager_ = nullptr;
 	dxCommon_ = nullptr;
 	textureFilePath_.clear();
-	textureSrvIndex_ = 0;
-	particleSrvIndex_ = 0;
-	particleUavIndex_ = 0;
-	freeListIndexUavIndex_ = 0;
-	freeListUavIndex_ = 0;
+	textureSrvIndex_ = UINT32_MAX;
+	particleSrvIndex_ = UINT32_MAX;
+	particleUavIndex_ = UINT32_MAX;
+	freeListIndexUavIndex_ = UINT32_MAX;
+	freeListUavIndex_ = UINT32_MAX;
 	particleResourceState_ = D3D12_RESOURCE_STATE_COMMON;
 	freeListIndexResourceState_ = D3D12_RESOURCE_STATE_COMMON;
 	freeListResourceState_ = D3D12_RESOURCE_STATE_COMMON;
@@ -398,10 +409,43 @@ void GpuParticle::ClearParticles() {
 	}
 }
 
-void GpuParticle::CreateParticleResource() {
+bool GpuParticle::CreateParticleResource() {
 	assert(dxCommon_);
 	assert(srvManager_);
-	assert(srvManager_->CanAllocate());
+	if (!dxCommon_ || !srvManager_) {
+		return false;
+	}
+
+	std::array<uint32_t, 4> allocatedIndices{
+		SrvManager::kInvalidIndex,
+		SrvManager::kInvalidIndex,
+		SrvManager::kInvalidIndex,
+		SrvManager::kInvalidIndex
+	};
+	auto rollback = [this, &allocatedIndices]() {
+		for (uint32_t allocatedIndex : allocatedIndices) {
+			if (allocatedIndex != SrvManager::kInvalidIndex) {
+				srvManager_->Free(allocatedIndex);
+			}
+		}
+		particleResource_.Reset();
+		freeListIndexResource_.Reset();
+		freeListResource_.Reset();
+		particleSrvIndex_ = SrvManager::kInvalidIndex;
+		particleUavIndex_ = SrvManager::kInvalidIndex;
+		freeListIndexUavIndex_ = SrvManager::kInvalidIndex;
+		freeListUavIndex_ = SrvManager::kInvalidIndex;
+		particleResourceState_ = D3D12_RESOURCE_STATE_COMMON;
+		freeListIndexResourceState_ = D3D12_RESOURCE_STATE_COMMON;
+		freeListResourceState_ = D3D12_RESOURCE_STATE_COMMON;
+	};
+	for (uint32_t& index : allocatedIndices) {
+		if (srvManager_->TryAllocate(index)) {
+			continue;
+		}
+		rollback();
+		return false;
+	}
 
 	particleResource_ = CreateUavBufferResource(
 		dxCommon_->GetDevice(),
@@ -409,50 +453,72 @@ void GpuParticle::CreateParticleResource() {
 	);
 	particleResourceState_ = D3D12_RESOURCE_STATE_COMMON;
 
-	particleSrvIndex_ = srvManager_->Allocate();
-	srvManager_->CreateSRVforStructuredBuffer(
-		particleSrvIndex_,
+	if (!srvManager_->CreateSRVforStructuredBuffer(
+		allocatedIndices[0],
 		particleResource_.Get(),
 		kMaxParticles,
 		sizeof(ParticleData)
-	);
+	)) {
+		rollback();
+		return false;
+	}
 
-	assert(srvManager_->CanAllocate());
-	particleUavIndex_ = srvManager_->Allocate();
-	srvManager_->CreateUAVforStructuredBuffer(
-		particleUavIndex_,
+	if (!srvManager_->CreateUAVforStructuredBuffer(
+		allocatedIndices[1],
 		particleResource_.Get(),
 		kMaxParticles,
 		sizeof(ParticleData)
-	);
+	)) {
+		rollback();
+		return false;
+	}
 
-	assert(srvManager_->CanAllocate());
 	freeListIndexResource_ =
 		CreateUavBufferResource(dxCommon_->GetDevice(), sizeof(int32_t));
 	freeListIndexResourceState_ = D3D12_RESOURCE_STATE_COMMON;
 
-	freeListIndexUavIndex_ = srvManager_->Allocate();
-	srvManager_->CreateUAVforStructuredBuffer(
-		freeListIndexUavIndex_,
+	if (!srvManager_->CreateUAVforStructuredBuffer(
+		allocatedIndices[2],
 		freeListIndexResource_.Get(),
 		1,
 		sizeof(int32_t)
-	);
+	)) {
+		rollback();
+		return false;
+	}
 
-	assert(srvManager_->CanAllocate());
 	freeListResource_ = CreateUavBufferResource(
 		dxCommon_->GetDevice(),
 		sizeof(uint32_t) * kMaxParticles
 	);
 	freeListResourceState_ = D3D12_RESOURCE_STATE_COMMON;
 
-	freeListUavIndex_ = srvManager_->Allocate();
-	srvManager_->CreateUAVforStructuredBuffer(
-		freeListUavIndex_,
+	if (!srvManager_->CreateUAVforStructuredBuffer(
+		allocatedIndices[3],
 		freeListResource_.Get(),
 		kMaxParticles,
 		sizeof(uint32_t)
-	);
+	)) {
+		rollback();
+		return false;
+	}
+	particleSrvIndex_ = allocatedIndices[0];
+	particleUavIndex_ = allocatedIndices[1];
+	freeListIndexUavIndex_ = allocatedIndices[2];
+	freeListUavIndex_ = allocatedIndices[3];
+	return true;
+}
+
+bool GpuParticle::IsInitialized() const {
+	return
+		srvManager_ &&
+		particleResource_ &&
+		freeListIndexResource_ &&
+		freeListResource_ &&
+		srvManager_->IsAllocated(particleSrvIndex_) &&
+		srvManager_->IsAllocated(particleUavIndex_) &&
+		srvManager_->IsAllocated(freeListIndexUavIndex_) &&
+		srvManager_->IsAllocated(freeListUavIndex_);
 }
 
 void GpuParticle::CreateConstantBuffers() {
@@ -2450,9 +2516,13 @@ void GpuParticle::InitializeParticlesOnGPU() {
 
 	commandList->SetComputeRootSignature(initializeRootSignature_.Get());
 	commandList->SetPipelineState(initializePipelineState_.Get());
-	srvManager_->SetComputeRootDescriptorTable(0, particleUavIndex_);
-	srvManager_->SetComputeRootDescriptorTable(1, freeListIndexUavIndex_);
-	srvManager_->SetComputeRootDescriptorTable(2, freeListUavIndex_);
+	const bool descriptorsBound =
+		srvManager_->SetComputeRootDescriptorTable(0, particleUavIndex_) &&
+		srvManager_->SetComputeRootDescriptorTable(1, freeListIndexUavIndex_) &&
+		srvManager_->SetComputeRootDescriptorTable(2, freeListUavIndex_);
+	if (!descriptorsBound) {
+		return;
+	}
 	commandList->SetComputeRootConstantBufferView(
 		3,
 		emitterResource_->GetGPUVirtualAddress()
@@ -2525,9 +2595,13 @@ void GpuParticle::EmitParticlesOnGPU() {
 
 	commandList->SetComputeRootSignature(emitRootSignature_.Get());
 	commandList->SetPipelineState(emitPipelineState_.Get());
-	srvManager_->SetComputeRootDescriptorTable(0, particleUavIndex_);
-	srvManager_->SetComputeRootDescriptorTable(1, freeListIndexUavIndex_);
-	srvManager_->SetComputeRootDescriptorTable(2, freeListUavIndex_);
+	const bool descriptorsBound =
+		srvManager_->SetComputeRootDescriptorTable(0, particleUavIndex_) &&
+		srvManager_->SetComputeRootDescriptorTable(1, freeListIndexUavIndex_) &&
+		srvManager_->SetComputeRootDescriptorTable(2, freeListUavIndex_);
+	if (!descriptorsBound) {
+		return;
+	}
 	commandList->SetComputeRootConstantBufferView(
 		3,
 		emitterResource_->GetGPUVirtualAddress()
@@ -2596,9 +2670,13 @@ void GpuParticle::UpdateParticlesOnGPU() {
 
 	commandList->SetComputeRootSignature(emitRootSignature_.Get());
 	commandList->SetPipelineState(updatePipelineState_.Get());
-	srvManager_->SetComputeRootDescriptorTable(0, particleUavIndex_);
-	srvManager_->SetComputeRootDescriptorTable(1, freeListIndexUavIndex_);
-	srvManager_->SetComputeRootDescriptorTable(2, freeListUavIndex_);
+	const bool descriptorsBound =
+		srvManager_->SetComputeRootDescriptorTable(0, particleUavIndex_) &&
+		srvManager_->SetComputeRootDescriptorTable(1, freeListIndexUavIndex_) &&
+		srvManager_->SetComputeRootDescriptorTable(2, freeListUavIndex_);
+	if (!descriptorsBound) {
+		return;
+	}
 	commandList->SetComputeRootConstantBufferView(
 		3,
 		emitterResource_->GetGPUVirtualAddress()
@@ -2633,7 +2711,7 @@ void GpuParticle::UpdateParticlesOnGPU() {
 }
 
 void GpuParticle::Update() {
-	if (!emitterData_ || !perFrameData_) {
+	if (!IsInitialized() || !emitterData_ || !perFrameData_) {
 		return;
 	}
 
@@ -2659,7 +2737,7 @@ void GpuParticle::Update() {
 }
 
 void GpuParticle::Draw(Camera* camera) {
-	if (!camera || !particleResource_) {
+	if (!camera || !IsInitialized()) {
 		return;
 	}
 	if (
@@ -2732,8 +2810,12 @@ void GpuParticle::Draw(Camera* camera) {
 		0,
 		materialResource_->GetGPUVirtualAddress()
 	);
-	srvManager_->SetGraphicsRootDescriptorTable(1, particleSrvIndex_);
-	srvManager_->SetGraphicsRootDescriptorTable(2, textureSrvIndex_);
+	const bool descriptorsBound =
+		srvManager_->SetGraphicsRootDescriptorTable(1, particleSrvIndex_) &&
+		srvManager_->SetGraphicsRootDescriptorTable(2, textureSrvIndex_);
+	if (!descriptorsBound) {
+		return;
+	}
 	commandList->SetGraphicsRootConstantBufferView(
 		3,
 		directionalLightResource_->GetGPUVirtualAddress()

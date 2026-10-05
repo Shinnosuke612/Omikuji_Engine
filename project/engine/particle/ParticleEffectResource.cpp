@@ -748,23 +748,26 @@ bool Load(const std::string& filePath, ParticleEffectDesc& outEffect) {
 	return true;
 }
 
-void PrepareParticleGroup(const ParticleEffectDesc& effect, bool clearParticles) {
+bool PrepareParticleGroup(const ParticleEffectDesc& effect, bool clearParticles) {
 	if (effect.simulationType == ParticleSimulationType::kGPU) {
 		(void)clearParticles;
-		ParticleManager::GetInstance()->ApplyGpuParticleEffect(effect);
-		return;
+		return ParticleManager::GetInstance()->ApplyGpuParticleEffect(effect);
 	}
 
 	ParticleManager* particleManager = ParticleManager::GetInstance();
 
-	particleManager->CreateParticleGroupIfNeeded(
+	if (!particleManager->CreateParticleGroupIfNeeded(
 		effect.name,
 		effect.textureFilePath
-	);
-	particleManager->SetParticleGroupTexture(
+	)) {
+		return false;
+	}
+	if (!particleManager->SetParticleGroupTexture(
 		effect.name,
 		effect.textureFilePath
-	);
+	)) {
+		return false;
+	}
 
 	particleManager->SetGroupBlendMode(effect.name, effect.blendMode);
 	particleManager->SetGroupRenderDesc(effect.name, effect.behavior.render);
@@ -772,6 +775,7 @@ void PrepareParticleGroup(const ParticleEffectDesc& effect, bool clearParticles)
 	if (clearParticles) {
 		particleManager->ClearParticleGroup(effect.name);
 	}
+	return true;
 }
 
 void ApplyToEmitter(ParticleEmitter& emitter, const ParticleEffectDesc& effect) {
@@ -795,7 +799,9 @@ ParticleEmitter* CreateEmitter(const ParticleEffectDesc& effect) {
 		return nullptr;
 	}
 
-	PrepareParticleGroup(effect, true);
+	if (!PrepareParticleGroup(effect, true)) {
+		return nullptr;
+	}
 
 	ParticleEmitter* emitter = new ParticleEmitter();
 	emitter->Initialize(ParticleManager::GetInstance(), effect.name);

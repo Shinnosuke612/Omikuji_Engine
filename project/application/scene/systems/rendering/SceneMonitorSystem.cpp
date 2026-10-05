@@ -109,8 +109,7 @@ Object3d* SceneMonitorSystem::FindObject(
 ) const {
 	for (const SceneRuntimeObjectBinding& binding : bindings) {
 		if (
-			binding.entity &&
-			binding.entity->id == entityId
+			binding.entityId == entityId
 		) {
 			return binding.object;
 		}
@@ -170,22 +169,36 @@ void SceneMonitorSystem::Sync(
 			runtime.width != width ||
 			runtime.height != height
 		) {
-			runtime.renderTarget = std::make_unique<SceneRenderTarget>();
-			SceneRenderTarget::Desc desc{};
-			desc.width = width;
-			desc.height = height;
-			desc.format = RenderFormats::kSceneHdrFormat;
-			desc.clearColor[0] = 0.02f;
-			desc.clearColor[1] = 0.02f;
-			desc.clearColor[2] = 0.025f;
-			desc.clearColor[3] = 1.0f;
-			runtime.renderTarget->Initialize(
-				dxCommon_,
-				srvManager_,
-				desc
-			);
-			runtime.width = width;
-			runtime.height = height;
+			const bool retryBlocked =
+				!runtime.renderTarget &&
+				runtime.failedTargetSize &&
+				runtime.failedWidth == width &&
+				runtime.failedHeight == height;
+			if (!retryBlocked) {
+				auto candidate = std::make_unique<SceneRenderTarget>();
+				SceneRenderTarget::Desc desc{};
+				desc.width = width;
+				desc.height = height;
+				desc.format = RenderFormats::kSceneHdrFormat;
+				desc.clearColor[0] = 0.02f;
+				desc.clearColor[1] = 0.02f;
+				desc.clearColor[2] = 0.025f;
+				desc.clearColor[3] = 1.0f;
+				if (candidate->Initialize(dxCommon_, srvManager_, desc)) {
+					ClearTextureOverride(entity.id, bindings);
+					runtime.renderTarget = std::move(candidate);
+					runtime.width = width;
+					runtime.height = height;
+					runtime.failedTargetSize = false;
+				} else {
+					ClearTextureOverride(entity.id, bindings);
+					runtime.renderTarget.reset();
+					runtime.failedTargetSize = true;
+					runtime.failedWidth = width;
+					runtime.failedHeight = height;
+					runtime.debugStatus = "SRV allocation failed";
+				}
+			}
 		}
 	}
 
@@ -247,7 +260,9 @@ void SceneMonitorSystem::DrawOffscreen(
 			} else if (!runtime.camera) {
 				runtime.debugStatus = "Runtime camera missing";
 			} else if (!runtime.renderTarget) {
-				runtime.debugStatus = "Render target missing";
+				runtime.debugStatus = runtime.failedTargetSize
+					? "SRV allocation failed"
+					: "Render target missing";
 			} else {
 				runtime.debugStatus = "Monitor mesh object missing";
 			}

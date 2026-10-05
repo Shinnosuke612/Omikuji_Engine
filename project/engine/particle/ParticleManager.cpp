@@ -304,10 +304,13 @@ void ParticleManager::SetGroupRenderDesc(
 	}
 }
 
-void ParticleManager::ApplyGpuParticleEffect(const ParticleEffectDesc& effect) {
+bool ParticleManager::ApplyGpuParticleEffect(const ParticleEffectDesc& effect) {
 	gpuParticleEnabled_ = true;
-	ApplyGpuParticleEffectToKey("editor:preview", effect);
+	if (!ApplyGpuParticleEffectToKey("editor:preview", effect)) {
+		return false;
+	}
 	Logger::Log("GPU Particle enabled by effect: " + effect.name + "\n");
+	return true;
 }
 
 void ParticleManager::ClearGpuParticles() {
@@ -532,7 +535,9 @@ void ParticleManager::RebuildSceneParticleEmitter(
 		return;
 	}
 
-	ParticleEffectResource::PrepareParticleGroup(*placement.effect, clearParticles);
+	if (!ParticleEffectResource::PrepareParticleGroup(*placement.effect, clearParticles)) {
+		return;
+	}
 	placement.emitter = new ParticleEmitter();
 	placement.emitter->Initialize(this, placement.effect->name);
 	ParticleEffectResource::ApplyToEmitter(*placement.emitter, *placement.effect);
@@ -608,7 +613,9 @@ GpuParticle* ParticleManager::GetOrCreateGpuParticle(const std::string& key) {
 	}
 
 	auto particle = std::make_unique<GpuParticle>();
-	particle->Initialize(particleCommon_, srvManager_, "resources/circle.png");
+	if (!particle->Initialize(particleCommon_, srvManager_, "resources/circle.png")) {
+		return nullptr;
+	}
 	GpuParticle* result = particle.get();
 	gpuParticles_.emplace(key, std::move(particle));
 	return result;
@@ -619,16 +626,17 @@ GpuParticle* ParticleManager::FindGpuParticle(const std::string& key) {
 	return it != gpuParticles_.end() ? it->second.get() : nullptr;
 }
 
-void ParticleManager::ApplyGpuParticleEffectToKey(
+bool ParticleManager::ApplyGpuParticleEffectToKey(
 	const std::string& key,
 	const ParticleEffectDesc& effect
 ) {
 	GpuParticle* particle = GetOrCreateGpuParticle(key);
 	if (!particle) {
-		return;
+		return false;
 	}
 
 	particle->ApplyEffectDesc(effect);
+	return true;
 }
 
 void ParticleManager::EraseGpuParticle(const std::string& key) {
@@ -762,7 +770,9 @@ void ParticleManager::ApplySceneParticlePlacement(
 		}
 	}
 
-	ParticleEffectResource::PrepareParticleGroup(*placement.effect, false);
+	if (!ParticleEffectResource::PrepareParticleGroup(*placement.effect, false)) {
+		return;
+	}
 	ParticleEffectResource::ApplyToEmitter(*placement.emitter, *placement.effect);
 }
 
@@ -791,7 +801,9 @@ void ParticleManager::ApplySceneGpuPlacement(
 	const std::string key = syncKey.empty()
 		? std::string("scene:manual:") + placement.effectFilePath
 		: syncKey;
-	ApplyGpuParticleEffectToKey(key, *placement.effect);
+	if (!ApplyGpuParticleEffectToKey(key, *placement.effect)) {
+		return;
+	}
 	sceneGpuParticleKeys_.insert(key);
 }
 
@@ -1566,14 +1578,16 @@ Vector4 ParticleManager::LerpColor(const Vector4& start, const Vector4& end, flo
 	};
 }
 
-void ParticleManager::CreateParticleGroup(const std::string& name, const std::string& textureFilePath) {
+bool ParticleManager::CreateParticleGroup(const std::string& name, const std::string& textureFilePath) {
 	assert(particleCommon_);
 	assert(srvManager_);
+	if (!particleCommon_ || !srvManager_ || particleGroups_.contains(name)) {
+		return false;
+	}
 
-	assert(!particleGroups_.contains(name));
-	assert(srvManager_->CanAllocate());
-
-	TextureManager::GetInstance()->LoadTexture(textureFilePath);
+	if (!TextureManager::GetInstance()->LoadTexture(textureFilePath)) {
+		return false;
+	}
 
 	ParticleGroup group{};
 	group.textureFilePath = textureFilePath;
@@ -1594,18 +1608,24 @@ void ParticleManager::CreateParticleGroup(const std::string& name, const std::st
 
 	group.instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&group.instancingData));
 
-	group.instanceSrvIndex = srvManager_->Allocate();
+	if (!srvManager_->TryAllocate(group.instanceSrvIndex)) {
+		return false;
+	}
 
-	srvManager_->CreateSRVforStructuredBuffer(
+	if (!srvManager_->CreateSRVforStructuredBuffer(
 		group.instanceSrvIndex,
 		group.instancingResource.Get(),
 		kMaxInstanceCount,
 		sizeof(TransformationMatrix)
-	);
+	)) {
+		srvManager_->Free(group.instanceSrvIndex);
+		return false;
+	}
 	group.render = {};
 	CreateGroupVertexResource(group);
 
 	particleGroups_.emplace(name, std::move(group));
+	return true;
 }
 
 bool ParticleManager::HasParticleGroup(const std::string& name) const {
@@ -1646,15 +1666,15 @@ void ParticleManager::ClearActiveParticles() {
 	}
 }
 
-void ParticleManager::CreateParticleGroupIfNeeded(
+bool ParticleManager::CreateParticleGroupIfNeeded(
 	const std::string& name,
 	const std::string& textureFilePath
 ) {
 	if (HasParticleGroup(name)) {
-		return;
+		return true;
 	}
 
-	CreateParticleGroup(name, textureFilePath);
+	return CreateParticleGroup(name, textureFilePath);
 }
 
 bool ParticleManager::SetParticleGroupTexture(
@@ -2510,10 +2530,14 @@ void ParticleManager::Draw(bool drawGpuParticles) {
 		);
 
 		// VS t0 StructuredBuffer<TransformationMatrix>
-		srvManager_->SetGraphicsRootDescriptorTable(1, group.instanceSrvIndex);
+		if (!srvManager_->SetGraphicsRootDescriptorTable(1, group.instanceSrvIndex)) {
+			continue;
+		}
 
 		// PS t0 Texture2D
-		srvManager_->SetGraphicsRootDescriptorTable(2, group.textureSrvIndex);
+		if (!srvManager_->SetGraphicsRootDescriptorTable(2, group.textureSrvIndex)) {
+			continue;
+		}
 
 		// b1 DirectionalLight
 		commandList->SetGraphicsRootConstantBufferView(

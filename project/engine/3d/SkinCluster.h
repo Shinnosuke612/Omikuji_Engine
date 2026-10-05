@@ -17,6 +17,13 @@ struct Skeleton;
 
 class SkinCluster {
 public:
+	SkinCluster() = default;
+	~SkinCluster();
+	SkinCluster(const SkinCluster&) = delete;
+	SkinCluster& operator=(const SkinCluster&) = delete;
+	SkinCluster(SkinCluster&&) = delete;
+	SkinCluster& operator=(SkinCluster&&) = delete;
+
 	static constexpr uint32_t kMaxInfluence = 4;
 
 	struct VertexInfluence {
@@ -72,24 +79,27 @@ public:
 	}
 
 private:
+	// SkinClusterが確保したslotだけを返却し、再返却を防ぐ。
+	void ReleaseDescriptors();
 	void AddInfluence(
 		VertexInfluence& influence,
 		float weight,
 		uint32_t jointIndex
 	);
 
+	SrvManager* srvManager_ = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12Resource> influenceResource_;
 	D3D12_VERTEX_BUFFER_VIEW influenceBufferView_{};
 	VertexInfluence* mappedInfluences_ = nullptr;
-	uint32_t influenceSrvIndex_ = 0;
+	uint32_t influenceSrvIndex_ = UINT32_MAX;
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> paletteResource_;
 	PaletteWell* mappedPalette_ = nullptr;
-	uint32_t paletteSrvIndex_ = 0;
-	uint32_t inputVertexSrvIndex_ = 0;
+	uint32_t paletteSrvIndex_ = UINT32_MAX;
+	uint32_t inputVertexSrvIndex_ = UINT32_MAX;
 	Microsoft::WRL::ComPtr<ID3D12Resource> outputVertexResource_;
 	D3D12_VERTEX_BUFFER_VIEW skinnedVertexBufferView_{};
-	uint32_t outputVertexUavIndex_ = 0;
+	uint32_t outputVertexUavIndex_ = UINT32_MAX;
 	D3D12_RESOURCE_STATES outputVertexResourceState_ =
 		D3D12_RESOURCE_STATE_COMMON;
 	Microsoft::WRL::ComPtr<ID3D12Resource> skinningInformationResource_;

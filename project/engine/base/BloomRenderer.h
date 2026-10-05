@@ -35,7 +35,7 @@ public:
 		float padding[2]{};
 	};
 
-	void Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
+	bool Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
 	void Resize(uint32_t width, uint32_t height, uint32_t downsampleScale);
 	void BeginFrame();
 	void SetParameters(const Parameters& parameters);

@@ -33,7 +33,7 @@ public:
 	PrefabPreviewRenderer() = default;
 	~PrefabPreviewRenderer();
 
-	void Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
+	bool Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
 	void Render(
 		const std::string& assetPath,
 		const SceneDocument& document,

@@ -13,6 +13,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <stdexcept>
 #include <unordered_set>
 #include <utility>
 
@@ -45,6 +46,7 @@
 #include "../scene/SceneTransformResolver.h"
 #include "../scene/SceneValidator.h"
 #include "../utility/EditableResourcePath.h"
+#include "../utility/Logger.h"
 #include "../utility/StringUtility.h"
 #include "../utility/SystemPerformanceMonitor.h"
 
@@ -1164,20 +1166,40 @@ void ImGuiManager::Initialize(WinApp* winApp, DirectXCommon* dxCommon, SrvManage
 		[](ImGui_ImplDX12_InitInfo* info,
 		   D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_handle,
 		   D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_handle){
-			   SrvManager* srvManager = static_cast<SrvManager*>(info->UserData);
-			   assert(srvManager);
-			   assert(srvManager->CanAllocate());
-
-			   uint32_t index = srvManager->Allocate();
+			if (!out_cpu_handle || !out_gpu_handle) {
+				Logger::Log("ImGui SRV allocation failed: output handle is unavailable\n");
+				throw std::runtime_error("ImGui SRV output handle is unavailable");
+			}
+			*out_cpu_handle = {};
+			*out_gpu_handle = {};
+			   SrvManager* srvManager = info
+				   ? static_cast<SrvManager*>(info->UserData)
+				   : nullptr;
+			   uint32_t index = SrvManager::kInvalidIndex;
+			   if (!srvManager || !srvManager->TryAllocate(index)) {
+				   static bool loggedAllocationFailure = false;
+				   if (!loggedAllocationFailure) {
+					   Logger::Log("ImGui SRV allocation failed: SRV heap is exhausted\n");
+					   loggedAllocationFailure = true;
+				   }
+				   throw std::runtime_error("ImGui SRV allocation failed");
+			   }
 			   *out_cpu_handle = srvManager->GetCPUDescriptorHandle(index);
 			   *out_gpu_handle = srvManager->GetGPUDescriptorHandle(index);
 		};
 
 	initInfo.SrvDescriptorFreeFn =
-		[](ImGui_ImplDX12_InitInfo*,
-		   D3D12_CPU_DESCRIPTOR_HANDLE,
+		[](ImGui_ImplDX12_InitInfo* info,
+		   D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle,
 		   D3D12_GPU_DESCRIPTOR_HANDLE){
-			   // 今のSrvManagerには解放機能が無いので何もしない
+			   SrvManager* srvManager = info
+				   ? static_cast<SrvManager*>(info->UserData)
+				   : nullptr;
+			   const bool released = srvManager && srvManager->Free(cpuHandle);
+			   if (!released) {
+				   Logger::Log("ImGui SRV release failed\n");
+				   assert(released);
+			   }
 		};
 
 	ImGui_ImplDX12_Init(&initInfo);

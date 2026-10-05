@@ -76,7 +76,7 @@ PrefabPreviewRenderer::~PrefabPreviewRenderer() {
 	Finalize();
 }
 
-void PrefabPreviewRenderer::Initialize(
+bool PrefabPreviewRenderer::Initialize(
 	DirectXCommon* dxCommon,
 	SrvManager* srvManager
 ) {
@@ -84,7 +84,7 @@ void PrefabPreviewRenderer::Initialize(
 	dxCommon_ = dxCommon;
 	srvManager_ = srvManager;
 	if (!dxCommon_ || !srvManager_) {
-		return;
+		return false;
 	}
 
 	renderTarget_ = new SceneRenderTarget();
@@ -97,7 +97,13 @@ void PrefabPreviewRenderer::Initialize(
 	desc.clearColor[1] = 0.04f;
 	desc.clearColor[2] = 0.05f;
 	desc.clearColor[3] = 1.0f;
-	renderTarget_->Initialize(dxCommon_, srvManager_, desc);
+	if (!renderTarget_->Initialize(dxCommon_, srvManager_, desc)) {
+		delete renderTarget_;
+		renderTarget_ = nullptr;
+		dxCommon_ = nullptr;
+		srvManager_ = nullptr;
+		return false;
+	}
 
 	camera_ = new Camera();
 	camera_->SetOrbitMode(true);
@@ -107,6 +113,7 @@ void PrefabPreviewRenderer::Initialize(
 	);
 	camera_->SetNearClip(0.01f);
 	camera_->SetFarClip(10000.0f);
+	return true;
 }
 
 void PrefabPreviewRenderer::Render(

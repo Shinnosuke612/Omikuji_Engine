@@ -61,6 +61,8 @@ public:
 		const std::string& filePath,
 		TextureColorSpace colorSpace = TextureColorSpace::Automatic
 	);
+	// Texture resource、map entry、SRV slotを一組で返却する。未知keyまたはslot返却失敗はfalse。
+	bool ReleaseTexture(const std::string& textureKey);
 	bool HasTexture(const std::string& textureKey) const;
 	bool LoadTextureFromMemory(
 		const std::string& textureKey,

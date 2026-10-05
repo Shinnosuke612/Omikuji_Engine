@@ -895,8 +895,9 @@ bool ParticleEffectEditor::DrawImGui(
 		}
 	} else if (previewEmitter) {
 		if (changed || applied) {
-			ParticleEffectResource::PrepareParticleGroup(effect, false);
-			ParticleEffectResource::ApplyToEmitter(*previewEmitter, effect);
+			if (ParticleEffectResource::PrepareParticleGroup(effect, false)) {
+				ParticleEffectResource::ApplyToEmitter(*previewEmitter, effect);
+			}
 		}
 	} else {
 		previewEmitter = ParticleEffectResource::CreateEmitter(effect);

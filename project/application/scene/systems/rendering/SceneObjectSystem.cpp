@@ -450,6 +450,7 @@ void SceneObjectSystem::BuildBindings(
 			continue;
 		}
 		bindings.push_back(SceneRuntimeObjectBinding{
+			entity.id,
 			&entity,
 			runtime->object.get(),
 			runtime->hasCollider ? runtime->collider : nullptr,
@@ -521,8 +522,7 @@ void SceneObjectSystem::CollectShadowCasters(
 	bool hidePlayerModel,
 	std::vector<Object3d*>& shadowCasters
 ) const {
-	shadowCasters.clear();
-	shadowCasters.reserve(models_.size());
+	shadowCasters.reserve(shadowCasters.size() + models_.size());
 	for (const SceneEntity& entity : document.GetEntities()) {
 		if (
 			!IsEntityActiveInHierarchy(document, entity) ||

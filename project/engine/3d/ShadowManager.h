@@ -16,6 +16,13 @@ class Object3d;
 
 class ShadowManager {
 public:
+	ShadowManager() = default;
+	~ShadowManager();
+	ShadowManager(const ShadowManager&) = delete;
+	ShadowManager& operator=(const ShadowManager&) = delete;
+	ShadowManager(ShadowManager&&) = delete;
+	ShadowManager& operator=(ShadowManager&&) = delete;
+
 	static const uint32_t kMaxSpotShadowMaps = 4;
 	static const uint32_t kShadowMapCount = 1 + kMaxSpotShadowMaps;
 
@@ -48,10 +55,12 @@ public:
 	uint32_t GetShadowMapSize() const { return shadowMapSize_; }
 
 private:
-	void CreateResources();
-	void CreateDsv();
-	void CreateSrv();
-	void CreateShadowDataResource();
+	bool CreateResources();
+	bool CreateDsv();
+	bool CreateSrv();
+	bool CreateShadowDataResource();
+	void ResetShadowData();
+	void DisableShadowRendering();
 	void UpdateShadowData(const LightManager& lightManager);
 	void BeginShadowPass(uint32_t mapIndex);
 	Matrix4x4 MakeLookAtMatrix(const Vector3& eye, const Vector3& target, const Vector3& up) const;

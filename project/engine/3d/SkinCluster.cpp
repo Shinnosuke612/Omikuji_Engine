@@ -48,6 +48,28 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavBufferResource(
 
 } // namespace
 
+SkinCluster::~SkinCluster() {
+	ReleaseDescriptors();
+}
+
+void SkinCluster::ReleaseDescriptors() {
+	if (!srvManager_) {
+		return;
+	}
+
+	auto release = [this](uint32_t& index) {
+		if (index != UINT32_MAX) {
+			srvManager_->Free(index);
+			index = UINT32_MAX;
+		}
+	};
+	release(paletteSrvIndex_);
+	release(inputVertexSrvIndex_);
+	release(influenceSrvIndex_);
+	release(outputVertexUavIndex_);
+	srvManager_ = nullptr;
+}
+
 void SkinCluster::Initialize(
 	DirectXCommon* dxCommon,
 	SrvManager* srvManager,
@@ -57,6 +79,19 @@ void SkinCluster::Initialize(
 	assert(dxCommon);
 	assert(srvManager);
 	assert(skeleton.IsValid());
+	assert(!srvManager_);
+	if (srvManager_) {
+		return;
+	}
+	srvManager_ = srvManager;
+
+	auto allocateDescriptor = [this, srvManager](uint32_t& index) {
+		if (!srvManager->TryAllocate(index)) {
+			ReleaseDescriptors();
+			return false;
+		}
+		return true;
+	};
 
 	jointCount_ = static_cast<uint32_t>(skeleton.joints.size());
 	const uint32_t vertexCount = model.GetVertexCount();
@@ -69,23 +104,31 @@ void SkinCluster::Initialize(
 		nullptr,
 		reinterpret_cast<void**>(&mappedPalette_)
 	);
-	assert(srvManager->CanAllocate());
-	paletteSrvIndex_ = srvManager->Allocate();
-	srvManager->CreateSRVforStructuredBuffer(
+	if (!allocateDescriptor(paletteSrvIndex_)) {
+		return;
+	}
+	if (!srvManager->CreateSRVforStructuredBuffer(
 		paletteSrvIndex_,
 		paletteResource_.Get(),
 		jointCount_,
 		sizeof(PaletteWell)
-	);
+	)) {
+		ReleaseDescriptors();
+		return;
+	}
 
-	assert(srvManager->CanAllocate());
-	inputVertexSrvIndex_ = srvManager->Allocate();
-	srvManager->CreateSRVforStructuredBuffer(
+	if (!allocateDescriptor(inputVertexSrvIndex_)) {
+		return;
+	}
+	if (!srvManager->CreateSRVforStructuredBuffer(
 		inputVertexSrvIndex_,
 		model.GetVertexResource(),
 		vertexCount,
 		sizeof(Model::VertexData)
-	);
+	)) {
+		ReleaseDescriptors();
+		return;
+	}
 
 	influenceResource_ = dxCommon->CreateBufferResource(
 		sizeof(VertexInfluence) * vertexCount
@@ -107,14 +150,18 @@ void SkinCluster::Initialize(
 	);
 	influenceBufferView_.StrideInBytes = sizeof(VertexInfluence);
 
-	assert(srvManager->CanAllocate());
-	influenceSrvIndex_ = srvManager->Allocate();
-	srvManager->CreateSRVforStructuredBuffer(
+	if (!allocateDescriptor(influenceSrvIndex_)) {
+		return;
+	}
+	if (!srvManager->CreateSRVforStructuredBuffer(
 		influenceSrvIndex_,
 		influenceResource_.Get(),
 		vertexCount,
 		sizeof(VertexInfluence)
-	);
+	)) {
+		ReleaseDescriptors();
+		return;
+	}
 
 	outputVertexResource_ = CreateUavBufferResource(
 		dxCommon->GetDevice(),
@@ -127,14 +174,18 @@ void SkinCluster::Initialize(
 	);
 	skinnedVertexBufferView_.StrideInBytes = sizeof(Model::VertexData);
 
-	assert(srvManager->CanAllocate());
-	outputVertexUavIndex_ = srvManager->Allocate();
-	srvManager->CreateUAVforStructuredBuffer(
+	if (!allocateDescriptor(outputVertexUavIndex_)) {
+		return;
+	}
+	if (!srvManager->CreateUAVforStructuredBuffer(
 		outputVertexUavIndex_,
 		outputVertexResource_.Get(),
 		vertexCount,
 		sizeof(Model::VertexData)
-	);
+	)) {
+		ReleaseDescriptors();
+		return;
+	}
 
 	skinningInformationResource_ = dxCommon->CreateBufferResource(
 		sizeof(SkinningInformation)
