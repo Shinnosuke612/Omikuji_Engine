@@ -22,7 +22,7 @@
           "environmentReflectionOverride": false,
           "localId": 1,
           "materialOverrides": [],
-          "modelPath": "9y5Huh14gN/武器.pmx",
+          "modelPath": "PlayerWeaponBlock.obj",
           "type": "MeshRenderer"
         },
         {
@@ -63,7 +63,7 @@
                     {
                       "time": 0.0,
                       "value": [
-                        1.5657933950424194,
+                        3.1415927410125732,
                         4.949979484081268e-06,
                         3.140000104904175
                       ]
@@ -71,7 +71,7 @@
                     {
                       "time": 1.0,
                       "value": [
-                        1.565999984741211,
+                        3.1415927410125732,
                         0.0,
                         3.140000104904175
                       ]
@@ -741,7 +741,7 @@
                       "value": [
                         1.5707963705062866,
                         0.0,
-                        3.1415927410125732
+                        1.5707963705062866
                       ]
                     },
                     {
@@ -749,7 +749,7 @@
                       "value": [
                         1.1524107456207275,
                         -0.08360689878463745,
-                        -2.9109408855438232
+                        -4.48173713684082
                       ]
                     },
                     {
@@ -757,7 +757,7 @@
                       "value": [
                         3.047461986541748,
                         0.0,
-                        3.141592502593994
+                        1.5707961320877075
                       ]
                     },
                     {
@@ -1412,7 +1412,7 @@
                       "value": [
                         1.5707963705062866,
                         0.0,
-                        3.1415927410125732
+                        1.5707963705062866
                       ]
                     },
                     {
@@ -1420,7 +1420,7 @@
                       "value": [
                         1.1524107456207275,
                         -0.08360689878463745,
-                        -2.9109408855438232
+                        -4.48173713684082
                       ]
                     },
                     {
@@ -1428,7 +1428,7 @@
                       "value": [
                         3.047461986541748,
                         0.0,
-                        3.141592502593994
+                        1.5707961320877075
                       ]
                     },
                     {
@@ -1531,54 +1531,6 @@
                   "property": "LocalScale",
                   "targetEntityId": 1,
                   "targetEntityName": "PlayerWeapon"
-                },
-                {
-                  "easing": "SmoothStep",
-                  "keyframes": [
-                    {
-                      "time": 0.859357476234436,
-                      "value": [
-                        -0.10332123190164566,
-                        0.0022563894744962454,
-                        0.013163764029741287
-                      ]
-                    }
-                  ],
-                  "property": "LocalRotation",
-                  "targetEntityId": 3,
-                  "targetEntityName": "SpinFinish_HitBox_3"
-                },
-                {
-                  "easing": "SmoothStep",
-                  "keyframes": [
-                    {
-                      "time": 0.859357476234436,
-                      "value": [
-                        2.0769999027252197,
-                        0.9999995231628418,
-                        3.9019999504089355
-                      ]
-                    }
-                  ],
-                  "property": "LocalScale",
-                  "targetEntityId": 3,
-                  "targetEntityName": "SpinFinish_HitBox_3"
-                },
-                {
-                  "easing": "SmoothStep",
-                  "keyframes": [
-                    {
-                      "time": 0.859357476234436,
-                      "value": [
-                        0.005940879695117474,
-                        0.2715514004230499,
-                        2.618884563446045
-                      ]
-                    }
-                  ],
-                  "property": "LocalPosition",
-                  "targetEntityId": 3,
-                  "targetEntityName": "SpinFinish_HitBox_3"
                 }
               ]
             }
@@ -1671,25 +1623,11 @@
               "hitBoxEntityName": "",
               "hitWindows": [
                 {
-                  "damage": 20.0,
                   "endTime": 0.5799999833106995,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerActivation",
-                  "hitStopDuration": 0.019999999552965164,
-                  "knockback": 8.0,
-                  "knockbackDirectionMode": "RadialFromAttacker",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 10.0,
-                  "reactionTag": "Light",
-                  "startTime": 0.30000001192092896,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 4,
+                  "hitBoxEntityName": "Attack1_HitBox_1",
+                  "payloadSource": "HitBox",
+                  "startTime": 0.30000001192092896
                 }
               ],
               "loopEnabled": false,
@@ -1783,25 +1721,11 @@
               "hitBoxEntityName": "",
               "hitWindows": [
                 {
-                  "damage": 20.0,
                   "endTime": 0.6000000238418579,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerActivation",
-                  "hitStopDuration": 0.02500000037252903,
-                  "knockback": 8.0,
-                  "knockbackDirectionMode": "AttackFacingLocal",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 10.0,
-                  "reactionTag": "Light",
-                  "startTime": 0.2800000011920929,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 5,
+                  "hitBoxEntityName": "Attack2_HitBox_1",
+                  "payloadSource": "HitBox",
+                  "startTime": 0.2800000011920929
                 }
               ],
               "loopEnabled": false,
@@ -1983,46 +1907,18 @@
               "hitBoxEntityName": "",
               "hitWindows": [
                 {
-                  "damage": 16.0,
                   "endTime": 1.2599999904632568,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerActivation",
-                  "hitStopDuration": 0.029999999329447746,
-                  "knockback": 4.0,
-                  "knockbackDirectionMode": "RadialFromAttacker",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 8.0,
-                  "reactionTag": "Light",
-                  "startTime": 0.10000000149011612,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 6,
+                  "hitBoxEntityName": "Attack3_HitBox_1",
+                  "payloadSource": "HitBox",
+                  "startTime": 0.10000000149011612
                 },
                 {
-                  "damage": 28.0,
                   "endTime": 1.399999976158142,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerActivation",
-                  "hitStopDuration": 0.054999999701976776,
-                  "knockback": 12.0,
-                  "knockbackDirectionMode": "AttackFacingLocal",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 18.0,
-                  "reactionTag": "Heavy",
-                  "startTime": 1.2599999904632568,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 7,
+                  "hitBoxEntityName": "Attack3_HitBox_2",
+                  "payloadSource": "HitBox",
+                  "startTime": 1.2599999904632568
                 }
               ],
               "loopEnabled": false,
@@ -2161,25 +2057,11 @@
               "hitBoxEntityName": "",
               "hitWindows": [
                 {
-                  "damage": 16.0,
                   "endTime": 0.4000000059604645,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerLoop",
-                  "hitStopDuration": 0.029999999329447746,
-                  "knockback": 4.0,
-                  "knockbackDirectionMode": "RadialFromAttacker",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 8.0,
-                  "reactionTag": "Light",
-                  "startTime": 0.0,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 8,
+                  "hitBoxEntityName": "SpinLoop_HitBox_1",
+                  "payloadSource": "HitBox",
+                  "startTime": 0.0
                 }
               ],
               "loopEnabled": true,
@@ -2317,50 +2199,22 @@
               "hitBoxEntityName": "",
               "hitWindows": [
                 {
-                  "damage": 16.0,
                   "endTime": 0.7599999904632568,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerActivation",
-                  "hitStopDuration": 0.029999999329447746,
-                  "knockback": 4.0,
-                  "knockbackDirectionMode": "RadialFromAttacker",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 8.0,
-                  "reactionTag": "Light",
-                  "startTime": 0.0,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 9,
+                  "hitBoxEntityName": "SpinFinish_HitBox_1",
+                  "payloadSource": "HitBox",
+                  "startTime": 0.0
                 },
                 {
-                  "damage": 28.0,
                   "endTime": 0.8999999761581421,
-                  "hitBoxEntityId": 2,
-                  "hitBoxEntityName": "PlayerWeaponHitBox",
-                  "hitPolicy": "OncePerActivation",
-                  "hitStopDuration": 0.054999999701976776,
-                  "knockback": 15.0,
-                  "knockbackDirectionMode": "AttackFacingLocal",
-                  "knockbackLocalDirection": [
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "payloadSource": "WindowLegacy",
-                  "poiseDamage": 18.0,
-                  "reactionTag": "Heavy",
-                  "startTime": 0.7599999904632568,
-                  "targetCooldown": 0.15000000596046448,
-                  "verticalKnockback": 0.0
+                  "hitBoxEntityId": 10,
+                  "hitBoxEntityName": "SpinFinish_HitBox_2",
+                  "payloadSource": "HitBox",
+                  "startTime": 0.7599999904632568
                 },
                 {
                   "endTime": 0.8700000047683716,
-                  "hitBoxEntityId": 3,
+                  "hitBoxEntityId": 11,
                   "hitBoxEntityName": "SpinFinish_HitBox_3",
                   "payloadSource": "HitBox",
                   "startTime": 0.8600000143051147
@@ -2385,7 +2239,7 @@
       "folderTeamEnabled": false,
       "id": 1,
       "locked": false,
-      "modelPath": "9y5Huh14gN/武器.pmx",
+      "modelPath": "PlayerWeaponBlock.obj",
       "name": "PlayerWeapon",
       "parentId": 0,
       "sprite": {
@@ -2423,7 +2277,7 @@
         "translate": [
           -0.550000011920929,
           1.0499999523162842,
-          -0.8500000238418579
+          -0.05837440490722656
         ]
       }
     },
@@ -2483,17 +2337,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0.0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 1,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -2568,7 +2411,735 @@
           ],
           "shape": "Box",
           "sizeMultiplier": [
-            2.2699999809265137,
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 20.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0.019999999552965164,
+          "ignoreSameFaction": true,
+          "knockback": 8.0,
+          "knockbackDirectionMode": "RadialFromAttacker",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 10.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Light",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 4,
+      "locked": false,
+      "modelPath": "",
+      "name": "Attack1_HitBox_1",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 20.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0.02500000037252903,
+          "ignoreSameFaction": true,
+          "knockback": 8.0,
+          "knockbackDirectionMode": "AttackFacingLocal",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 10.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Light",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 5,
+      "locked": false,
+      "modelPath": "",
+      "name": "Attack2_HitBox_1",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 16.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0.029999999329447746,
+          "ignoreSameFaction": true,
+          "knockback": 4.0,
+          "knockbackDirectionMode": "RadialFromAttacker",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 8.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Light",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 6,
+      "locked": false,
+      "modelPath": "",
+      "name": "Attack3_HitBox_1",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 28.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0.054999999701976776,
+          "ignoreSameFaction": true,
+          "knockback": 12.0,
+          "knockbackDirectionMode": "AttackFacingLocal",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 18.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Heavy",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 7,
+      "locked": false,
+      "modelPath": "",
+      "name": "Attack3_HitBox_2",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 16.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerLoop",
+          "hitStopDuration": 0.029999999329447746,
+          "ignoreSameFaction": true,
+          "knockback": 4.0,
+          "knockbackDirectionMode": "RadialFromAttacker",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 8.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Light",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 8,
+      "locked": false,
+      "modelPath": "",
+      "name": "SpinLoop_HitBox_1",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 16.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0.029999999329447746,
+          "ignoreSameFaction": true,
+          "knockback": 4.0,
+          "knockbackDirectionMode": "RadialFromAttacker",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 8.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Light",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 9,
+      "locked": false,
+      "modelPath": "",
+      "name": "SpinFinish_HitBox_1",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
+            0.3700000047683716,
+            1.309999942779541
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 28.0,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0.054999999701976776,
+          "ignoreSameFaction": true,
+          "knockback": 15.0,
+          "knockbackDirectionMode": "AttackFacingLocal",
+          "knockbackLocalDirection": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localId": 2,
+          "ownerEntityId": 0,
+          "ownerEntityName": "Player",
+          "poiseDamage": 18.0,
+          "poiseStatId": "poise",
+          "reactionTag": "Heavy",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0.0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 10,
+      "locked": false,
+      "modelPath": "",
+      "name": "SpinFinish_HitBox_2",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1.0,
+            0.20000000298023224,
+            0.10000000149011612,
+            1.0
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0,
+            -0.20999999344348907
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.3499999940395355,
             0.3700000047683716,
             1.309999942779541
           ],
@@ -2598,22 +3169,11 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 20.0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 1,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
       "folderTeamEnabled": false,
-      "id": 3,
+      "id": 11,
       "locked": false,
       "modelPath": "",
       "name": "SpinFinish_HitBox_3",
@@ -2673,6 +3233,13 @@
     "boxBlurEnabled": false,
     "boxBlurKernelSize": 3,
     "boxBlurStrength": 1.0,
+    "chromaticAberrationCenter": [
+      0.5,
+      0.5
+    ],
+    "chromaticAberrationEnabled": false,
+    "chromaticAberrationFalloff": 1.5,
+    "chromaticAberrationIntensity": 0.003000000026077032,
     "depthOfFieldBlurStrength": 1.0,
     "depthOfFieldEnabled": false,
     "depthOfFieldFarStrength": 1.0,
@@ -2695,6 +3262,10 @@
     "gaussianBlurSigma": 1.0,
     "gaussianBlurStrength": 1.0,
     "grayscaleEnabled": false,
+    "motionBlurEnabled": false,
+    "motionBlurMaxRadius": 24.0,
+    "motionBlurSamples": 8,
+    "motionBlurStrength": 0.5,
     "noiseAmount": 0.25,
     "noiseAnimate": true,
     "noiseEnabled": false,
@@ -2715,6 +3286,8 @@
     "outlineSoftness": 0.05000000074505806,
     "outlineThickness": 1.0,
     "outlineThreshold": 0.10000000149011612,
+    "pixelationBlockSize": 4,
+    "pixelationEnabled": false,
     "radialBlurCenter": [
       0.5,
       0.5

@@ -371,253 +371,6 @@
       "active": true,
       "components": [
         {
-          "active": true,
-          "debugColor": [
-            0.20000000298023224,
-            0.949999988079071,
-            0.699999988079071,
-            1
-          ],
-          "debugDrawMode": "Wireframe",
-          "debugSegments": 16,
-          "debugVisible": true,
-          "enabled": true,
-          "isTrigger": false,
-          "layer": 4294967295,
-          "localId": 1,
-          "mask": 4294967295,
-          "offset": [
-            0,
-            1,
-            0
-          ],
-          "shape": "Box",
-          "sizeMultiplier": [
-            1,
-            1,
-            1
-          ],
-          "sphereRadius": 0.5,
-          "type": "OBBCollider"
-        },
-        {
-          "cullMode": "Back",
-          "enabled": true,
-          "environmentReflectionIntensity": 0.0010000000474974513,
-          "environmentReflectionOverride": true,
-          "localId": 2,
-          "materialOverrides": [
-            {
-              "color": [
-                1,
-                1,
-                1,
-                1
-              ],
-              "colorOverrideEnabled": false,
-              "enabled": false,
-              "materialName": "颜2",
-              "texturePath": ""
-            }
-          ],
-          "modelPath": "9y5Huh14gN/艾莲.pmx",
-          "type": "MeshRenderer"
-        },
-        {
-          "alignForwardToVelocity": true,
-          "alignmentRadius": 4,
-          "alignmentWeight": 0.800000011920929,
-          "attractorEntityId": 0,
-          "attractorTag": "",
-          "attractorWeight": 0,
-          "bankingStrength": 0,
-          "behaviorName": "Agent",
-          "boundsEntityId": 0,
-          "boundsName": "",
-          "boundsWeight": 3,
-          "cohesionRadius": 5,
-          "cohesionWeight": 0.8999999761581421,
-          "enableLighting": true,
-          "enabled": true,
-          "flockAcceleration": 4,
-          "flockDecisionInterval": 0.25,
-          "flockTurnRate": 1.5,
-          "forwardAxis": "-Z",
-          "groupName": "",
-          "localId": 3,
-          "maxSpeed": 3,
-          "memberCatchupSpeed": 2,
-          "memberCenterFollow": 1.5,
-          "memberJitterFollowSpeed": 2,
-          "memberJitterFrequency": 0.8999999761581421,
-          "memberJitterStrength": 0.3499999940395355,
-          "memberJitterUpdateInterval": 0.5,
-          "memberLeashDistance": 4,
-          "memberLeashStrength": 1.5,
-          "memberSeparationBlend": 0.5,
-          "memberSeparationUpdateInterval": 0.10000000149011612,
-          "memberSpeedVariation": 0.15000000596046448,
-          "minSpeed": 1,
-          "movementMode": "Free3D",
-          "neighborLimit": 0,
-          "pitchFromVerticalVelocity": 1,
-          "profileName": "Default",
-          "randomSeed": 1,
-          "randomizeSeedOnPlay": true,
-          "rotateAxisX": false,
-          "rotateAxisY": true,
-          "rotateAxisZ": false,
-          "rotationFollowSpeed": 12,
-          "schooling": false,
-          "schoolingBlend": 1,
-          "schoolingUpdateInterval": 0,
-          "schoolingUpdateJitter": 0,
-          "separationRadius": 1.2000000476837158,
-          "separationWeight": 1.7999999523162842,
-          "teamHeadingDirection": [
-            0,
-            0,
-            1
-          ],
-          "teamHeadingFollowSpeed": 2.5,
-          "teamHeadingFromAverage": true,
-          "teamHeadingWeight": 0.75,
-          "teamRotationFollowSpeed": 4,
-          "teamRotationWeight": 0.6000000238418579,
-          "teamSettingsOverride": false,
-          "turnSpeed": 2.5,
-          "type": "AgentBehavior",
-          "useTeamHeading": false,
-          "useTeamRotation": false,
-          "useWaterBounds": false,
-          "visualColor": [
-            1,
-            1,
-            1,
-            1
-          ],
-          "wanderChangeInterval": 1,
-          "wanderDirectionRange": 1.100000023841858,
-          "wanderStrength": 0.800000011920929,
-          "wanderVerticalRange": 0.18000000715255737
-        },
-        {
-          "bodyType": "Dynamic",
-          "drag": 0,
-          "enabled": true,
-          "freezePositionX": false,
-          "freezePositionY": false,
-          "freezePositionZ": false,
-          "friction": 0,
-          "gravityScale": 1,
-          "localId": 4,
-          "mass": 1,
-          "maxFallSpeed": 100,
-          "restitution": 0,
-          "type": "PhysicsBody",
-          "useGravity": true,
-          "velocity": [
-            0,
-            0,
-            0
-          ]
-        },
-        {
-          "aimDistance": 3,
-          "aimModeEnabled": true,
-          "aimTargetOffset": [
-            0,
-            1.5499999523162842,
-            0
-          ],
-          "allowMouseInput": true,
-          "distance": 5,
-          "enabled": true,
-          "invertPitch": true,
-          "invertYaw": false,
-          "localId": 5,
-          "maxPitch": 1.350000023841858,
-          "minPitch": -1.4500000476837158,
-          "mouseSensitivity": 0.004999999888241291,
-          "occlusionEnabled": true,
-          "occlusionMargin": 0.44999998807907104,
-          "occlusionMask": 4294967295,
-          "occlusionPullInSmoothTime": 0.03999999910593033,
-          "occlusionRecoverySmoothTime": 0.18000000715255737,
-          "positionSmoothTime": 0.11999999731779099,
-          "rotationSmoothTime": 0.07999999821186066,
-          "targetEntityId": 0,
-          "targetEntityName": "",
-          "targetOffset": [
-            0,
-            2,
-            0
-          ],
-          "type": "ThirdPersonCamera",
-          "yawReference": "World"
-        },
-        {
-          "enabled": true,
-          "farClip": 1000,
-          "fovY": 0.44999998807907104,
-          "invertPitch": false,
-          "invertYaw": false,
-          "isMain": false,
-          "localId": 6,
-          "nearClip": 0.10000000149011612,
-          "type": "Camera"
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 7,
-      "locked": false,
-      "modelPath": "9y5Huh14gN/艾莲.pmx",
-      "name": "Elen",
-      "parentId": 0,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1,
-          1,
-          1,
-          1
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100,
-          100
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0,
-          0,
-          0,
-          1
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ],
-        "translate": [
-          0,
-          0,
-          0
-        ]
-      }
-    },
-    {
-      "active": true,
-      "components": [
-        {
           "enabled": true,
           "localId": 1,
           "reflectionIntensity": 0,
@@ -634,84 +387,6 @@
       "modelPath": "",
       "name": "Enviroment",
       "parentId": 0,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1,
-          1,
-          1,
-          1
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100,
-          100
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0,
-          0,
-          0,
-          1
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ],
-        "translate": [
-          0,
-          0,
-          0
-        ]
-      }
-    },
-    {
-      "active": true,
-      "components": [
-        {
-          "castsShadow": false,
-          "color": [
-            1,
-            0.8500000238418579,
-            0.6499999761581421,
-            1
-          ],
-          "decay": 1,
-          "enabled": true,
-          "innerAngle": 25,
-          "intensity": 4.949999809265137,
-          "lightType": "Point",
-          "localId": 1,
-          "outerAngle": 35,
-          "range": 8,
-          "shadow": {
-            "bias": 0.0024999999441206455,
-            "distance": 45,
-            "farClip": 120,
-            "nearClip": 0.10000000149011612,
-            "normalBias": 0.019999999552965164,
-            "orthographicSize": 40,
-            "strength": 0.550000011920929,
-            "texelSnap": true
-          },
-          "type": "Light"
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 12,
-      "locked": false,
-      "modelPath": "",
-      "name": "Entity",
-      "parentId": 7,
       "sprite": {
         "anchor": [
           0.5,
@@ -1849,77 +1524,6 @@
       "active": true,
       "components": [
         {
-          "cullMode": "Back",
-          "enabled": true,
-          "environmentReflectionIntensity": 0.30000001192092896,
-          "environmentReflectionOverride": false,
-          "localId": 1,
-          "materialOverrides": [],
-          "modelPath": "9y5Huh14gN/武器.pmx",
-          "type": "MeshRenderer"
-        },
-        {
-          "alignmentMode": "MatchSourceBone",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "右ダミー",
-          "localId": 2,
-          "sourceJointName": "Ctr_Wpn_A",
-          "targetEntityId": 7,
-          "targetEntityName": "Elen",
-          "type": "BoneAttachment"
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 14,
-      "locked": false,
-      "modelPath": "9y5Huh14gN/武器.pmx",
-      "name": "Wepon",
-      "parentId": 7,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1,
-          1,
-          1,
-          1
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100,
-          100
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0,
-          0,
-          0,
-          1
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ],
-        "translate": [
-          -0.5244928598403931,
-          1.0347552299499512,
-          -0.9147420525550842
-        ]
-      }
-    },
-    {
-      "active": true,
-      "components": [
-        {
           "characterSpacing": 0,
           "clipEnabled": false,
           "color": [
@@ -2461,7 +2065,7 @@
           "environmentReflectionOverride": false,
           "localId": 1,
           "materialOverrides": [],
-          "modelPath": "9y5Huh14gN/武器.pmx",
+          "modelPath": "PlayerWeaponBlock.obj",
           "type": "MeshRenderer"
         },
         {
@@ -2502,7 +2106,7 @@
                     {
                       "time": 0,
                       "value": [
-                        1.5657933950424194,
+                        3.141592653589793,
                         0.000004949979484081268,
                         3.140000104904175
                       ]
@@ -2510,7 +2114,7 @@
                     {
                       "time": 1,
                       "value": [
-                        1.565999984741211,
+                        3.141592653589793,
                         0,
                         3.140000104904175
                       ]
@@ -3180,7 +2784,7 @@
                       "value": [
                         1.5707963705062866,
                         0,
-                        3.1415927410125732
+                        1.5707964142176767
                       ]
                     },
                     {
@@ -3188,7 +2792,7 @@
                       "value": [
                         1.1524107456207275,
                         -0.08360689878463745,
-                        -2.9109408855438232
+                        -4.48173721233872
                       ]
                     },
                     {
@@ -3196,7 +2800,7 @@
                       "value": [
                         3.047461986541748,
                         0,
-                        3.141592502593994
+                        1.5707961757990976
                       ]
                     },
                     {
@@ -3851,7 +3455,7 @@
                       "value": [
                         1.5707963705062866,
                         0,
-                        3.1415927410125732
+                        1.5707964142176767
                       ]
                     },
                     {
@@ -3859,7 +3463,7 @@
                       "value": [
                         1.1524107456207275,
                         -0.08360689878463745,
-                        -2.9109408855438232
+                        -4.48173721233872
                       ]
                     },
                     {
@@ -3867,7 +3471,7 @@
                       "value": [
                         3.047461986541748,
                         0,
-                        3.141592502593994
+                        1.5707961757990976
                       ]
                     },
                     {
@@ -4678,7 +4282,7 @@
       "folderTeamEnabled": false,
       "id": 20,
       "locked": false,
-      "modelPath": "9y5Huh14gN/武器.pmx",
+      "modelPath": "PlayerWeaponBlock.obj",
       "name": "PlayerWeapon",
       "parentId": 13,
       "prefab": {
@@ -4790,17 +4394,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -5023,10 +4616,6 @@
             {
               "entityId": 1,
               "entityName": "Main Camera"
-            },
-            {
-              "entityId": 7,
-              "entityName": "Elen"
             },
             {
               "entityId": 13,
@@ -5264,17 +4853,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -5393,17 +4971,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -5522,17 +5089,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -5651,17 +5207,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -5780,17 +5325,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -5909,17 +5443,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -6038,17 +5561,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 0
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
@@ -6167,17 +5679,6 @@
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
           "verticalKnockback": 20
-        },
-        {
-          "alignmentMode": "ManualOffset",
-          "enabled": true,
-          "inheritScale": true,
-          "jointName": "Ctr_Wpn_A",
-          "localId": 3,
-          "sourceJointName": "",
-          "targetEntityId": 20,
-          "targetEntityName": "PlayerWeapon",
-          "type": "BoneAttachment"
         }
       ],
       "folder": false,
