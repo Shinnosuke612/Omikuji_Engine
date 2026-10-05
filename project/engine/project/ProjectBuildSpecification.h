@@ -33,6 +33,10 @@ class ProjectBuildSpecification {
 public:
 	static constexpr int kSchemaVersion = 1;
 
+	// 読取専用で新旧の配置を解決する。二重配置・不正な既存候補は失敗し、
+	// 両方欠落時はLegacy Manual判定のため旧候補を返す。内容の検証はLoadが担う。
+	static bool ResolvePath(const std::filesystem::path& projectRoot, std::filesystem::path& specificationPath, std::string& errorMessage);
+
 	bool Load(const std::filesystem::path& specificationPath, std::string& errorMessage);
 	bool Validate(std::string& errorMessage) const;
 

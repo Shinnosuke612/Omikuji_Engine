@@ -1,3 +1,4 @@
+// 役割: 新規V2作成と旧creation journalの再開をgeneratorから正式生成まで接続する。
 #include "ProjectCreationService.h"
 #include "../utility/StringUtility.h"
 #include "ProjectCompatibilityProbe.h"
@@ -5,6 +6,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <iomanip>
@@ -76,6 +78,7 @@ bool ProjectCreationService::Start(const ProjectCreationRequest& request, std::s
 	}
 	operation.operationId = MakeOperationId();
 	operation.state = ProjectCreationOperationState::InProgress;
+	operation.outputLayout = "ProjectFilesV2";
 	operation.logPath = registry_.GetRegistryPath().parent_path() / L"operations" / StringUtility::ToPath(operation.operationId + ".log");
 	if (!PersistOperation(operation, errorMessage)) {
 		return false;
@@ -98,7 +101,7 @@ bool ProjectCreationService::Start(const ProjectCreationRequest& request, std::s
 		StringUtility::ToPath(operation.displayName).native(),
 		operation.destinationRoot.native(),
 		StringUtility::ToPath(operation.startSceneId).native(),
-		L"-OutputLayout", L"GroupedV1"
+		L"-OutputLayout", StringUtility::ToPath(operation.outputLayout).native()
 	};
 	processRequest.workingDirectory = operation.templateSourceRoot / L"project";
 	processRequest.outputLogPath = operation.logPath;
@@ -255,11 +258,33 @@ bool ProjectCreationService::ValidateFinalTree(
 	}
 	const std::filesystem::path projectRoot = operation.finalProjectRoot / L"project";
 	const std::filesystem::path projectId = StringUtility::ToPath(operation.projectId);
+	const std::filesystem::path sceneCatalog = projectRoot / L"resources" / L"scenes" / L"scenes.json";
+	if (!IsRegularFile(sceneCatalog) || HasReparsePointInExistingPath(sceneCatalog)) {
+		errorMessage = "Generated Project scene catalog is missing or unsafe.";
+		return false;
+	}
+	if (const SolutionGenerationOperation* generation = registry_.FindSolutionGenerationOperation(operation.operationId)) {
+		const std::filesystem::path expectedManifest = operation.outputLayout == "ProjectFilesV2"
+			? std::filesystem::path(L"intermediate/project-files/solution-generation.json")
+			: std::filesystem::path(L"project/build/generated/solution-generation.json");
+		if ((!operation.outputLayout.empty() && operation.outputLayout != "ProjectFilesV2" && operation.outputLayout != "GroupedV1") ||
+			generation->projectId != operation.projectId || !AreSamePath(generation->projectRoot, operation.finalProjectRoot) ||
+			std::count_if(generation->files.begin(), generation->files.end(), [&expectedManifest](const SolutionGenerationOperationFile& file) {
+				return file.kind == SolutionGenerationOperationFileKind::Manifest && file.nextExists && file.relativePath == expectedManifest;
+			}) != 1 ||
+			std::count_if(generation->files.begin(), generation->files.end(), [](const SolutionGenerationOperationFile& file) {
+				return file.kind == SolutionGenerationOperationFileKind::Descriptor && file.relativePath == std::filesystem::path(L"game.project.json") && !file.previousExists && file.nextExists;
+			}) != 1) {
+			errorMessage = "Creation generation journal does not match the Project or initial layout.";
+			return false;
+		}
+		// IDE退役後の中断もFinalizeへ渡す。hash/部分commitの検証と復旧は生成Service/Transactionが所有する。
+		return true;
+	}
 	for (const std::filesystem::path& required : {
 		projectRoot / (projectId.native() + L".sln"),
 		projectRoot / (projectId.native() + L".vcxproj"),
-		projectRoot / (projectId.native() + L".vcxproj.filters"),
-		projectRoot / L"resources" / L"scenes" / L"scenes.json"
+		projectRoot / (projectId.native() + L".vcxproj.filters")
 	}) {
 		if (!IsRegularFile(required)) {
 			errorMessage = "Generated Project is missing a required file.";
@@ -282,7 +307,7 @@ bool ProjectCreationService::ConfigureDescriptor(
 	descriptor.SetEngineMode(ProjectEngineMode::Snapshot);
 	descriptor.SetEngineProvenance({});
 	descriptor.SetDependencies({ "dependencies/manifest.json", "dependencies/lock.json" });
-	const std::string generatedBase = groupedLayout
+	const std::string generatedBase = operation.outputLayout == "ProjectFilesV2" ? "intermediate/project-files/" + operation.projectId : groupedLayout
 		? "project/build/generated/" + operation.projectId + "/" + operation.projectId
 		: "project/" + operation.projectId;
 	descriptor.SetPaths({
@@ -414,13 +439,16 @@ bool ProjectCreationService::Finalize(ProjectCreationOperation& operation, std::
 	const std::string groupedMarker = "path / \"build/generated/" + operation.projectId + "/" + operation.projectId + ".vcxproj\"";
 	const bool groupedPreparation = ContainsExactlyOnce(headerContent, groupedMarker) && headerContent.find(legacyMarker) == std::string::npos;
 	const bool legacyPreparation = ContainsExactlyOnce(headerContent, legacyMarker) && headerContent.find(groupedMarker) == std::string::npos;
+	const bool projectFilesPreparation = operation.outputLayout == "ProjectFilesV2";
+	if ((!operation.outputLayout.empty() && operation.outputLayout != "ProjectFilesV2" && operation.outputLayout != "GroupedV1") ||
+		(projectFilesPreparation && !legacyPreparation) || (operation.outputLayout == "GroupedV1" && !groupedPreparation)) { errorMessage = "Creation journal layout disagrees with generated Source."; return RegistrationFailure(); }
 	if (groupedPreparation == legacyPreparation) {
 		errorMessage = "Generated Project layout marker is missing or ambiguous.";
 		return RegistrationFailure();
 	}
 
 	ProjectDescriptor descriptor{};
-	if (groupedPreparation) {
+	if (groupedPreparation || projectFilesPreparation) {
 		if (!ConfigureDescriptor(operation, descriptor, errorMessage, true)) return RegistrationFailure();
 		if (std::filesystem::exists(descriptorPath)) {
 			ProjectDescriptor existing{};
@@ -437,7 +465,7 @@ bool ProjectCreationService::Finalize(ProjectCreationOperation& operation, std::
 			std::filesystem::path("project") / StringUtility::ToPath(operation.projectId + ".vcxproj"),
 			std::filesystem::path("project") / StringUtility::ToPath(operation.projectId + ".vcxproj.filters")
 		};
-		if (!generation.CreateInitialGroupedGeneration(descriptor, operation.operationId, retiredArtifacts, errorMessage)) return RegistrationFailure();
+		if (!generation.CreateInitialGroupedGeneration(descriptor, operation.operationId, retiredArtifacts, errorMessage, projectFilesPreparation ? SolutionGenerationLayout::ProjectFilesV2 : SolutionGenerationLayout::GroupedV1)) return RegistrationFailure();
 	} else {
 		if (!ConfigureDescriptor(operation, descriptor, errorMessage, false)) return RegistrationFailure();
 		if (std::filesystem::exists(descriptorPath)) {
@@ -454,11 +482,11 @@ bool ProjectCreationService::Finalize(ProjectCreationOperation& operation, std::
 	if (!verifiedDescriptor.Load(descriptorPath, errorMessage)) {
 		return RegistrationFailure();
 	}
-	if (groupedPreparation) {
+	if (groupedPreparation || projectFilesPreparation) {
 		ProjectSolutionPreviewSnapshot inspection{};
 		ProjectSolutionGenerationService generation(registry_);
-		if (!generation.InspectProject(descriptorPath, inspection, errorMessage) || inspection.state != ProjectSolutionPreviewState::Ready ||
-			inspection.layoutMigrationRequired || inspection.modifiedOwnedArtifactCount != 0) {
+		if (projectFilesPreparation && (!generation.InspectProject(descriptorPath, inspection, errorMessage) || inspection.state != ProjectSolutionPreviewState::Ready ||
+			inspection.layoutMigrationRequired || inspection.modifiedOwnedArtifactCount != 0)) {
 			if (errorMessage.empty()) errorMessage = "Final Grouped V1 generation could not be verified.";
 			return RegistrationFailure();
 		}

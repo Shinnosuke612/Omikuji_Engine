@@ -1,3 +1,4 @@
+// 役割: descriptor配置を検証し、明示layoutの生成モデルとSource集合を構築する。
 #include "SolutionGenerationModel.h"
 
 #include "../utility/StringUtility.h"
@@ -196,24 +197,6 @@ namespace {
 		return true;
 	}
 
-	bool IsSupportedDescriptorSolutionLayout(
-		const ProjectDescriptor& descriptor,
-		const std::filesystem::path& sourceDirectory,
-		const std::filesystem::path& artifactDirectory,
-		std::string& errorMessage
-	) {
-		std::string legacyError;
-		if (IsDescriptorSolutionLayout(descriptor, sourceDirectory, legacyError)) {
-			return true;
-		}
-		std::string groupedError;
-		if (IsDescriptorSolutionLayout(descriptor, artifactDirectory, groupedError)) {
-			return true;
-		}
-		errorMessage = legacyError.empty() ? groupedError : legacyError;
-		return false;
-	}
-
 	bool SourcePathLess(const SolutionGenerationSourceFile& left, const SolutionGenerationSourceFile& right) {
 		const std::wstring leftPath = NormalizedPathString(left.projectRelativePath);
 		const std::wstring rightPath = NormalizedPathString(right.projectRelativePath);
@@ -270,7 +253,7 @@ namespace {
 	}
 }
 
-bool SolutionGenerationModelBuilder::Build(const ProjectDescriptor& descriptor, const ProjectBuildSpecification& specification, SolutionGenerationModel& output, std::string& errorMessage) const {
+bool SolutionGenerationModelBuilder::Build(const ProjectDescriptor& descriptor, const ProjectBuildSpecification& specification, SolutionGenerationModel& output, std::string& errorMessage, SolutionGenerationLayout outputLayout) const {
 	output = {};
 	try {
 		if (!descriptor.Validate(errorMessage) || descriptor.GetEngineMode() != ProjectEngineMode::Snapshot) {
@@ -280,15 +263,26 @@ bool SolutionGenerationModelBuilder::Build(const ProjectDescriptor& descriptor, 
 		if (!specification.Validate(errorMessage)) return false;
 		const std::filesystem::path projectRoot = descriptor.GetProjectRoot().lexically_normal();
 		const std::filesystem::path sourceDirectory = (projectRoot / L"project").lexically_normal();
-		const std::filesystem::path artifactDirectory = (sourceDirectory / L"build" / L"generated" / StringUtility::ToPath(descriptor.GetProjectId())).lexically_normal();
-		const std::filesystem::path expectedBuildDirectory = (sourceDirectory / L"build").lexically_normal();
-		if (sourceDirectory.empty() || !SamePathIgnoreCase(specification.GetPath().parent_path(), expectedBuildDirectory) || !SamePathIgnoreCase(sourceDirectory.parent_path(), projectRoot)) {
-			errorMessage = "Build specification path is outside the Project build directory.";
+		const std::filesystem::path groupedDirectory = sourceDirectory / L"build" / L"generated" / StringUtility::ToPath(descriptor.GetProjectId());
+		const std::filesystem::path projectFilesDirectory = projectRoot / L"intermediate" / L"project-files";
+		if (outputLayout != SolutionGenerationLayout::GroupedV1 && outputLayout != SolutionGenerationLayout::ProjectFilesV2) {
+			errorMessage = "Generation output layout is unsupported.";
 			return false;
 		}
-		if (!IsSupportedDescriptorSolutionLayout(descriptor, sourceDirectory, artifactDirectory, errorMessage)) {
+		const std::filesystem::path artifactDirectory = outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? projectFilesDirectory : groupedDirectory;
+		std::string layoutError;
+		if (IsDescriptorSolutionLayout(descriptor, sourceDirectory, layoutError)) output.descriptorLayout = SolutionGenerationLayout::LegacyRoot;
+		else if (IsDescriptorSolutionLayout(descriptor, groupedDirectory, layoutError)) output.descriptorLayout = SolutionGenerationLayout::GroupedV1;
+		else if (IsDescriptorSolutionLayout(descriptor, projectFilesDirectory, layoutError)) output.descriptorLayout = SolutionGenerationLayout::ProjectFilesV2;
+		else { errorMessage = "Project descriptor Solution layout is unsupported."; return false; }
+		output.outputLayout = outputLayout;
+		std::filesystem::path expectedSpecificationPath;
+		if (!ProjectBuildSpecification::ResolvePath(projectRoot, expectedSpecificationPath, errorMessage)) return false;
+		if (sourceDirectory.empty() || !SamePathIgnoreCase(specification.GetPath(), expectedSpecificationPath) || !SamePathIgnoreCase(sourceDirectory.parent_path(), projectRoot)) {
+			errorMessage = "Build specification path does not match the selected Project configuration.";
 			return false;
 		}
+
 		if (HasReparsePointInExistingPath(sourceDirectory) || HasReparsePointInExistingPath(artifactDirectory)) {
 			errorMessage = "Project build directory contains a reparse point.";
 			return false;

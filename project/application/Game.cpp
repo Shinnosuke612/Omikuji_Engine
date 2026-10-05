@@ -1046,38 +1046,39 @@ void Game::RefreshProjectLauncherView() {
 			projectView.layoutMigrationRequired = generationSnapshot.layoutMigrationRequired;
 			projectView.modifiedOwnedArtifactCount = generationSnapshot.modifiedOwnedArtifactCount;
 		}
-		bool hasPreviewCandidate = false;
-		bool selectedPreviewIsActionable = false;
-		for (const ProjectSolutionPreviewSnapshot& preview : projectSolutionGenerationService_->GetPreviews()) {
-			if (preview.projectId != projectView.projectId || preview.state != ProjectSolutionPreviewState::PreviewReady) {
-				continue;
-			}
-			std::string adoptionError;
-			const bool canAdoptSolutionPreview = projectSolutionGenerationService_->CanAdoptPreview(entry.descriptorPath, preview.operationId, adoptionError);
-			std::string migrationError;
-			const bool canAdoptGroupedSolutionLayout = projectSolutionGenerationService_->CanMigrateOutputLayout(entry.descriptorPath, preview.operationId, migrationError);
-			const bool previewIsActionable = canAdoptSolutionPreview || canAdoptGroupedSolutionLayout;
-			if (hasPreviewCandidate && (selectedPreviewIsActionable || !previewIsActionable)) {
-				continue;
-			}
-			hasPreviewCandidate = true;
-			selectedPreviewIsActionable = previewIsActionable;
-			projectView.previewOperationId = preview.operationId;
-			projectView.previewSolutionPath = StringUtility::ToUtf8(preview.solutionPath);
-			projectView.previewArtifactCount = static_cast<uint32_t>(preview.artifacts.size());
-			projectView.canOpenSolutionPreview = true;
-			projectView.canAdoptSolutionPreview = canAdoptSolutionPreview;
-			projectView.canAdoptGroupedSolutionLayout = canAdoptGroupedSolutionLayout;
+		bool matchesCurrentInput = false;
+		std::string selectionError;
+		const ProjectSolutionPreviewSnapshot* preview = projectSolutionGenerationService_->FindPreferredPreview(entry.descriptorPath, matchesCurrentInput, selectionError);
+		if (preview) {
+			projectView.previewOperationId = preview->operationId;
+			projectView.previewSolutionPath = StringUtility::ToUtf8(preview->solutionPath);
+			projectView.previewArtifactCount = static_cast<uint32_t>(preview->artifacts.size());
+			projectView.canOpenSolutionPreview = matchesCurrentInput;
 			projectView.retiredArtifactCount = generationSnapshot.retiredArtifactCount;
-			projectView.generationStatus = "Preview Ready - Not Built";
-			if (previewIsActionable) {
-				projectView.generationDetail = preview.detail;
-				if (projectView.modifiedOwnedArtifactCount != 0) {
-					projectView.generationDetail += " Current generated drift: " + std::to_string(projectView.modifiedOwnedArtifactCount) + " owned artifacts will be replaced, not merged.";
+			projectView.generationStatus = matchesCurrentInput ? "Preview Ready - Not Built" : "Preview Out Of Date";
+			std::string operationError;
+			if (matchesCurrentInput) {
+				projectView.canAdoptSolutionPreview = projectSolutionGenerationService_->CanAdoptPreview(entry.descriptorPath, preview->operationId, operationError);
+				if (projectView.canAdoptSolutionPreview) {
+					operationError.clear();
+				} else if (projectView.layoutMigrationRequired) {
+					operationError.clear();
+					projectView.canAdoptGroupedSolutionLayout = projectSolutionGenerationService_->CanMigrateOutputLayout(entry.descriptorPath, preview->operationId, operationError);
+				} else if (std::filesystem::exists(descriptor.GetProjectRoot() / L"intermediate" / L"project-files" / L"solution-generation.json")) {
+					operationError.clear();
+					projectView.canRegenerateSolutionPreview = projectSolutionGenerationService_->CanRegeneratePreview(entry.descriptorPath, preview->operationId, operationError);
 				}
 			} else {
-				projectView.generationDetail = preview.detail + (adoptionError.empty() ? "" : " " + adoptionError) + (migrationError.empty() ? "" : " " + migrationError);
+				operationError = "Project has changed. Generate Preview again.";
 			}
+			projectView.generationDetail = preview->detail;
+			if (!generationSnapshot.detail.empty()) projectView.generationDetail += " " + generationSnapshot.detail;
+			if (!operationError.empty()) projectView.generationDetail += " " + operationError;
+			if (projectView.canAdoptGroupedSolutionLayout && projectView.modifiedOwnedArtifactCount != 0) {
+				projectView.generationDetail += " Current generated drift: " + std::to_string(projectView.modifiedOwnedArtifactCount) + " owned artifacts will be replaced, not merged.";
+			}
+		} else if (!selectionError.empty() && projectView.canGenerateSolutionPreview) {
+			projectView.generationDetail += " " + selectionError;
 		}
 		const ProjectCompatibilityReport report = compatibilityProbe.Probe(descriptor);
 		projectView.canOpenSolution = report.solution == ProjectCompatibilityFileState::Available && hasOpenableVisualStudio;
@@ -1206,20 +1207,30 @@ bool Game::ProcessProjectLauncherRequest() {
 		}
 		break;
 	}
-	case ProjectLauncherRequestOperation::OpenSolutionPreview:
-		for (const ProjectSolutionPreviewSnapshot& preview : projectSolutionGenerationService_->GetPreviews()) {
-			if (preview.operationId == request.operationId && preview.state == ProjectSolutionPreviewState::PreviewReady) {
-				succeeded = LaunchPreviewSolution(preview.solutionPath, request.visualStudioInstanceId, errorMessage);
-				break;
-			}
+	case ProjectLauncherRequestOperation::OpenSolutionPreview: {
+		// 表示後の設定・生成物変更を再検証し、別のPreviewへ勝手に切り替えて開かない。
+		bool matchesCurrentInput = false;
+		const ProjectSolutionPreviewSnapshot* preview = projectSolutionGenerationService_->FindPreferredPreview(
+			StringUtility::ToPath(request.descriptorPath), matchesCurrentInput, errorMessage);
+		if (!preview || preview->operationId != request.operationId) {
+			if (preview || errorMessage.empty()) errorMessage = "Selected Preview is unavailable or has changed. Refresh Project Manager.";
+			break;
 		}
-		if (!succeeded && errorMessage.empty()) errorMessage = "Preview Solution is unavailable.";
+		// 表示後に入力が変わった場合も起動しない。古いPreviewは保存だけ維持する。
+		if (!matchesCurrentInput) { errorMessage = "Project has changed. Generate Preview again."; break; }
+		errorMessage.clear();
+		succeeded = LaunchPreviewSolution(preview->solutionPath, request.visualStudioInstanceId, errorMessage);
+		if (!succeeded && errorMessage.empty()) errorMessage = "Preview Solution could not be opened.";
 		break;
+	}
 	case ProjectLauncherRequestOperation::Refresh:
 		succeeded = true;
 		break;
 	case ProjectLauncherRequestOperation::AdoptSolutionPreview:
 		succeeded = projectSolutionGenerationService_->AdoptPreview(StringUtility::ToPath(request.descriptorPath), request.operationId, errorMessage);
+		break;
+	case ProjectLauncherRequestOperation::RegenerateSolutionPreview:
+		succeeded = projectSolutionGenerationService_->RegeneratePreview(StringUtility::ToPath(request.descriptorPath), request.operationId, errorMessage);
 		break;
 	case ProjectLauncherRequestOperation::AdoptGroupedSolutionLayout:
 		succeeded = projectSolutionGenerationService_->MigrateOutputLayout(StringUtility::ToPath(request.descriptorPath), request.operationId, errorMessage);

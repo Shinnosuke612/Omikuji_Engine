@@ -1,3 +1,4 @@
+# 役割: Templateの許可ファイルから独立したGame Projectをstagingへ作成し、検証後に出力先へ確定する。
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -11,7 +12,7 @@ param(
 
     [string]$StartSceneId = "main",
 
-    [ValidateSet("LegacyRoot", "GroupedV1")]
+    [ValidateSet("LegacyRoot", "GroupedV1", "ProjectFilesV2")]
     [string]$OutputLayout = "LegacyRoot"
 )
 
@@ -251,6 +252,16 @@ function Assert-GeneratedProject(
     [string]$ExpectedSolutionPath
 ) {
     $projectRoot = Join-Path $OutputRoot "project"
+    $buildSpecificationPath = Join-Path $OutputRoot "config/project.build.json"
+    if (-not (Test-Path -LiteralPath $buildSpecificationPath -PathType Leaf)) {
+        Fail "生成Projectのconfig/project.build.jsonがありません"
+    }
+    $buildSpecification = Read-Utf8 $buildSpecificationPath | ConvertFrom-Json
+    if ($null -eq $buildSpecification -or
+        $null -eq $buildSpecification.PSObject.Properties['schemaVersion'] -or
+        $buildSpecification.schemaVersion -ne 1) {
+        Fail "生成Projectのbuild specification schemaVersionが不正です"
+    }
     $sln = Join-Path $projectRoot ($ProjectId + ".sln")
     $vcx = Join-Path $projectRoot ($ProjectId + ".vcxproj")
     $filters = Join-Path $projectRoot ($ProjectId + ".vcxproj.filters")
@@ -360,7 +371,9 @@ $editableProjectMarker = if ($OutputLayout -eq "GroupedV1") {
 } else {
     "$ProjectId.vcxproj"
 }
-$solutionRelativePath = if ($OutputLayout -eq "GroupedV1") {
+$solutionRelativePath = if ($OutputLayout -eq "ProjectFilesV2") {
+    "intermediate/project-files/$ProjectId.sln"
+} elseif ($OutputLayout -eq "GroupedV1") {
     "project/build/generated/$ProjectId/$ProjectId.sln"
 } else {
     "project/$ProjectId.sln"
@@ -369,6 +382,28 @@ $solutionRelativePath = if ($OutputLayout -eq "GroupedV1") {
 $sourceProjectRoot = Resolve-FullPath (Join-Path $PSScriptRoot "..")
 $repositoryRoot = Resolve-FullPath (Join-Path $sourceProjectRoot "..")
 $templateRoot = Resolve-FullPath (Join-Path $PSScriptRoot "../templates/empty_game")
+
+# 設定不備で出力を作らないため、staging作成前に新旧候補を解決する。
+Assert-RelativePath $repositoryRoot "config/project.build.json" "build specification"
+Assert-RelativePath $sourceProjectRoot "build/project.build.json" "legacy build specification"
+$currentBuildSpecification = Resolve-FullPath (Join-Path $repositoryRoot "config/project.build.json")
+$legacyBuildSpecification = Resolve-FullPath (Join-Path $sourceProjectRoot "build/project.build.json")
+$currentBuildExists = Test-Path -LiteralPath $currentBuildSpecification
+$legacyBuildExists = Test-Path -LiteralPath $legacyBuildSpecification
+if ($currentBuildExists -and $legacyBuildExists) {
+    Fail "build specificationが新旧両方に存在します。二重配置を解消してください"
+}
+$sourceBuildSpecification = if ($currentBuildExists) {
+    $currentBuildSpecification
+} else {
+    $legacyBuildSpecification
+}
+if (-not (Test-PathWithin $sourceBuildSpecification $repositoryRoot) -or
+    -not (Test-Path -LiteralPath $sourceBuildSpecification -PathType Leaf)) {
+    Fail ("build specificationが存在しないか、不正なfileです: " + $sourceBuildSpecification)
+}
+Read-Utf8 $sourceBuildSpecification | Out-Null
+
 $manifestPath = Join-Path $templateRoot "template-manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     Fail "template-manifest.jsonがありません"
@@ -394,6 +429,7 @@ foreach ($directory in @($manifest.copyDirectories)) {
     Assert-RelativePath $sourceProjectRoot ([string]$directory) "copyDirectories"
 }
 foreach ($file in @($manifest.copyFiles)) {
+    if ([string]$file -ieq "build/project.build.json") { continue }
     Assert-RelativePath $sourceProjectRoot ([string]$file) "copyFiles"
 }
 foreach ($file in @($manifest.resourceFiles)) {
@@ -410,6 +446,29 @@ Assert-ExactCount $sourceSln $oldSolutionGuid 1
 Assert-ExactCount $sourceVcx $oldMainGuidLower 1 $true
 Assert-ExactCount $sourceVcx "<RootNamespace>CG220250414</RootNamespace>" 1
 Assert-ExactCount $sourceHeader ($oldProjectName + ".vcxproj") 1
+# V2は既知のdescriptor対応Sourceだけ。全文識別であり自動更新はしない。
+if ($OutputLayout -eq "ProjectFilesV2") {
+    if (-not (Test-Path -LiteralPath $sourceHeader -PathType Leaf)) { Fail "Template Source root detector is missing." }
+    $headerItem = Get-Item -LiteralPath $sourceHeader -Force
+    while ($null -ne $headerItem) {
+        if (($headerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { Fail "Template Source root detector path contains a reparse point." }
+        if ($headerItem -is [IO.FileInfo]) { $headerItem = $headerItem.Directory } else { $headerItem = $headerItem.Parent }
+    }
+    # ReadAllTextのBOM自動除去と重ねず、C++側と同じ一個だけを除去する。
+    $rootHeader = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($sourceHeader))
+    # 文化依存の比較はBOMを無視し得るため、BOMなしの先頭文字を削らないよう厳密比較する。
+    if ($rootHeader.StartsWith([string][char]0xFEFF, [StringComparison]::Ordinal)) { $rootHeader = $rootHeader.Substring(1) }
+    $rootHeader = $rootHeader.Replace("`r`n", "`n")
+    $fingerprint = [System.Numerics.BigInteger]::Parse("14695981039346656037")
+    $modulus = [System.Numerics.BigInteger]::Pow(2, 64)
+    foreach ($byte in [Text.Encoding]::UTF8.GetBytes($rootHeader)) {
+        $fingerprint = ([System.Numerics.BigInteger]::op_ExclusiveOr($fingerprint, [System.Numerics.BigInteger]$byte) * [System.Numerics.BigInteger]::Parse("1099511628211")) % $modulus
+    }
+    if (([uint64]$fingerprint).ToString("X16") -ne "1D00E42E62656193") {
+        Fail "Template Source root detector is not the verified descriptor-aware version. Update the Template Source before creating V2."
+    }
+}
+
 Assert-ExactCount $sourceWinApp 'L"CG2WindowClass"' 1
 Assert-ExactCount $sourceWinApp 'L"CG2"' 1
 
@@ -447,9 +506,21 @@ try {
             $stagingProject $manifest
     }
     foreach ($file in @($manifest.copyFiles)) {
+        if ([string]$file -ieq "build/project.build.json") { continue }
         Copy-ManifestFile ([string]$file) $sourceProjectRoot $stagingProject `
             "copyFiles" $manifest
     }
+    # Manifestが旧形式でも、仕様はroot/configへ一度だけbyte copyする。
+    Assert-RelativePath $stagingPath "config/project.build.json" "build specification destination"
+    $stagedBuildSpecification = Resolve-FullPath (Join-Path $stagingPath "config/project.build.json")
+    if (-not (Test-PathWithin $sourceBuildSpecification $repositoryRoot) -or
+        -not (Test-Path -LiteralPath $sourceBuildSpecification -PathType Leaf) -or
+        -not (Test-PathWithin $stagedBuildSpecification (Resolve-FullPath $stagingPath)) -or
+        (Test-Path -LiteralPath $stagedBuildSpecification)) {
+        Fail "build specificationのcopy元／copy先が不正です"
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $stagedBuildSpecification) -Force | Out-Null
+    Copy-Item -LiteralPath $sourceBuildSpecification -Destination $stagedBuildSpecification -ErrorAction Stop
     foreach ($file in @($manifest.resourceFiles)) {
         Copy-ManifestFile ([string]$file) `
             (Join-Path $sourceProjectRoot "resources") `

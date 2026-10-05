@@ -39,6 +39,8 @@ struct ProjectCreationOperation {
 	uint64_t processStartTimeFileTime = 0;
 	int32_t exitCode = -1;
 	ProjectCreationOperationState state = ProjectCreationOperationState::InProgress;
+	// 空は旧journal。新規作成だけ出力layoutを明示して保存する。
+	std::string outputLayout;
 };
 
 enum class SolutionGenerationOperationFileKind {
@@ -77,7 +79,7 @@ struct SolutionGenerationOperation {
 
 class ProjectRegistry {
 public:
-	static constexpr int kSchemaVersion = 2;
+	static constexpr int kSchemaVersion = 3;
 
 	bool Load(std::string& errorMessage);
 	bool Load(const std::filesystem::path& registryPath, std::string& errorMessage);

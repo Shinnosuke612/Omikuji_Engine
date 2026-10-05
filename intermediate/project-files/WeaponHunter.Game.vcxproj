@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Development|x64"><Configuration>Development</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><VCProjectVersion>17.0</VCProjectVersion><Keyword>Win32Proj</Keyword><ProjectGuid>{B1ACB1C1-E687-5F22-A926-F218EBB7615A}</ProjectGuid><RootNamespace>WeaponHunter.Game</RootNamespace><WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration"><ConfigurationType>StaticLibrary</ConfigurationType><UseDebugLibraries>true</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'" Label="Configuration"><ConfigurationType>StaticLibrary</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration"><ConfigurationType>StaticLibrary</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)WeaponHunter.Common.props" />
+  <ItemGroup>
+    <ClCompile Include="$(CGProjectSourceRoot)application\camera\ThirdPersonCameraController.cpp"><ObjectFileName>$(IntDir)src_0_8DE1ACC472AA3F86.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\Game.cpp"><ObjectFileName>$(IntDir)src_1_907EDFDF8DD8ACCF.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\player\Player.cpp"><ObjectFileName>$(IntDir)src_2_EC18B265622834DE.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\PrefabPreviewRenderer.cpp"><ObjectFileName>$(IntDir)src_3_0BCF6551D41080E0.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\EditorBootstrap.cpp"><ObjectFileName>$(IntDir)src_4_FF7A1BB6E518502F.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\RuntimeBootstrap.cpp"><ObjectFileName>$(IntDir)src_5_13E731CC11DE6F12.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\RuntimeScene.cpp"><ObjectFileName>$(IntDir)src_6_647A6F350A6DDCAC.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\SceneFactory.cpp"><ObjectFileName>$(IntDir)src_7_4E9EDCE11D694BD2.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\SceneStartupErrorScreen.cpp"><ObjectFileName>$(IntDir)src_8_2A82592EC0B3EE0F.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\animation\SceneAttachmentSystem.cpp"><ObjectFileName>$(IntDir)src_9_5FC8C58480378B4A.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\animation\ScenePrefabAnimationSystem.cpp"><ObjectFileName>$(IntDir)src_10_239010366719EB15.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\audio\SceneAudioSystem.cpp"><ObjectFileName>$(IntDir)src_11_D729275B12B4A7EF.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\camera\SceneCameraSystem.cpp"><ObjectFileName>$(IntDir)src_12_A4398B0268575705.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\debug\SceneDebugSystem.cpp"><ObjectFileName>$(IntDir)src_13_A685CA27BDD04FA5.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\effects\SceneEffectRenderSystem.cpp"><ObjectFileName>$(IntDir)src_14_38074B7CCBB6482E.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\effects\SceneParticleSystem.cpp"><ObjectFileName>$(IntDir)src_15_E7607FCC49AA15E1.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\effects\ScenePostProcessProfileSystem.cpp"><ObjectFileName>$(IntDir)src_16_0950746F731B1B33.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\effects\SceneRuntimeEffectSystem.cpp"><ObjectFileName>$(IntDir)src_17_A08D994719A41800.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\events\SceneEventSystem.cpp"><ObjectFileName>$(IntDir)src_18_A3E78ABF8DEAAC8C.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\events\SceneTransitionSystem.cpp"><ObjectFileName>$(IntDir)src_19_D837A1CB579630C7.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\ai\SceneAgentSystem.cpp"><ObjectFileName>$(IntDir)src_20_697D8F7F9C8DE72B.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\ai\SceneEnemySpawnerSystem.cpp"><ObjectFileName>$(IntDir)src_21_F92CE9FA1447CA62.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\ai\SceneEnemySystem.cpp"><ObjectFileName>$(IntDir)src_22_9289D10554159AFE.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneAttackRunnerSystem.cpp"><ObjectFileName>$(IntDir)src_23_52846A15F835A1FA.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneCombatSystem.cpp"><ObjectFileName>$(IntDir)src_24_2681490B1E0E7ED8.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneHitReactionSystem.cpp"><ObjectFileName>$(IntDir)src_25_F6D88A6407AA5EC2.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneHitStopSystem.cpp"><ObjectFileName>$(IntDir)src_26_2B35AEA53C67D8D5.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneProjectileSystem.cpp"><ObjectFileName>$(IntDir)src_27_3F02948FF9924383.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneStatSystem.cpp"><ObjectFileName>$(IntDir)src_28_9FA0330AE010E5BA.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\flow\SceneGameFlowSystem.cpp"><ObjectFileName>$(IntDir)src_29_472276AD25718A96.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\state\SceneStateMachineSystem.cpp"><ObjectFileName>$(IntDir)src_30_18AE26CF7C48EA15.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.cpp"><ObjectFileName>$(IntDir)src_31_03E324915BA774A9.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneEnvironmentSystem.cpp"><ObjectFileName>$(IntDir)src_32_1A6353DDAB53F70A.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneLightingSystem.cpp"><ObjectFileName>$(IntDir)src_33_11211FB5924C93D1.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneMonitorSystem.cpp"><ObjectFileName>$(IntDir)src_34_55BF63D9C06F41F9.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.cpp"><ObjectFileName>$(IntDir)src_35_AA0B73901ED0F5CE.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.cpp"><ObjectFileName>$(IntDir)src_36_6FED70B151E4A733.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><ObjectFileName>$(IntDir)src_37_63A4F7AAB91E5249.obj</ObjectFileName></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(CGProjectSourceRoot)application\camera\ThirdPersonCameraController.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\Game.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\player\Player.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\PrefabPreviewRenderer.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\EditorBootstrap.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\RuntimeBootstrap.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\RuntimeScene.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneFactory.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneRuntimeObjectBinding.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneStartupErrorScreen.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\animation\SceneAttachmentSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\animation\ScenePrefabAnimationSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\audio\SceneAudioSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\camera\SceneCameraSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\debug\SceneDebugSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\effects\SceneEffectRenderSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\effects\SceneParticleSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\effects\ScenePostProcessProfileSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\effects\SceneRuntimeEffectSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\events\SceneEventSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\events\SceneTransitionSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\ai\SceneAgentSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\ai\SceneEnemySpawnerSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\ai\SceneEnemySystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneAttackRunnerSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneCombatSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneHitReactionSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneHitStopSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneProjectileSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneStatSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\flow\SceneGameFlowSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\state\SceneStateMachineSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneEnvironmentSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneLightingSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneMonitorSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.h" />
+  </ItemGroup>
+  <ItemGroup><ProjectReference Include="WeaponHunter.Engine.vcxproj"><Project>{75601FEF-7158-58C4-AEE4-F4707DE014FE}</Project></ProjectReference></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

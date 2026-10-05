@@ -52,7 +52,8 @@ private:
 		ProjectCreationOperation& operation,
 		std::string& errorMessage
 	);
-	static bool ValidateFinalTree(
+	// 初回はLegacy準備物、journal作成後は復旧入口としてroot/Assetとjournalの一致を確認する。
+	bool ValidateFinalTree(
 		const ProjectCreationOperation& operation,
 		std::string& errorMessage
 	);

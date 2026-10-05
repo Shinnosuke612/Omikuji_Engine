@@ -5685,10 +5685,23 @@ void ImGuiManager::DrawProjectLauncherWindow() {
 			projectLauncherGenerationConfirmationOpen_ = true;
 		}
 		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::BeginDisabled(!project.canRegenerateSolutionPreview || projectLauncherRequestPending_);
+		if (ImGui::Button("Regenerate Verified Preview...")) {
+			projectLauncherGenerationConfirmationRequest_ = {};
+			projectLauncherGenerationConfirmationRequest_.operation = ProjectLauncherRequestOperation::RegenerateSolutionPreview;
+			projectLauncherGenerationConfirmationRequest_.descriptorPath = project.descriptorPath;
+			projectLauncherGenerationConfirmationRequest_.operationId = project.previewOperationId;
+			projectLauncherGenerationConfirmationRequest_.projectId = project.projectId;
+			projectLauncherGenerationConfirmationDetail_ = "Artifacts: " + std::to_string(project.previewArtifactCount) + "\nCanonical root: " + project.projectRoot + "\nPreview Solution: " + project.previewSolutionPath;
+			projectLauncherGenerationConfirmationVerified_ = false;
+			projectLauncherGenerationConfirmationOpen_ = true;
+		}
+		ImGui::EndDisabled();
 		if (project.layoutMigrationRequired) {
 			ImGui::SameLine();
 			ImGui::BeginDisabled(!project.canAdoptGroupedSolutionLayout || projectLauncherRequestPending_);
-			if (ImGui::Button("Adopt Grouped Layout...")) {
+			if (ImGui::Button("Migrate Project Files...")) {
 				projectLauncherGenerationConfirmationRequest_ = {};
 				projectLauncherGenerationConfirmationRequest_.operation = ProjectLauncherRequestOperation::AdoptGroupedSolutionLayout;
 				projectLauncherGenerationConfirmationRequest_.descriptorPath = project.descriptorPath;
@@ -5699,8 +5712,8 @@ void ImGuiManager::DrawProjectLauncherWindow() {
 					"\nRetired artifacts: " + std::to_string(project.retiredArtifactCount) +
 					"\nModified owned artifacts: " + std::to_string(project.modifiedOwnedArtifactCount) +
 					"\nDescriptor: " + project.descriptorPath +
-					"\nOld directory: " + project.legacyArtifactDirectory +
-					"\nNew directory: " + project.groupedArtifactDirectory;
+					"\nOld Solution: " + project.legacyArtifactDirectory + "/" + project.projectId + ".sln" +
+					"\nNew Solution: " + project.groupedArtifactDirectory + "/" + project.projectId + ".sln";
 				projectLauncherGenerationConfirmationModifiedOwnedArtifactCount_ = project.modifiedOwnedArtifactCount;
 				projectLauncherGenerationConfirmationVerified_ = false;
 				projectLauncherGenerationConfirmationOpen_ = true;
@@ -5782,20 +5795,23 @@ void ImGuiManager::DrawProjectLauncherWindow() {
 	if (ImGui::BeginPopupModal("Confirm Solution Generation Operation###ProjectLauncherGenerationConfirmation", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 		const ProjectLauncherRequestOperation operation = projectLauncherGenerationConfirmationRequest_.operation;
 		const bool adoption = operation == ProjectLauncherRequestOperation::AdoptSolutionPreview;
+		const bool regeneration = operation == ProjectLauncherRequestOperation::RegenerateSolutionPreview;
 		const bool groupedLayoutAdoption = operation == ProjectLauncherRequestOperation::AdoptGroupedSolutionLayout;
 		const bool groupedLayoutDrift = groupedLayoutAdoption && projectLauncherGenerationConfirmationModifiedOwnedArtifactCount_ != 0;
-		const char* action = adoption ? "Adopt Verified Preview" : groupedLayoutAdoption ? "Adopt Grouped Layout" : operation == ProjectLauncherRequestOperation::CommitStagedSolutionGeneration ? "Commit Staged Generation" : "Resume Generation Commit";
+		const char* action = adoption ? "Adopt Verified Preview" : regeneration ? "Regenerate Verified Preview" : groupedLayoutAdoption ? "Migrate Project Files" : operation == ProjectLauncherRequestOperation::CommitStagedSolutionGeneration ? "Commit Staged Generation" : "Resume Generation Commit";
 		ImGui::TextWrapped("%s for Project %s.", action, projectLauncherGenerationConfirmationRequest_.projectId.c_str());
 		ImGui::TextDisabled("Operation: %s", projectLauncherGenerationConfirmationRequest_.operationId.c_str());
 		ImGui::TextWrapped("%s", projectLauncherGenerationConfirmationDetail_.c_str());
 		if (groupedLayoutAdoption) {
-			ImGui::TextWrapped("This changes tracked generated files and the descriptor path. It does not change legacy CG2, Git, or Build output.");
+			ImGui::TextWrapped("This moves owned IDE files to intermediate/project-files and updates the Solution paths in the descriptor. Source, assets, and Build output stay in place.");
 			if (groupedLayoutDrift) {
-				ImGui::TextWrapped("Current modified generated files are journaled as the previous set for transaction rollback. Their edits are not merged into Grouped output.");
-				ImGui::Checkbox("I verified this Preview and accept replacing modified generated files", &projectLauncherGenerationConfirmationVerified_);
+				ImGui::TextWrapped("Migration is blocked because owned IDE files have changed. Resolve those changes before migrating.");
 			} else {
-				ImGui::Checkbox("I verified this Preview", &projectLauncherGenerationConfirmationVerified_);
+				ImGui::Checkbox("I verified this Project Build, Editor assets, and Preview", &projectLauncherGenerationConfirmationVerified_);
 			}
+		} else if (regeneration) {
+			ImGui::TextWrapped("This updates owned generated files and their manifest. It does not change the descriptor, run Git, or run Build.");
+			ImGui::Checkbox("I verified this Preview", &projectLauncherGenerationConfirmationVerified_);
 		} else if (adoption) {
 			ImGui::TextWrapped("This changes tracked generated files only. It does not run Git.");
 			ImGui::Checkbox("I verified this Preview", &projectLauncherGenerationConfirmationVerified_);
@@ -5804,7 +5820,7 @@ void ImGuiManager::DrawProjectLauncherWindow() {
 		} else {
 			ImGui::TextWrapped("This continues the explicitly staged generation operation.");
 		}
-		ImGui::BeginDisabled(!projectLauncherGenerationConfirmationVerified_ || projectLauncherRequestPending_);
+		ImGui::BeginDisabled(groupedLayoutDrift || !projectLauncherGenerationConfirmationVerified_ || projectLauncherRequestPending_);
 		if (ImGui::Button("Confirm###ConfirmProjectLauncherGeneration")) {
 			QueueProjectLauncherRequest(projectLauncherGenerationConfirmationRequest_);
 			projectLauncherGenerationConfirmationRequest_ = {};

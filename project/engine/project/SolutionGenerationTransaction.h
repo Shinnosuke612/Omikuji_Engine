@@ -14,6 +14,8 @@ struct SolutionGenerationTransactionRequest {
 	std::filesystem::path projectRoot;
 	SolutionGenerationPreview preview;
 	std::vector<SolutionGenerationOperationFile> files;
+	// 空なら同path更新。異なるpathは固定V1→V2移行の旧manifestだけを指定する。
+	std::filesystem::path previousManifestPath;
 };
 
 enum class SolutionGenerationRecoveryResult {

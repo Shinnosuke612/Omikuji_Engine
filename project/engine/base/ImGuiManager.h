@@ -101,7 +101,8 @@ enum class ProjectLauncherRequestOperation {
 	RecheckSolutionGenerationRecovery,
 	RestorePreviousSolutionGeneration,
 	OpenEditor,
-	SwitchEditor
+	SwitchEditor,
+	RegenerateSolutionPreview
 };
 
 struct ProjectLauncherRequest {
@@ -135,8 +136,10 @@ struct ProjectLauncherProjectView {
 	uint32_t modifiedOwnedArtifactCount = 0;
 	bool pinned = false;
 	bool canGenerateSolutionPreview = false;
+	// 現在の生成入力と一致し、所有元・生成物を再検証したPreviewだけOpen可能。
 	bool canOpenSolutionPreview = false;
 	bool canAdoptSolutionPreview = false;
+	bool canRegenerateSolutionPreview = false;
 	bool canAdoptGroupedSolutionLayout = false;
 	bool layoutMigrationRequired = false;
 	bool canOpenSolution = false;

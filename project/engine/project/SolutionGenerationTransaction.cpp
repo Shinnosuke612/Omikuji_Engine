@@ -1,3 +1,4 @@
+// 役割: journalのowned集合を確定し、旧新manifestを含むcommitと逆順rollbackを行う。
 #include "SolutionGenerationTransaction.h"
 
 #include "../utility/StringUtility.h"
@@ -74,6 +75,8 @@ namespace {
 		return MoveFileExW(source.c_str(), destination.c_str(), flags) != FALSE;
 	}
 
+	bool SameRelativePath(const std::filesystem::path& left, const std::filesystem::path& right);
+
 	bool ReadManifestArtifacts(const std::filesystem::path& manifestPath, std::vector<SolutionGenerationOperationFile>& files, std::string& errorMessage) {
 		std::string content;
 		if (!ReadFile(manifestPath, content)) { errorMessage = "Generation manifest could not be read."; return false; }
@@ -94,7 +97,8 @@ namespace {
 				file.relativePath = StringUtility::ToPath(value.at("path").get<std::string>()).lexically_normal();
 				file.nextContentHash = value.at("contentHash").get<std::string>();
 				file.nextExists = true;
-				if (!IsSafeRelativePath(file.relativePath) || file.nextContentHash.empty()) {
+				if (!IsSafeRelativePath(file.relativePath) || file.nextContentHash.empty() ||
+					SameRelativePath(file.relativePath, std::filesystem::path(L"project/build/generated/solution-generation.json")) || SameRelativePath(file.relativePath, std::filesystem::path(L"intermediate/project-files/solution-generation.json"))) {
 					errorMessage = "Generation manifest artifact path is invalid.";
 					return false;
 				}
@@ -123,7 +127,7 @@ namespace {
 		}
 		for (const SolutionGenerationOperationFile& manifestFile : manifestFiles) {
 			const size_t count = static_cast<size_t>(std::count_if(requestFiles.begin(), requestFiles.end(), [&manifestFile](const SolutionGenerationOperationFile& requestFile) {
-				return requestFile.kind == SolutionGenerationOperationFileKind::Artifact && requestFile.previousExists && SameRelativePath(requestFile.relativePath, manifestFile.relativePath);
+				return requestFile.kind == SolutionGenerationOperationFileKind::Artifact && requestFile.previousExists && SameRelativePath(requestFile.relativePath, manifestFile.relativePath) && requestFile.previousContentHash == manifestFile.nextContentHash;
 			}));
 			if (count != 1) {
 				errorMessage = "Generation transaction explicit file union does not cover every owned artifact.";
@@ -132,14 +136,14 @@ namespace {
 		}
 		for (const SolutionGenerationOperationFile& requestFile : requestFiles) {
 			if (requestFile.kind == SolutionGenerationOperationFileKind::Artifact && requestFile.previousExists && std::none_of(manifestFiles.begin(), manifestFiles.end(), [&requestFile](const SolutionGenerationOperationFile& manifestFile) {
-				return SameRelativePath(requestFile.relativePath, manifestFile.relativePath);
+				return SameRelativePath(requestFile.relativePath, manifestFile.relativePath) && requestFile.previousContentHash == manifestFile.nextContentHash;
 			})) {
 				errorMessage = "Generation transaction explicit file union has an unowned previous artifact.";
 				return false;
 			}
 		}
 		const size_t manifestCount = static_cast<size_t>(std::count_if(requestFiles.begin(), requestFiles.end(), [&manifestPath](const SolutionGenerationOperationFile& requestFile) {
-			return requestFile.kind == SolutionGenerationOperationFileKind::Manifest && requestFile.previousExists && requestFile.nextExists && SameRelativePath(requestFile.relativePath, manifestPath);
+			return requestFile.kind == SolutionGenerationOperationFileKind::Manifest && requestFile.previousExists && SameRelativePath(requestFile.relativePath, manifestPath);
 		}));
 		if (manifestCount != 1) {
 			errorMessage = "Generation transaction explicit file union does not contain the fixed manifest replacement.";
@@ -151,6 +155,7 @@ namespace {
 	bool VerifySet(const SolutionGenerationOperation& operation, bool next) {
 		for (const SolutionGenerationOperationFile& file : operation.files) {
 			const std::filesystem::path target = operation.projectRoot / file.relativePath;
+			if (!IsSafeRelativePath(file.relativePath) || !IsWithin(target, operation.projectRoot) || HasReparsePointInExistingPath(target)) return false;
 			if (next) {
 				if (file.nextExists ? !MatchesHash(target, file.nextContentHash) : std::filesystem::exists(target)) return false;
 			} else if (file.previousExists ? !MatchesHash(target, file.previousContentHash) : std::filesystem::exists(target)) {
@@ -179,6 +184,11 @@ namespace {
 		}
 		for (const SolutionGenerationOperationFile& file : operation.files) {
 			const std::filesystem::path target = operation.projectRoot / file.relativePath;
+			if (!IsSafeRelativePath(file.relativePath) || !IsWithin(target, operation.projectRoot) || HasReparsePointInExistingPath(target) ||
+				HasReparsePointInExistingPath(operation.stagingRoot / file.relativePath) || HasReparsePointInExistingPath(operation.rollbackRoot / file.relativePath)) {
+				errorMessage = "Generation rollback artifact path is unsafe.";
+				return false;
+			}
 			if (IsPreviousFileState(file, target)) {
 				continue;
 			}
@@ -195,6 +205,8 @@ namespace {
 		const std::filesystem::path target = operation.projectRoot / file.relativePath;
 		const std::filesystem::path staged = operation.stagingRoot / file.relativePath;
 		const std::filesystem::path backup = operation.rollbackRoot / file.relativePath;
+		// Stage後や再起動後にdirectoryが置き換わっていても、root外へ追従しない。
+		if (HasReparsePointInExistingPath(target) || HasReparsePointInExistingPath(staged) || HasReparsePointInExistingPath(backup)) return CommitFileState::Invalid;
 		const bool stagedIsNext = file.nextExists && MatchesHash(staged, file.nextContentHash);
 		const bool targetIsNext = IsNextFileState(file, target);
 		if (!file.previousExists && file.nextExists) {
@@ -260,7 +272,10 @@ namespace {
 			if (file.kind == SolutionGenerationOperationFileKind::Artifact && !file.nextExists) ordered.push_back(&file);
 		}
 		for (const SolutionGenerationOperationFile& file : operation.files) {
-			if (file.kind == SolutionGenerationOperationFileKind::Manifest) ordered.push_back(&file);
+			if (file.kind == SolutionGenerationOperationFileKind::Manifest && !file.nextExists) ordered.push_back(&file);
+		}
+		for (const SolutionGenerationOperationFile& file : operation.files) {
+			if (file.kind == SolutionGenerationOperationFileKind::Manifest && file.nextExists) ordered.push_back(&file);
 		}
 		return ordered;
 	}
@@ -308,7 +323,7 @@ bool SolutionGenerationTransaction::Stage(const SolutionGenerationTransactionReq
 	}
 
 	const std::filesystem::path stagedManifest = operation.stagingRoot / request.preview.manifestPath;
-	if (!IsSafeRelativePath(request.preview.manifestPath) || !IsWithin(stagedManifest, operation.stagingRoot) || !std::filesystem::exists(stagedManifest)) {
+	if (!IsSafeRelativePath(request.preview.manifestPath) || !IsWithin(stagedManifest, operation.stagingRoot) || HasReparsePointInExistingPath(stagedManifest) || !std::filesystem::is_regular_file(stagedManifest)) {
 		errorMessage = "Generation preview manifest is outside the staging root.";
 		return false;
 	}
@@ -321,14 +336,55 @@ bool SolutionGenerationTransaction::Stage(const SolutionGenerationTransactionReq
 	}
 	operation.files.push_back({ SolutionGenerationOperationFileKind::Manifest, request.preview.manifestPath, {}, HashContent(manifestContent), false, true });
 
-	const std::filesystem::path finalManifest = operation.projectRoot / request.preview.manifestPath;
+	// 異なる旧manifest pathは固定V1→V2対だけ。旧journalのpathは変更しない。
+	const std::filesystem::path previousManifestPath = request.previousManifestPath.empty() ? request.preview.manifestPath : request.previousManifestPath;
+	const bool relocatingManifest = !SameRelativePath(previousManifestPath, request.preview.manifestPath);
+	if ((request.preview.manifestPath != std::filesystem::path(L"project/build/generated/solution-generation.json") && request.preview.manifestPath != std::filesystem::path(L"intermediate/project-files/solution-generation.json")) ||
+		(previousManifestPath != std::filesystem::path(L"project/build/generated/solution-generation.json") && previousManifestPath != std::filesystem::path(L"intermediate/project-files/solution-generation.json")) ||
+		(relocatingManifest && (previousManifestPath != std::filesystem::path(L"project/build/generated/solution-generation.json") || request.preview.manifestPath != std::filesystem::path(L"intermediate/project-files/solution-generation.json") || request.files.empty()))) {
+		errorMessage = "Generation manifest relocation is unsupported."; return false;
+	}
+	if (!request.files.empty()) {
+		// 引数が同pathなのに旧新Manifest対を渡す要求も拒否し、旧owned検査を迂回させない。
+		const size_t manifestCount = static_cast<size_t>(std::count_if(request.files.begin(), request.files.end(), [](const SolutionGenerationOperationFile& file) {
+			return file.kind == SolutionGenerationOperationFileKind::Manifest;
+		}));
+		const bool invalidManifest = std::any_of(request.files.begin(), request.files.end(), [&request, &previousManifestPath, relocatingManifest](const SolutionGenerationOperationFile& file) {
+			if (file.kind != SolutionGenerationOperationFileKind::Manifest) return false;
+			if (!relocatingManifest) return !file.nextExists || !SameRelativePath(file.relativePath, request.preview.manifestPath);
+			return !((SameRelativePath(file.relativePath, previousManifestPath) && file.previousExists && !file.nextExists) ||
+				(SameRelativePath(file.relativePath, request.preview.manifestPath) && !file.previousExists && file.nextExists));
+		});
+		if (manifestCount != (relocatingManifest ? 2u : 1u) || invalidManifest) {
+			errorMessage = "Explicit manifest set does not match the requested previous and next manifest paths.";
+			return false;
+		}
+	}
+	const std::filesystem::path finalManifest = operation.projectRoot / previousManifestPath;
+	// Serviceの診断後に二重配置になった場合も、新規Stageでは復旧を迂回しない。
+	std::error_code manifestError;
+	const bool oldManifestExists = std::filesystem::exists(operation.projectRoot / L"project/build/generated/solution-generation.json", manifestError);
+	if (manifestError) { errorMessage = "Old generation manifest could not be inspected."; return false; }
+	const bool newManifestExists = std::filesystem::exists(operation.projectRoot / L"intermediate/project-files/solution-generation.json", manifestError);
+	if (manifestError) { errorMessage = "New generation manifest could not be inspected."; return false; }
+	if (oldManifestExists && newManifestExists) {
+		errorMessage = "Old and new manifests both exist. Recover the matching journal before staging a new operation.";
+		return false;
+	}
+	// 反対layoutのmanifestが一件だけある場合も、同path要求で新たな二重配置を作らない。
+	if (!relocatingManifest && (request.preview.manifestPath == std::filesystem::path(L"intermediate/project-files/solution-generation.json") ? oldManifestExists : newManifestExists)) {
+		errorMessage = "Other layout manifest exists. Use explicit migration or recovery before staging.";
+		return false;
+	}
+	if (relocatingManifest && (HasReparsePointInExistingPath(finalManifest) || !std::filesystem::is_regular_file(finalManifest) || std::filesystem::exists(operation.projectRoot / request.preview.manifestPath))) { errorMessage = "Manifest relocation requires exactly one safe old manifest."; return false; }
 	std::vector<SolutionGenerationOperationFile> oldFiles;
+	if (HasReparsePointInExistingPath(finalManifest)) { errorMessage = "Previous manifest path is unsafe."; return false; }
 	if (std::filesystem::exists(finalManifest)) {
 		if (!ReadManifestArtifacts(finalManifest, oldFiles, errorMessage)) return false;
 		if (request.files.empty()) {
 			for (const SolutionGenerationOperationFile& oldFile : oldFiles) {
 				const std::filesystem::path target = operation.projectRoot / oldFile.relativePath;
-				if (!IsWithin(target, operation.projectRoot) || IsReparsePoint(target) || !MatchesHash(target, oldFile.nextContentHash)) {
+				if (!IsWithin(target, operation.projectRoot) || HasReparsePointInExistingPath(target) || !MatchesHash(target, oldFile.nextContentHash)) {
 					errorMessage = "GeneratedFileModified: an owned artifact no longer matches its manifest.";
 					return false;
 				}
@@ -336,19 +392,30 @@ bool SolutionGenerationTransaction::Stage(const SolutionGenerationTransactionReq
 			std::string previousManifestContent;
 			if (!ReadFile(finalManifest, previousManifestContent)) { errorMessage = "Existing generation manifest could not be hashed."; return false; }
 			oldFiles.push_back({ SolutionGenerationOperationFileKind::Manifest, request.preview.manifestPath, HashContent(previousManifestContent), {}, true, false });
-		} else if (!VerifyExplicitPreviousSet(oldFiles, request.files, request.preview.manifestPath, errorMessage)) {
+		} else if (!VerifyExplicitPreviousSet(oldFiles, request.files, previousManifestPath, errorMessage)) {
 			return false;
 		}
 	}
 
 	if (!request.files.empty()) {
+		// next集合はstaged manifestと一致しなければならない。origin等を混入させない。
+		for (const SolutionGenerationOperationFile& staged : operation.files) {
+			if (std::count_if(request.files.begin(), request.files.end(), [&staged](const SolutionGenerationOperationFile& file) {
+				return file.kind == staged.kind && file.nextExists && SameRelativePath(file.relativePath, staged.relativePath) && file.nextContentHash == staged.nextContentHash;
+			}) != 1) { errorMessage = "Explicit next set does not match the staged manifest."; return false; }
+		}
+		for (const SolutionGenerationOperationFile& file : request.files) {
+			if (file.kind == SolutionGenerationOperationFileKind::Artifact && file.nextExists && std::none_of(operation.files.begin(), operation.files.end(), [&file](const SolutionGenerationOperationFile& staged) {
+				return staged.kind == file.kind && SameRelativePath(staged.relativePath, file.relativePath) && staged.nextContentHash == file.nextContentHash;
+			})) { errorMessage = "Explicit next set contains an unowned artifact."; return false; }
+		}
 		operation.files = request.files;
 	}
 
 	for (SolutionGenerationOperationFile& file : operation.files) {
 		const std::filesystem::path stagedFile = operation.stagingRoot / file.relativePath;
 		const std::filesystem::path target = operation.projectRoot / file.relativePath;
-		if (!IsSafeRelativePath(file.relativePath) || !IsWithin(stagedFile, operation.stagingRoot) || !IsWithin(target, operation.projectRoot) || IsReparsePoint(target) ||
+		if (!IsSafeRelativePath(file.relativePath) || !IsWithin(stagedFile, operation.stagingRoot) || !IsWithin(target, operation.projectRoot) || HasReparsePointInExistingPath(target) || HasReparsePointInExistingPath(stagedFile) ||
 			(file.nextExists && !MatchesHash(stagedFile, file.nextContentHash)) ||
 			(!file.nextExists && std::filesystem::exists(stagedFile))) {
 			errorMessage = "Generation transaction artifact is unsafe or modified in staging.";

@@ -1,0 +1,44 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35931.197
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WeaponHunter.Engine", "WeaponHunter.Engine.vcxproj", "{75601FEF-7158-58C4-AEE4-F4707DE014FE}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WeaponHunter.Game", "WeaponHunter.Game.vcxproj", "{B1ACB1C1-E687-5F22-A926-F218EBB7615A}"
+	ProjectSection(ProjectDependencies) = postProject
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE} = {75601FEF-7158-58C4-AEE4-F4707DE014FE}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WeaponHunter", "WeaponHunter.vcxproj", "{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}"
+	ProjectSection(ProjectDependencies) = postProject
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A} = {B1ACB1C1-E687-5F22-A926-F218EBB7615A}
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE} = {75601FEF-7158-58C4-AEE4-F4707DE014FE}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Development|x64 = Development|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE}.Debug|x64.ActiveCfg = Debug|x64
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE}.Debug|x64.Build.0 = Debug|x64
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A}.Debug|x64.ActiveCfg = Debug|x64
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A}.Debug|x64.Build.0 = Debug|x64
+		{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}.Debug|x64.ActiveCfg = Debug|x64
+		{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}.Debug|x64.Build.0 = Debug|x64
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE}.Development|x64.ActiveCfg = Development|x64
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE}.Development|x64.Build.0 = Development|x64
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A}.Development|x64.ActiveCfg = Development|x64
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A}.Development|x64.Build.0 = Development|x64
+		{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}.Development|x64.ActiveCfg = Development|x64
+		{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}.Development|x64.Build.0 = Development|x64
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE}.Release|x64.ActiveCfg = Release|x64
+		{75601FEF-7158-58C4-AEE4-F4707DE014FE}.Release|x64.Build.0 = Release|x64
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A}.Release|x64.ActiveCfg = Release|x64
+		{B1ACB1C1-E687-5F22-A926-F218EBB7615A}.Release|x64.Build.0 = Release|x64
+		{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}.Release|x64.ActiveCfg = Release|x64
+		{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+EndGlobal

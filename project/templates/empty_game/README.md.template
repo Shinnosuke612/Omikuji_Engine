@@ -12,3 +12,5 @@ This is a Phase 0 Empty Game Project generated from the current engine checkout.
 The generated source is an independent snapshot. Later Template or Engine changes are not applied automatically.
 
 Git initialization, remote setup, Push, and Visual Studio launch are intentionally left to an explicit user action.
+
+IDE project files are generated separately from the game source and assets. New Launcher projects use intermediate/project-files. Regeneration updates owned IDE files; it does not update this Source snapshot.

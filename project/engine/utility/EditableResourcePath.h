@@ -13,6 +13,16 @@
 namespace EditableResourcePath {
 
 inline bool IsProjectRoot(const std::filesystem::path& path) {
+	// 判定対象はSource root（project）。descriptorはその親のGame rootに置く。
+	std::error_code descriptorError;
+	if (CompareStringOrdinal(path.filename().c_str(), -1, L"project", -1, TRUE) == CSTR_EQUAL &&
+		std::filesystem::is_directory(path, descriptorError) && !descriptorError &&
+		std::filesystem::is_regular_file(path.parent_path() / "game.project.json", descriptorError) && !descriptorError &&
+		std::filesystem::is_directory(path / "resources", descriptorError) && !descriptorError) {
+		return true;
+	}
+
+	// descriptorを持たない旧Snapshotも使えるよう、Template置換markerのfallbackを残す。
 	std::error_code error;
 	return std::filesystem::exists(path / "CG2_2025_04_14.vcxproj", error) &&
 		std::filesystem::exists(path / "resources", error);

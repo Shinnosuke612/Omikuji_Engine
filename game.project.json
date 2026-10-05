@@ -16,9 +16,9 @@
   },
   "paths": {
     "developmentExecutable": "generated/outputs/WeaponHunter/Development/WeaponHunter.exe",
-    "msbuildProject": "project/build/generated/WeaponHunter/WeaponHunter.vcxproj",
+    "msbuildProject": "intermediate/project-files/WeaponHunter.vcxproj",
     "sceneCatalog": "project/resources/scenes/scenes.json",
-    "solution": "project/build/generated/WeaponHunter/WeaponHunter.sln"
+    "solution": "intermediate/project-files/WeaponHunter.sln"
   },
   "projectId": "WeaponHunter",
   "schemaVersion": 1,

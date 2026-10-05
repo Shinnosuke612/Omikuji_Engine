@@ -1,3 +1,4 @@
+// 役割: 旧V1またはV2モデルからowned IDE artifactとmanifestを生成する。
 #include "SolutionGenerationEmitter.h"
 
 #include "../utility/StringUtility.h"
@@ -102,10 +103,18 @@ namespace {
 	std::string BuildProps(const SolutionGenerationModel& model) {
 		std::ostringstream output;
 		output << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n";
-		output << "  <PropertyGroup>\r\n"
-			<< "    <CGProjectSourceRoot>$(MSBuildThisFileDirectory)..\\..\\..\\</CGProjectSourceRoot>\r\n"
-			<< "    <CGGameRoot>$(CGProjectSourceRoot)..\\</CGGameRoot>\r\n"
-			<< "  </PropertyGroup>\r\n";
+		// IDE配置に応じたGame root深度だけを変更し、SourceとBuild出力は維持する。
+		if (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2) {
+			output << "  <PropertyGroup>\r\n"
+				<< "    <CGGameRoot>$(MSBuildThisFileDirectory)..\\..\\</CGGameRoot>\r\n"
+				<< "    <CGProjectSourceRoot>$(CGGameRoot)project\\</CGProjectSourceRoot>\r\n"
+				<< "  </PropertyGroup>\r\n";
+		} else {
+			output << "  <PropertyGroup>\r\n"
+				<< "    <CGProjectSourceRoot>$(MSBuildThisFileDirectory)..\\..\\..\\</CGProjectSourceRoot>\r\n"
+				<< "    <CGGameRoot>$(CGProjectSourceRoot)..\\</CGGameRoot>\r\n"
+				<< "  </PropertyGroup>\r\n";
+		}
 		for (const std::string& configuration : model.configurations) {
 			const bool debug = configuration == "Debug";
 			const bool development = configuration == "Development";
@@ -163,12 +172,46 @@ namespace {
 		return output.str() + "</Project>\r\n";
 	}
 
+	std::string GameFilterPath(const std::filesystem::path& sourcePath) {
+		std::string result = "Application";
+		const std::filesystem::path parent = sourcePath.parent_path();
+		auto part = parent.begin();
+		if (part != parent.end() && *part == "application") ++part;
+		for (; part != parent.end(); ++part) {
+			result += '\\';
+			result += StringUtility::ToUtf8(*part);
+		}
+		return result;
+	}
+
 	std::string BuildFilters(const SolutionGenerationTarget& target) {
+		const bool isGame = target.kind == SolutionGenerationTargetKind::Game;
 		std::ostringstream output;
-		output << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n  <ItemGroup><Filter Include=\"" << FilterName(target.kind) << "\" /></ItemGroup>\r\n  <ItemGroup>\r\n";
+		output << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Project ToolsVersion=\"4.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n";
+		if (isGame) {
+			std::map<std::string, bool> filters;
+			filters.emplace("Application", true);
+			for (const SolutionGenerationSourceFile& file : target.sourceFiles) {
+				std::string filter = GameFilterPath(file.projectRelativePath);
+				for (;;) {
+					filters.emplace(filter, true);
+					const std::size_t separator = filter.find_last_of('\\');
+					if (separator == std::string::npos) break;
+					filter.resize(separator);
+				}
+			}
+			output << "  <ItemGroup>\r\n";
+			for (const auto& filter : filters) output << "    <Filter Include=\"" << EscapeXml(filter.first) << "\" />\r\n";
+			output << "  </ItemGroup>\r\n";
+		}
+		else {
+			output << "  <ItemGroup><Filter Include=\"" << FilterName(target.kind) << "\" /></ItemGroup>\r\n";
+		}
+		output << "  <ItemGroup>\r\n";
 		for (const SolutionGenerationSourceFile& file : target.sourceFiles) {
 			const char* item = file.kind == SolutionGenerationFileKind::Compile ? "ClCompile" : "ClInclude";
-			output << "    <" << item << " Include=\"" << MsBuildSourcePath(file.projectRelativePath) << "\"><Filter>" << FilterName(target.kind) << "</Filter></" << item << ">\r\n";
+			const std::string filter = isGame ? GameFilterPath(file.projectRelativePath) : FilterName(target.kind);
+			output << "    <" << item << " Include=\"" << MsBuildSourcePath(file.projectRelativePath) << "\"><Filter>" << EscapeXml(filter) << "</Filter></" << item << ">\r\n";
 		}
 		return output.str() + "  </ItemGroup>\r\n</Project>\r\n";
 	}
@@ -252,7 +295,7 @@ bool SolutionGenerationEmitter::EmitPreview(const SolutionGenerationModel& model
 	}
 	json manifest = { { "artifacts", json::array() }, { "inputIdentity", output.inputIdentity }, { "schemaVersion", 1 } };
 	for (const SolutionGenerationArtifact& artifact : output.artifacts) manifest["artifacts"].push_back({ { "contentHash", artifact.contentHash }, { "path", StringUtility::ToUtf8(artifact.relativePath) } });
-	output.manifestPath = std::filesystem::path(L"project") / L"build" / L"generated" / L"solution-generation.json";
+	output.manifestPath = model.outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? std::filesystem::path(L"intermediate/project-files/solution-generation.json") : std::filesystem::path(L"project/build/generated/solution-generation.json");
 	const std::filesystem::path manifestTarget = root / output.manifestPath;
 	if (!WriteUtf8File(manifestTarget, manifest.dump(2) + "\n", errorMessage)) {
 		output = {};
@@ -263,8 +306,7 @@ bool SolutionGenerationEmitter::EmitPreview(const SolutionGenerationModel& model
 
 std::string SolutionGenerationEmitter::ComputeInputIdentity(const SolutionGenerationModel& model) const {
 	std::ostringstream input;
-	input << "cg3.solution-generation/input/v8\n"
-		<< "layout=grouped-v1\n";
+	input << (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? "cg3.solution-generation/input/v10\nlayout=project-files-v2\n" : "cg3.solution-generation/input/v9\nlayout=grouped-v1\n");
 	std::error_code relativeError;
 	const std::filesystem::path artifactRelativeDirectory = std::filesystem::relative(model.artifactDirectory, model.projectRoot, relativeError).lexically_normal();
 	if (!relativeError) {

@@ -1,3 +1,4 @@
+// 役割: Project登録と生成・作成journalの保存互換と検証を管理する。
 #include "ProjectRegistry.h"
 #include "../utility/StringUtility.h"
 
@@ -143,7 +144,7 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 			return false;
 		}
 		const int schemaVersion = root.at("schemaVersion").get<int>();
-		if (schemaVersion != 1 && schemaVersion != kSchemaVersion) {
+		if (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != kSchemaVersion) {
 			errorMessage = "Project Registry schema is invalid.";
 			return false;
 		}
@@ -206,7 +207,7 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 			std::string generatorPath;
 			std::string logPath;
 			std::string state;
-			if (!HasOnlyFields(value, { "destinationRoot", "displayName", "exitCode", "finalProjectRoot", "generatorPath", "logPath", "operationId", "processId", "processStartTimeFileTime", "projectId", "startSceneId", "state", "templateSourceRoot" }) ||
+			if (!HasOnlyFields(value, { "destinationRoot", "displayName", "exitCode", "finalProjectRoot", "generatorPath", "logPath", "operationId", "processId", "processStartTimeFileTime", "projectId", "startSceneId", "state", "templateSourceRoot", "outputLayout" }) ||
 				!ReadRequiredString(value, "operationId", operation.operationId) || !ReadRequiredString(value, "projectId", operation.projectId) ||
 				!ReadRequiredString(value, "displayName", operation.displayName) || !ReadRequiredString(value, "startSceneId", operation.startSceneId) ||
 				!ReadRequiredString(value, "destinationRoot", destinationRoot) || !ReadRequiredString(value, "finalProjectRoot", finalProjectRoot) ||
@@ -218,6 +219,11 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 				!TryParseCreationOperationState(state, operation.state)) {
 				errorMessage = "Project Registry creation operation is invalid.";
 				return false;
+			}
+			if (value.contains("outputLayout")) {
+				if (schemaVersion != 3 || !value.at("outputLayout").is_string()) { errorMessage = "Creation output layout is invalid."; return false; }
+				operation.outputLayout = value.at("outputLayout").get<std::string>();
+				if (!operation.outputLayout.empty() && operation.outputLayout != "GroupedV1" && operation.outputLayout != "ProjectFilesV2") { errorMessage = "Creation output layout is unsupported."; return false; }
 			}
 			operation.destinationRoot = NormalizeAbsolutePath(StringUtility::ToPath(destinationRoot));
 			operation.finalProjectRoot = NormalizeAbsolutePath(StringUtility::ToPath(finalProjectRoot));
@@ -287,6 +293,7 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 						file.nextExists = fileValue.at("nextExists").get<bool>();
 					}
 					file.relativePath = StringUtility::ToPath(relativePath).lexically_normal();
+					if (schemaVersion < 3 && file.kind == SolutionGenerationOperationFileKind::Manifest && file.relativePath != std::filesystem::path(L"project/build/generated/solution-generation.json")) { errorMessage = "New manifest layout requires Registry schema 3."; return false; }
 					if (schemaVersion == 1 && file.relativePath == std::filesystem::path(L"project/build/generated/solution-generation.json")) {
 						file.kind = SolutionGenerationOperationFileKind::Manifest;
 					}
@@ -344,6 +351,7 @@ bool ProjectRegistry::Save(std::string& errorMessage) const {
 			{ "generatorPath", StringUtility::ToUtf8(operation.generatorPath) },
 			{ "logPath", StringUtility::ToUtf8(operation.logPath) },
 			{ "operationId", operation.operationId },
+			{ "outputLayout", operation.outputLayout },
 			{ "processId", operation.processId },
 			{ "processStartTimeFileTime", operation.processStartTimeFileTime },
 			{ "projectId", operation.projectId },
@@ -433,7 +441,8 @@ bool ProjectRegistry::Validate(std::string& errorMessage) const {
 		if (operation.operationId.empty() || operation.projectId.empty() || operation.destinationRoot.empty() ||
 			operation.finalProjectRoot.empty() || operation.templateSourceRoot.empty() || operation.generatorPath.empty() || operation.logPath.empty() ||
 			!operation.destinationRoot.is_absolute() || !operation.finalProjectRoot.is_absolute() ||
-			!operation.templateSourceRoot.is_absolute() || !operation.generatorPath.is_absolute() || !operation.logPath.is_absolute()) {
+			!operation.templateSourceRoot.is_absolute() || !operation.generatorPath.is_absolute() || !operation.logPath.is_absolute() ||
+			(!operation.outputLayout.empty() && operation.outputLayout != "GroupedV1" && operation.outputLayout != "ProjectFilesV2")) {
 			errorMessage = "Project Registry creation operation is invalid.";
 			return false;
 		}
@@ -472,11 +481,14 @@ bool ProjectRegistry::Validate(std::string& errorMessage) const {
 					return false;
 				}
 			}
+			if (file.kind == SolutionGenerationOperationFileKind::Artifact &&
+				(CompareStringOrdinal(file.relativePath.lexically_normal().c_str(), -1, L"project\\build\\generated\\solution-generation.json", -1, TRUE) == CSTR_EQUAL ||
+				 CompareStringOrdinal(file.relativePath.lexically_normal().c_str(), -1, L"intermediate\\project-files\\solution-generation.json", -1, TRUE) == CSTR_EQUAL)) { errorMessage = "Manifest cannot be an artifact."; return false; }
 			if (file.kind == SolutionGenerationOperationFileKind::Descriptor && file.relativePath != std::filesystem::path(L"game.project.json")) {
 				errorMessage = "Project Registry solution generation descriptor path is invalid.";
 				return false;
 			}
-			if (file.kind == SolutionGenerationOperationFileKind::Manifest && file.relativePath != std::filesystem::path(L"project/build/generated/solution-generation.json")) {
+			if (file.kind == SolutionGenerationOperationFileKind::Manifest && file.relativePath != std::filesystem::path(L"project/build/generated/solution-generation.json") && file.relativePath != std::filesystem::path(L"intermediate/project-files/solution-generation.json")) {
 				errorMessage = "Project Registry solution generation manifest path is invalid.";
 				return false;
 			}
@@ -493,7 +505,17 @@ bool ProjectRegistry::Validate(std::string& errorMessage) const {
 		const size_t manifestCount = static_cast<size_t>(std::count_if(operation.files.begin(), operation.files.end(), [](const SolutionGenerationOperationFile& file) {
 			return file.kind == SolutionGenerationOperationFileKind::Manifest;
 		}));
-		if (descriptorCount > 1 || manifestCount != 1) {
+		if (manifestCount == 1 && std::any_of(operation.files.begin(), operation.files.end(), [](const SolutionGenerationOperationFile& file) { return file.kind == SolutionGenerationOperationFileKind::Manifest && !file.nextExists; })) { errorMessage = "Single manifest must describe the next generation."; return false; }
+		if (descriptorCount > 1 || (manifestCount != 1 && !(manifestCount == 2 && descriptorCount == 1 &&
+			std::any_of(operation.files.begin(), operation.files.end(), [](const SolutionGenerationOperationFile& file) {
+				return file.kind == SolutionGenerationOperationFileKind::Descriptor && file.previousExists && file.nextExists;
+			}) &&
+			std::count_if(operation.files.begin(), operation.files.end(), [](const SolutionGenerationOperationFile& file) {
+				return file.kind == SolutionGenerationOperationFileKind::Manifest && file.relativePath == std::filesystem::path(L"project/build/generated/solution-generation.json") && file.previousExists && !file.nextExists;
+			}) == 1 &&
+			std::count_if(operation.files.begin(), operation.files.end(), [](const SolutionGenerationOperationFile& file) {
+				return file.kind == SolutionGenerationOperationFileKind::Manifest && file.relativePath == std::filesystem::path(L"intermediate/project-files/solution-generation.json") && !file.previousExists && file.nextExists;
+			}) == 1))) {
 			errorMessage = "Project Registry solution generation file kind set is invalid.";
 			return false;
 		}

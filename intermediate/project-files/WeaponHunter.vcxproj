@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Development|x64"><Configuration>Development</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><VCProjectVersion>17.0</VCProjectVersion><Keyword>Win32Proj</Keyword><ProjectGuid>{77E8EFB8-9B85-52E1-98AC-275FDBE0E724}</ProjectGuid><RootNamespace>WeaponHunter</RootNamespace><WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration"><ConfigurationType>Application</ConfigurationType><UseDebugLibraries>true</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'" Label="Configuration"><ConfigurationType>Application</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration"><ConfigurationType>Application</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="$(MSBuildThisFileDirectory)WeaponHunter.Common.props" />
+  <ItemGroup>
+    <ClCompile Include="$(CGProjectSourceRoot)main.cpp"><ObjectFileName>$(IntDir)src_0_A517E0E6177F683B.obj</ObjectFileName></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup><ProjectReference Include="WeaponHunter.Game.vcxproj"><Project>{B1ACB1C1-E687-5F22-A926-F218EBB7615A}</Project></ProjectReference><ProjectReference Include="WeaponHunter.Engine.vcxproj"><Project>{75601FEF-7158-58C4-AEE4-F4707DE014FE}</Project></ProjectReference></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyRuntimeDlls" AfterTargets="Build"><ItemGroup><RuntimeDll Include="$(WindowsSdkDir)Redist\D3D\x64\dxcompiler.dll" Condition="!Exists('$(TargetDir)dxcompiler.dll')" /><RuntimeDll Include="$(WindowsSdkDir)Redist\D3D\x64\dxil.dll" Condition="!Exists('$(TargetDir)dxil.dll')" /></ItemGroup><Copy SourceFiles="@(RuntimeDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" Condition="'@(RuntimeDll)' != ''" /></Target>
+  <Target Name="CopyRuntimeAssets" AfterTargets="Build"><ItemGroup><RuntimeResource Include="$(CGProjectSourceRoot)resources\**\*" /></ItemGroup><Copy SourceFiles="@(RuntimeResource)" DestinationFiles="@(RuntimeResource->'$(TargetDir)resources\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" /></Target>
+</Project>

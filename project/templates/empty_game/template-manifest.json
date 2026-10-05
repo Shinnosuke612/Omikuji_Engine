@@ -15,7 +15,6 @@
     ".editorconfig",
     "main.cpp",
     "dxcompiler.dll",
-    "build/project.build.json",
     "CG2_2025_04_14.sln",
     "CG2_2025_04_14.vcxproj",
     "CG2_2025_04_14.vcxproj.filters"

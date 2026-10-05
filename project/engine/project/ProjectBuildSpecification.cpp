@@ -1,3 +1,4 @@
+// 役割: Game Projectのビルド仕様の保存先を解決し、JSONの形式と対応する設定値を検証する。
 #include "ProjectBuildSpecification.h"
 
 #include "ProjectDescriptor.h"
@@ -78,6 +79,47 @@ namespace {
 		output.name = name;
 		return true;
 	}
+}
+
+bool ProjectBuildSpecification::ResolvePath(const std::filesystem::path& projectRoot, std::filesystem::path& specificationPath, std::string& errorMessage) {
+	specificationPath.clear();
+	errorMessage.clear();
+	std::error_code error;
+	const std::filesystem::path root = std::filesystem::absolute(projectRoot, error).lexically_normal();
+	if (error) {
+		errorMessage = "Build specification Project root could not be resolved: " + error.message();
+		return false;
+	}
+	const std::filesystem::path currentPath = root / L"config" / L"project.build.json";
+	const std::filesystem::path legacyPath = root / L"project" / L"build" / L"project.build.json";
+	const bool currentExists = std::filesystem::exists(currentPath, error);
+	if (error) {
+		errorMessage = "Current build specification path could not be inspected: " + error.message();
+		return false;
+	}
+	const bool legacyExists = std::filesystem::exists(legacyPath, error);
+	if (error) {
+		errorMessage = "Legacy build specification path could not be inspected: " + error.message();
+		return false;
+	}
+	if (currentExists && legacyExists) {
+		errorMessage = "Build specification is ambiguous: both config/project.build.json and project/build/project.build.json exist.";
+		return false;
+	}
+	const std::filesystem::path selected = currentExists ? currentPath : legacyPath;
+	if (currentExists || legacyExists) {
+		if (!std::filesystem::is_regular_file(selected, error) || error) {
+			errorMessage = "Build specification path is not a readable regular file.";
+			return false;
+		}
+		std::string content;
+		if (!ReadUtf8File(selected, content)) {
+			errorMessage = "Build specification could not be read.";
+			return false;
+		}
+	}
+	specificationPath = selected;
+	return true;
 }
 
 bool ProjectBuildSpecification::Load(const std::filesystem::path& specificationPath, std::string& errorMessage) {
