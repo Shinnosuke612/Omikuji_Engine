@@ -1,6 +1,8 @@
 // 役割: ゲーム全体の更新、描画、ポストプロセスとエディタ再生制御を実装する。
 #include "Game.h"
 #include "PrefabPreviewRenderer.h"
+#include "transition/SceneTransitionController.h"
+#include "../engine/transition/SwordShatterRenderer.h"
 #include "scene/EditorBootstrap.h"
 #include "scene/RuntimeBootstrap.h"
 #include "scene/SceneFactory.h"
@@ -229,6 +231,20 @@ namespace {
 		}
 	}
 }
+
+// PostDrawと切離しWindowの最終利用完了後だけ、この所有状態を更新/破棄する。
+struct Game::PresentedTransitionState {
+	SceneTransitionController controller;
+	std::unique_ptr<SwordShatterRenderer> renderer;
+	uint64_t frameSerial = 0, completedSerial = 0;
+	uint32_t width = 0, height = 0;
+	bool drawFailed = false, renderedTextureUsed = false;
+	std::string issue;
+};
+
+// Object3dとPresentedTransitionStateの完全型がある場所で破棄を定義する。
+Game::Game() = default;
+Game::~Game() = default;
 
 void Game::Initialize() {
 	// 基底クラスの初期化処理
@@ -491,6 +507,17 @@ void Game::Initialize() {
 void Game::Update() {
 	// 基底クラスの更新処理
 	Framework::Update();
+	if (!presentedTransition_) presentedTransition_ = std::make_unique<PresentedTransitionState>();
+	// UIのStopはここへqueueし、Runtime Documentを切り替える前に取消する。
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (imguiManager_ && imguiManager_->ConsumePresentedTransitionStopRequest()) {
+		CancelPresentedTransition();
+		if (editorSession_) editorSession_->Stop();
+	}
+#endif
+	++presentedTransition_->frameSerial;
+	if (presentedTransition_->renderer) presentedTransition_->renderer->BeginFrame(presentedTransition_->frameSerial);
+	if (presentedTransition_->drawFailed) CancelPresentedTransition(presentedTransition_->issue);
 
 	if (startupErrorScreen_) {
 		if (startupErrorScreen_->IsCloseRequested()) {
@@ -537,6 +564,7 @@ void Game::Update() {
 			if (editorSession_->IsEditing()) {
 				editorSession_->Play();
 			} else {
+				CancelPresentedTransition();
 				editorSession_->Stop();
 			}
 		}
@@ -627,6 +655,7 @@ void Game::Update() {
 			discardUnsavedChanges
 		)
 	) {
+		CancelPresentedTransition();
 		const SceneDescriptor* requestedScene = sceneCatalog_
 			? sceneCatalog_->Find(requestedSceneId)
 			: nullptr;
@@ -667,7 +696,13 @@ void Game::Update() {
 		)
 		: CameraSnapshot{};
 	if (reloadRequested) {
+		CancelPresentedTransition();
+		sceneManager_->EndTransitionHold();
 		sceneManager_->ReloadCurrentScene();
+	}
+	if (executionContext_ && executionContext_->IsEditing()) {
+		// Editor Stop/OpenではRuntime用の保持をEdit Sceneへ持ち越さない。
+		sceneManager_->EndTransitionHold();
 	}
 	if (Input* input = Input::GetInstance()) {
 		const bool altHeld =
@@ -691,6 +726,7 @@ void Game::Update() {
 	}
 	const bool paused =
 		executionContext_ && executionContext_->IsPaused();
+	UpdatePresentedTransitionBeforeScene(deltaTime, paused);
 	const bool pauseStarted =
 		paused && !wasPausedLastFrame_;
 	const bool pauseEnded =
@@ -701,11 +737,16 @@ void Game::Update() {
 		EndPauseDebugCamera();
 	}
 	if (!paused) {
-		sceneManager_->Update(deltaTime);
+		if (sceneManager_->IsTransitionHeld()) {
+			sceneManager_->UpdateTransitionHold();
+		} else {
+			sceneManager_->Update(deltaTime);
+		}
 	} else {
 		sceneManager_->UpdatePaused();
 	}
 	ApplyRuntimePostProcessSettings();
+	UpdatePresentedTransitionAfterScene();
 	if (preserveEditorCamera) {
 		RestoreCameraSnapshot(editorCameraSnapshot);
 	}
@@ -741,6 +782,7 @@ void Game::ProcessSceneAssetRequests() {
 	if (!imguiManager_->ConsumeSceneAssetRequest(request)) {
 		return;
 	}
+	CancelPresentedTransition();
 
 	std::string errorMessage;
 	bool succeeded = false;
@@ -825,6 +867,7 @@ void Game::ProcessSceneInstanceRequests() {
 	if (!imguiManager_->ConsumeSceneInstanceRequest(request)) {
 		return;
 	}
+	CancelPresentedTransition();
 
 	bool succeeded = false;
 	std::string message;
@@ -1428,6 +1471,7 @@ bool Game::LaunchProjectEditor(
 		return false;
 	}
 	if (switchCurrentEditor) {
+		CancelPresentedTransition();
 		endRequest_ = true;
 	}
 	return true;
@@ -1438,6 +1482,7 @@ bool Game::OpenRegisteredEditScene(
 	bool discardUnsavedChanges,
 	std::string& errorMessage
 ) {
+	CancelPresentedTransition();
 	const SceneDescriptor* scene = sceneCatalog_
 		? sceneCatalog_->Find(sceneId)
 		: nullptr;
@@ -1459,6 +1504,132 @@ bool Game::OpenRegisteredEditScene(
 	}
 	errorMessage.clear();
 	return true;
+}
+
+bool Game::IsPresentedTransitionDrawable() const {
+	if (!winApp_ || IsIconic(winApp_->GetHwnd())) return false;
+	uint32_t width = dxCommon_->GetClientWidth(), height = dxCommon_->GetClientHeight();
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (editorSession_ && imguiManager_) {
+		if (!imguiManager_->IsSceneViewRenderable()) return false;
+		width = imguiManager_->GetSceneViewWidth(); height = imguiManager_->GetSceneViewHeight();
+	}
+#endif
+	return width > 0 && height > 0 && width <= SwordShatterRenderer::MaxImageDimension && height <= SwordShatterRenderer::MaxImageDimension;
+}
+
+void Game::CancelPresentedTransition(const std::string& reason) {
+	if (!presentedTransition_ || !sceneManager_ || !audio_) return;
+	auto& transition = *presentedTransition_;
+	transition.controller.Cancel(*sceneManager_,*audio_,reason);
+	transition.renderer.reset();
+	transition.drawFailed = false; transition.renderedTextureUsed = false;
+	if (!reason.empty()) {
+		transition.issue = reason;
+		Logger::Log("SceneTransition: "+reason+"\n");
+	}
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (imguiManager_) imguiManager_->SetPresentedTransitionStatus(transition.issue);
+#endif
+}
+
+void Game::UpdatePresentedTransitionBeforeScene(float delta, bool paused) {
+	if (!presentedTransition_ || !sceneManager_ || !audio_) return;
+	auto& t = *presentedTransition_;
+	if (executionContext_ && executionContext_->IsEditing()) { CancelPresentedTransition(); return; }
+	if (!t.controller.IsActive()) return;
+	const bool drawable = IsPresentedTransitionDrawable();
+	if (drawable && t.renderer) {
+		uint32_t width = dxCommon_->GetClientWidth(), height = dxCommon_->GetClientHeight();
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+		if (editorSession_ && imguiManager_) { width = imguiManager_->GetSceneViewWidth(); height = imguiManager_->GetSceneViewHeight(); }
+#endif
+		if (t.width != width || t.height != height) {
+			SceneTransitionAsset::Diagnostics diagnostics;
+			// Capture前のResizeは画像一組を再準備。Capture後は旧画像を維持する。
+			const bool ready = t.renderer->HasCapture()
+				? t.renderer->TryResizeOutput(width,height,diagnostics)
+				: t.renderer->TryPrepare(t.controller.GetAsset(),width,height,diagnostics);
+			t.controller.DiscardDrawReceipt();
+			if (!ready) {
+				t.issue = diagnostics.empty() ? "Transition resize failed." : diagnostics.front().message;
+				t.drawFailed = true; return; // このFrameは旧画像を描き、次safe Updateで取消。
+			}
+			t.width = width; t.height = height;
+		}
+	}
+	t.controller.UpdateBeforeScene(*sceneManager_,*audio_,delta,paused || !drawable,t.completedSerial);
+	if (!t.controller.IsActive()) {
+		const auto issue = t.controller.GetDiagnostic();
+		CancelPresentedTransition(issue);
+	}
+}
+
+void Game::UpdatePresentedTransitionAfterScene() {
+	if (!presentedTransition_ || !sceneManager_ || !sceneCatalog_ || !audio_) return;
+	auto& t = *presentedTransition_;
+	if (t.controller.IsActive()) {
+		t.controller.UpdateAfterScene(*sceneManager_,*audio_);
+		if (!t.controller.IsActive()) { const auto issue=t.controller.GetDiagnostic(); CancelPresentedTransition(issue); }
+	} else {
+		// 初回UI計測前/0寸法中は一件の要求を保持し、triggerOnceを失敗で消費しない。
+		if (!IsPresentedTransitionDrawable()) return;
+		PresentedTransitionRequest request;
+		if (!sceneManager_->ConsumePresentedTransitionRequest(request)) return;
+		SceneTransitionAsset::Diagnostics diagnostics;
+		bool ready = IsPresentedTransitionDrawable() && (!executionContext_ || !executionContext_->IsEditing()) &&
+			t.controller.TryPrepareRequest(request,*sceneCatalog_,*audio_,diagnostics);
+		if (ready) {
+			t.renderer = std::make_unique<SwordShatterRenderer>();
+			t.width = dxCommon_->GetClientWidth(); t.height = dxCommon_->GetClientHeight();
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+			if (editorSession_ && imguiManager_) { t.width=imguiManager_->GetSceneViewWidth(); t.height=imguiManager_->GetSceneViewHeight(); }
+#endif
+			ready = t.renderer->TryInitialize(*dxCommon_,*srvManager_,diagnostics);
+			if (ready) {
+				t.renderer->BeginFrame(t.frameSerial);
+				ready = t.renderer->TryPrepare(t.controller.GetAsset(),t.width,t.height,diagnostics) &&
+					t.controller.BeginPrepared(*sceneManager_,diagnostics);
+			}
+		}
+		if (!ready) {
+			CancelPresentedTransition(request.transitionAssetPath+": "+
+				(diagnostics.empty() ? "Scene/display is unavailable for transition." : diagnostics.front().field+": "+diagnostics.front().message));
+			return;
+		}
+		t.issue.clear();
+	}
+	if (t.controller.IsActive() && !t.controller.GetDiagnostic().empty() && t.issue != t.controller.GetDiagnostic()) {
+		t.issue = t.controller.GetDiagnostic();
+		Logger::Log("SceneTransition: "+t.issue+"\n");
+	}
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (imguiManager_) imguiManager_->SetPresentedTransitionStatus(t.issue.empty() ?
+		(t.controller.IsActive() ? "Scene transition is active" : "") : t.issue,t.controller.IsActive());
+#endif
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE Game::DrawPresentedTransition(D3D12_GPU_DESCRIPTOR_HANDLE source, uint32_t width, uint32_t height) {
+	if (!presentedTransition_) return source;
+	auto& t = *presentedTransition_; t.renderedTextureUsed = false;
+	if (!t.controller.IsActive() || !t.renderer) return source;
+	if (!t.drawFailed && IsPresentedTransitionDrawable() && width == t.width && height == t.height) {
+		SceneTransitionAsset::Diagnostics diagnostics;
+		const SwordShatterRenderer::TextureView background{source,width,height,RenderFormats::kDisplayFormat};
+		SwordShatterRenderer::CaptureReceipt capture;
+		bool ready = t.renderer->HasCapture() || t.renderer->TryCapture(background,capture,diagnostics);
+		if (ready) ready = t.renderer->TryCompose(background,t.controller.GetAsset(),t.controller.GetSample(),diagnostics);
+		if (ready) t.controller.NotifyDrawRecorded(t.frameSerial,sceneManager_->GetActiveSceneInstanceId());
+		else {
+			t.drawFailed = true;
+			t.issue = diagnostics.empty() ? "Transition render failed." : diagnostics.front().field+": "+diagnostics.front().message;
+			t.controller.DiscardDrawReceipt();
+		}
+	} else t.controller.DiscardDrawReceipt();
+	auto output = t.renderer->GetOutputView();
+	if (!output.srv.ptr) output = t.renderer->GetCaptureView();
+	if (output.srv.ptr) { t.renderedTextureUsed = true; return output.srv; }
+	return source;
 }
 
 void Game::Draw() {
@@ -1975,6 +2146,7 @@ void Game::Draw() {
 		textOverlayRenderTarget_->End();
 		sourceHandle = textOverlayRenderTarget_->GetSrvGpuHandle();
 	}
+	sourceHandle = DrawPresentedTransition(sourceHandle,sceneRenderTarget_->GetWidth(),sceneRenderTarget_->GetHeight());
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	SceneRenderTarget* const postProcessOutputTarget =
@@ -1986,6 +2158,7 @@ void Game::Draw() {
 			postProcessOutputTarget->GetHeight(),
 			sceneManager_->GetCurrentSceneName().c_str()
 		);
+		if (presentedTransition_ && !IsPresentedTransitionDrawable()) presentedTransition_->controller.DiscardDrawReceipt();
 	}
 #endif
 
@@ -1993,10 +2166,15 @@ void Game::Draw() {
 	srvManager_->PreDraw();
 	fullscreenCopy_->Draw(sourceHandle, depthHandle, maskHandle);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
-	imguiManager_->EndFrame();
+	imguiManager_->EndFrame(presentedTransition_ && presentedTransition_->renderedTextureUsed);
 #endif
 
 	dxCommon_->PostDraw();
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	// mainで生成済みのRTだけをplatform listへ渡し、最後の利用まで既存Fenceで待つ。
+	if (imguiManager_->RenderDeferredPlatformWindows()) dxCommon_->ExecuteCommandListAndWait();
+#endif
+	if (presentedTransition_) presentedTransition_->completedSerial = presentedTransition_->frameSerial;
 }
 
 Game::CameraSnapshot Game::CaptureCameraSnapshot() const {
@@ -2559,6 +2737,8 @@ void Game::DrawPrefabPreview() {
 }
 
 void Game::Finalize() {
+	CancelPresentedTransition();
+	presentedTransition_.reset();
 	if (Input* input = Input::GetInstance()) {
 		input->SetCursorCapture(false);
 	}

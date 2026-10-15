@@ -178,6 +178,30 @@ void SceneCameraSystem::UpdateAfterSimulation(
 	camera->Update();
 }
 
+void SceneCameraSystem::UpdateTransitionHold(
+	SceneDocument& document,
+	Camera* camera,
+	Player* player,
+	const std::vector<SceneRuntimeObjectBinding>& bindings
+) {
+	if (!camera) {
+		return;
+	}
+	// 初回表示で構築した追従状態を、通常Updateへの復帰で再初期化させない。
+	if (!wasPlaying_) {
+		playerCameraController_ = ThirdPersonCameraController{};
+		playerCameraInitialized_ = false;
+		activeCameraEntityId_ = 0;
+		thirdPersonCameraEntityId_ = 0;
+		wasPlaying_ = true;
+	}
+	if (!cameraPathRuntime_.IsPlaying()) {
+		ApplyActiveCamera(document, camera);
+		UpdateThirdPersonCamera(document, camera, player, bindings, 0.0f, true, false);
+	}
+	camera->Update();
+}
+
 void SceneCameraSystem::UpdatePaused(Camera* camera, Camera* debugCamera) {
 	InitializePauseDebugCamera(camera, debugCamera);
 	if (debugCamera) {

@@ -159,6 +159,9 @@
     <ClCompile Include="application\player\Player.cpp" />
     <ClCompile Include="engine\particle\ParticleEffectEditor.cpp" />
     <ClCompile Include="engine\scene\BaseScene.cpp" />
+    <ClCompile Include="engine\transition\SceneTransitionAsset.cpp" />
+    <ClCompile Include="engine\transition\SwordShatterRenderer.cpp" />
+    <ClCompile Include="application\transition\SceneTransitionController.cpp" />
     <ClCompile Include="application\scene\SceneFactory.cpp" />
     <ClCompile Include="application\scene\EditorBootstrap.cpp" />
     <ClCompile Include="application\scene\RuntimeBootstrap.cpp" />

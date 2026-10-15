@@ -99,6 +99,7 @@ struct SceneEventAction {
 	float value = 0.0f;
 	bool active = true;
 	std::string sceneId;
+	std::string transitionAssetPath; // 空は既存の即時SceneTransition。
 	std::string prefabPath;
 	bool prefabParentToTarget = false;
 	bool prefabUseTargetTransform = true;

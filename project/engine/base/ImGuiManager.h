@@ -203,7 +203,17 @@ public:
 	void BeginFrame();
 
 	// フレーム終了
-	void EndFrame();
+	void EndFrame(bool deferPlatformWindows = false);
+	// 演出画像のmain送信完了後にだけ呼ぶ。trueなら追加viewportのqueue利用をcallerが待つ。
+	bool RenderDeferredPlatformWindows();
+	bool IsSceneViewRenderable() const { return sceneViewRenderable_; }
+	// Runtimeからの一時表示。Scene/Prefab/Editor設定へ保存しない。
+	void SetPresentedTransitionStatus(const std::string& status, bool active = false) {
+		presentedTransitionStatus_ = status; presentedTransitionActive_ = active;
+	}
+	bool ConsumePresentedTransitionStopRequest() {
+		const bool requested = presentedTransitionStopRequested_; presentedTransitionStopRequested_ = false; return requested;
+	}
 
 	void DrawEditorWorkspace(
 		D3D12_GPU_DESCRIPTOR_HANDLE sceneTexture,
@@ -301,6 +311,9 @@ public:
 	}
 
 private:
+	bool deferredPlatformWindows_ = false, sceneViewRenderable_ = false;
+	bool presentedTransitionActive_ = false, presentedTransitionStopRequested_ = false;
+	std::string presentedTransitionStatus_;
 	struct PrefabAssetValidationResult {
 		std::string filePath;
 		std::string message;

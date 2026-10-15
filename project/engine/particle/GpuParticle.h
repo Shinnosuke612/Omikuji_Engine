@@ -217,7 +217,8 @@ public:
 	void Reset();
 	void ClearParticles();
 	void Update();
-	void Draw(Camera* camera);
+	// falseは既存粒子の描画だけ。発生/時間更新を止め、再生状態やbufferはResetしない。
+	void Draw(Camera* camera, bool advanceSimulation = true);
 	void DrawImGui(const char* windowTitle = "GPU Particle");
 	void ApplyEffectDesc(const ParticleEffectDesc& effect);
 	void RequestResetBuffer();

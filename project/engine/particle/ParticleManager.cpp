@@ -2505,7 +2505,7 @@ uint32_t ParticleManager::RebuildCpuParticleInstances(
 	return cpuParticleInstanceCount;
 }
 
-void ParticleManager::Draw(bool drawGpuParticles) {
+void ParticleManager::Draw(bool drawGpuParticles, bool advanceGpuSimulation) {
 	auto* commandList = particleCommon_->GetDxCommon()->GetCommandList();
 
 	for (auto& [name, group] : particleGroups_) {
@@ -2551,7 +2551,7 @@ void ParticleManager::Draw(bool drawGpuParticles) {
 	if (gpuParticleEnabled_ && drawGpuParticles) {
 		for (auto& [key, particle] : gpuParticles_) {
 			(void)key;
-			particle->Draw(camera_);
+			particle->Draw(camera_, advanceGpuSimulation);
 		}
 	}
 }

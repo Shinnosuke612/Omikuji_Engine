@@ -29,6 +29,9 @@ public:
 	virtual void Update(float deltaTime) = 0;
 	// Pause中はSimulationを進めず、Debug Cameraなど必要な表示状態だけを更新する。
 	virtual void UpdatePaused() {}
+	// 対応Sceneだけが、Simulationや開始Eventを進めずに描画準備できる。
+	virtual bool SupportsTransitionHold() const { return false; }
+	virtual void UpdateTransitionHold() {}
 
 	virtual void Draw() = 0;
 	// Additive描画ではActive SceneのCameraを全Instanceへ共有する。

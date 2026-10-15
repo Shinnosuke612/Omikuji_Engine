@@ -9,6 +9,8 @@
 #include "../engine/math/Matrix4x4.h"
 #include <filesystem>
 #include <string>
+#include <memory>
+#include <d3d12.h>
 
 class SceneRenderTarget;
 class FullscreenCopy;
@@ -31,12 +33,22 @@ struct ProjectLauncherView;
 
 class Game : public Framework {
 public:
+	Game();
+	~Game() override;
 	void Initialize() override;
 	void Finalize() override;
 	void Update() override;
 	void Draw() override;
 
 private:
+	struct PresentedTransitionState;
+	std::unique_ptr<PresentedTransitionState> presentedTransition_;
+	// 資源交換/取消は前Frameの全利用完了後。Drawは借用Displayへcommandを記録するだけ。
+	void CancelPresentedTransition(const std::string& reason = {});
+	void UpdatePresentedTransitionBeforeScene(float delta, bool paused);
+	void UpdatePresentedTransitionAfterScene();
+	D3D12_GPU_DESCRIPTOR_HANDLE DrawPresentedTransition(D3D12_GPU_DESCRIPTOR_HANDLE source, uint32_t width, uint32_t height);
+	bool IsPresentedTransitionDrawable() const;
 	struct CameraSnapshot {
 		bool valid = false;
 		bool orbitMode = false;

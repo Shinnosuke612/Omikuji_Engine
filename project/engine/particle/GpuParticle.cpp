@@ -2736,7 +2736,7 @@ void GpuParticle::Update() {
 	}
 }
 
-void GpuParticle::Draw(Camera* camera) {
+void GpuParticle::Draw(Camera* camera, bool advanceSimulation) {
 	if (!camera || !IsInitialized()) {
 		return;
 	}
@@ -2768,8 +2768,11 @@ void GpuParticle::Draw(Camera* camera) {
 	if (needsInitialize_) {
 		return;
 	}
-	EmitParticlesOnGPU();
-	UpdateParticlesOnGPU();
+	// 初回buffer準備は上で行い、保持中は既存粒子を進めず同じ資源から描画する。
+	if (advanceSimulation) {
+		EmitParticlesOnGPU();
+		UpdateParticlesOnGPU();
+	}
 	TransitionParticleResource(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
 	perViewData_->viewProjection = camera->GetViewProjectionMatrix();

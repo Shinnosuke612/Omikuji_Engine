@@ -1,0 +1,295 @@
+{
+  "version": 1,
+  "effect": "SwordShatter",
+  "displayName": "Sword Shatter",
+  "cutPhaseDuration": 1,
+  "collapseDuration": 2,
+  "cuts": [
+    {
+      "id": "h",
+      "from": [
+        0,
+        0.5
+      ],
+      "to": [
+        1,
+        0.5
+      ],
+      "startTime": 0,
+      "sweepDuration": 0.2,
+      "sweepEasing": "Linear",
+      "afterglowDuration": 0.8,
+      "lineColor": [
+        0.04,
+        0.04,
+        0.04,
+        1
+      ],
+      "lineWidth": 0.003,
+      "glowColor": [
+        0.25,
+        0.65,
+        1,
+        1
+      ],
+      "glowWidth": 0.025,
+      "glowIntensity": 3
+    },
+    {
+      "id": "d",
+      "from": [
+        0.2,
+        0.1
+      ],
+      "to": [
+        0.8,
+        0.9
+      ],
+      "startTime": 0.2,
+      "sweepDuration": 0.3,
+      "sweepEasing": "Linear",
+      "afterglowDuration": 0.5,
+      "lineColor": [
+        0.04,
+        0.04,
+        0.04,
+        1
+      ],
+      "lineWidth": 0.003,
+      "glowColor": [
+        0.25,
+        0.65,
+        1,
+        1
+      ],
+      "glowWidth": 0.025,
+      "glowIntensity": 3
+    }
+  ],
+  "geometryBinding": "geometry-v1|0:h:00000000,3f000000,3f800000,3f000000,|1:d:3e4ccccd,3dcccccd,3f4ccccd,3f666666,",
+  "fragments": [
+    {
+      "fragmentId": 0,
+      "keys": [
+        {
+          "time": 0,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotationEulerDegrees": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        },
+        {
+          "time": 2,
+          "position": [
+            0.25,
+            -2,
+            0.25
+          ],
+          "rotationEulerDegrees": [
+            0,
+            1080,
+            360
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        }
+      ]
+    },
+    {
+      "fragmentId": 1,
+      "keys": [
+        {
+          "time": 0,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotationEulerDegrees": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        },
+        {
+          "time": 2,
+          "position": [
+            -0.25,
+            -2,
+            -0.25
+          ],
+          "rotationEulerDegrees": [
+            0,
+            -1080,
+            -360
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        }
+      ]
+    },
+    {
+      "fragmentId": 2,
+      "keys": [
+        {
+          "time": 0,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotationEulerDegrees": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        },
+        {
+          "time": 2,
+          "position": [
+            0.25,
+            -2,
+            0.25
+          ],
+          "rotationEulerDegrees": [
+            0,
+            1080,
+            360
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        }
+      ]
+    },
+    {
+      "fragmentId": 3,
+      "keys": [
+        {
+          "time": 0,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotationEulerDegrees": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        },
+        {
+          "time": 2,
+          "position": [
+            -0.25,
+            -2,
+            -0.25
+          ],
+          "rotationEulerDegrees": [
+            0,
+            -1080,
+            -360
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "easingToNext": "Linear"
+        }
+      ]
+    }
+  ],
+  "flashKeys": [
+    {
+      "phase": "Cutting",
+      "time": 0,
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "intensity": 0,
+      "easingToNext": "Linear"
+    },
+    {
+      "phase": "Cutting",
+      "time": 0.2,
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "intensity": 1,
+      "easingToNext": "Linear"
+    },
+    {
+      "phase": "Cutting",
+      "time": 0.3,
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "intensity": 0,
+      "easingToNext": "Linear"
+    },
+    {
+      "phase": "Cutting",
+      "time": 1,
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "intensity": 0,
+      "easingToNext": "Linear"
+    }
+  ],
+  "audioCues": []
+}

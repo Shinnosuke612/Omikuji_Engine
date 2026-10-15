@@ -15,7 +15,7 @@ class SceneDocument;
 class SceneEnvironmentSystem;
 class SceneObjectSystem;
 
-// LightningRendererのみを所有し、共有ParticleManagerとSpriteの描画順を調停する。
+// Lightning/GroundCrack Rendererを所有し、共有ParticleManagerとSpriteの描画順を調停する。
 // deferForegroundEffects_は水面屈折の前後へEffectを分けるための一時的な描画契約。
 class SceneEffectRenderSystem {
 public:
@@ -28,19 +28,22 @@ public:
 	void SetDeferForegroundEffects(bool defer) {
 		deferForegroundEffects_ = defer;
 	}
+	// 保持条件は描画する各Viewから渡す。水面前後のPassでも同じ条件をGPU粒子へ届ける。
 	void DrawScenePass(
 		SceneDocument* document,
 		Camera* camera,
 		uint64_t skipEntityId,
 		SceneEnvironmentSystem& environmentSystem,
-		SceneObjectSystem& objectSystem
+		SceneObjectSystem& objectSystem,
+		bool advanceGpuSimulation = true
 	);
 	void DrawForegroundPass(
 		SceneDocument* document,
 		Camera* camera,
 		uint64_t skipEntityId,
 		SceneEnvironmentSystem& environmentSystem,
-		SceneObjectSystem& objectSystem
+		SceneObjectSystem& objectSystem,
+		bool advanceGpuSimulation = true
 	);
 	void Finalize();
 
@@ -48,7 +51,8 @@ private:
 	void DrawParticles(
 		const SceneDocument* document,
 		Camera* camera,
-		bool foreground
+		bool foreground,
+		bool advanceGpuSimulation
 	) const;
 
 	std::unique_ptr<LightningRenderer> lightningRenderer_;

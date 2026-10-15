@@ -136,7 +136,8 @@ void SceneEffectRenderSystem::DrawScenePass(
 	Camera* camera,
 	uint64_t skipEntityId,
 	SceneEnvironmentSystem& environmentSystem,
-	SceneObjectSystem& objectSystem
+	SceneObjectSystem& objectSystem,
+	bool advanceGpuSimulation
 ) {
 	// 通常構成では水面を先に描き、前景分離時は合成Passへ描画を遅延する。
 	if (!deferForegroundEffects_ && document) {
@@ -153,9 +154,9 @@ void SceneEffectRenderSystem::DrawScenePass(
 	if (groundCrackRenderer_) { groundCrackRenderer_->Draw(camera); }
 
 	if (deferForegroundEffects_) {
-		DrawParticles(document, camera, false);
+		DrawParticles(document, camera, false, advanceGpuSimulation);
 	} else {
-		DrawParticles(document, camera, true);
+		DrawParticles(document, camera, true, advanceGpuSimulation);
 		if (camera && document) {
 			objectSystem.DrawSprites(*document, skipEntityId);
 		}
@@ -167,7 +168,8 @@ void SceneEffectRenderSystem::DrawForegroundPass(
 	Camera* camera,
 	uint64_t skipEntityId,
 	SceneEnvironmentSystem& environmentSystem,
-	SceneObjectSystem& objectSystem
+	SceneObjectSystem& objectSystem,
+	bool advanceGpuSimulation
 ) {
 	if (!camera) {
 		return;
@@ -180,7 +182,7 @@ void SceneEffectRenderSystem::DrawForegroundPass(
 			skipEntityId
 		);
 	}
-	DrawParticles(document, camera, true);
+	DrawParticles(document, camera, true, advanceGpuSimulation);
 	if (document) {
 		objectSystem.DrawSprites(*document, skipEntityId);
 	}
@@ -189,7 +191,8 @@ void SceneEffectRenderSystem::DrawForegroundPass(
 void SceneEffectRenderSystem::DrawParticles(
 	const SceneDocument* document,
 	Camera* camera,
-	bool foreground
+	bool foreground,
+	bool advanceGpuSimulation
 ) const {
 	if (!camera) {
 		return;
@@ -206,13 +209,13 @@ void SceneEffectRenderSystem::DrawParticles(
 			? ParticleManager::WaterDrawMode::kForeground
 			: ParticleManager::WaterDrawMode::kRefracted;
 		particleManager->RefreshCpuParticleInstancesForCamera(camera, filter);
-		particleManager->Draw(!foreground);
+		particleManager->Draw(!foreground, advanceGpuSimulation);
 		return;
 	}
 
 	if (foreground) {
 		particleManager->RefreshCpuParticleInstancesForCamera(camera);
-		particleManager->Draw();
+		particleManager->Draw(true, advanceGpuSimulation);
 	}
 }
 

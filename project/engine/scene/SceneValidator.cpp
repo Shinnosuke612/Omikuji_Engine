@@ -6,8 +6,11 @@
 #include "SceneEntityQuery.h"
 #include "SceneInputKey.h"
 #include "../Audio/Audio.h"
+#include "../utility/EditableResourcePath.h"
+#include "../utility/StringUtility.h"
 
 #include <algorithm>
+#include <exception>
 #include <cmath>
 #include <sstream>
 #include <unordered_map>
@@ -15,6 +18,18 @@
 #include <utility>
 
 namespace {
+	// Authoringでは参照の構文/存在だけを確認する。完全なAsset評価はRuntime開始前に行う。
+	bool IsTransitionReferenceAvailable(const std::string& value) {
+		if (value.size() > 4096 || value.empty() || !value.ends_with(".transition.json") ||
+			std::any_of(value.begin(),value.end(),[](unsigned char c) { return c < 32 || c == 127 || c == ':'; })) return false;
+		try {
+			const auto path = StringUtility::ToPath(value);
+			if (path.has_root_path() || path.begin()==path.end() || *path.begin()!=L"resources") return false;
+			for (const auto& part : path) if (part==L"..") return false;
+			std::error_code error;
+			return std::filesystem::is_regular_file(EditableResourcePath::ResolveResource(path),error) && !error;
+		} catch (const std::exception&) { return false; }
+	}
 	bool HasErrors(const std::vector<SceneValidationIssue>& issues) {
 		for (const SceneValidationIssue& issue : issues) {
 			if (issue.severity == SceneValidationSeverity::Error) {
@@ -1247,6 +1262,14 @@ bool SceneValidator::ValidateDocument(
 								entity.id,
 								"ChangeState action has an empty state name"
 							);
+						}
+						if (
+							action.type == "SceneTransition" &&
+							!action.transitionAssetPath.empty() &&
+							(action.sceneId.empty() || !IsTransitionReferenceAvailable(action.transitionAssetPath))
+						) {
+							addIssue(SceneValidationSeverity::Error,entity.id,
+								"Event SceneTransition asset is missing or invalid: "+action.transitionAssetPath);
 						}
 						if (
 							action.type == "SceneTransition" &&

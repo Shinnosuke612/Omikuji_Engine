@@ -49,6 +49,9 @@ public:
 	void PrepareForSceneTransition() override;
 	void Update(float deltaTime) override;
 	void UpdatePaused() override;
+	bool SupportsTransitionHold() const override { return true; }
+	// 保持中は描画同期だけ。Event/Audio autoplay/SimulationのRuntime stateを変更しない。
+	void UpdateTransitionHold() override;
 	void Draw() override;
 	Camera* GetRenderCamera() const override;
 	void DrawWithCamera(Camera* viewCamera) override;

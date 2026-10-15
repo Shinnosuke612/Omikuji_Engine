@@ -185,10 +185,15 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTransitionRequest.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\utility\EditableResourcePath.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\utility\Logger.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\utility\Logger.h"><Filter>Engine</Filter></ClInclude>

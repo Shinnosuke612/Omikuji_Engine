@@ -3,10 +3,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "SceneInstance.h"
+#include "SceneTransitionRequest.h"
 
 class AbstractSceneFactory;
 class BaseScene;
@@ -28,7 +30,20 @@ public:
 	~SceneManager();
 
 	void Update(float deltaTime);
+	// 最初の一件を占有。Consume後もFinishまで追加要求を拒否し、Sceneは変更しない。
+	bool RequestPresentedTransition(const PresentedTransitionRequest& request);
+	// false時outは不変。要求の所有をGameへ渡すが、占有は維持する。
+	bool ConsumePresentedTransitionRequest(PresentedTransitionRequest& out);
+	// 拒否/取消/完了を処理したGameだけがsafe Updateで占有を解除する。
+	void FinishPresentedTransitionRequest();
 	void UpdatePaused();
+	// Edit Mode/非対応Instanceでは失敗。既存Sceneの状態をResetせず全Instanceを保持する。
+	bool BeginTransitionHold();
+	// 再生時刻/開始EventはResetせず、次の通常Updateから進行を再開する。
+	void EndTransitionHold();
+	bool IsTransitionHeld() const { return transitionHeld_; }
+	// 保持中だけ予約を確定し、描画同期を行う。共有Particleの時間は進めない。
+	void UpdateTransitionHold();
 
 	void Draw();
 	void DrawForegroundEffects();
@@ -45,6 +60,10 @@ public:
 		SceneLoadMode loadMode,
 		const std::string& instanceKey = {}
 	);
+	// 未確定の予約IDに一致した場合だけ取消。別予約や確定済みSceneを破棄しない。
+	bool CancelPendingSceneLoad(SceneInstanceId instanceId);
+	// 最後の一件を、ID一致時だけ一回消費する。LoadSceneの即時失敗は無効IDで返る。
+	bool ConsumeLoadOutcome(SceneInstanceId instanceId, SceneLoadOutcome& outcome);
 	SceneInstanceId LoadSceneAdditive(
 		const std::string& sceneId,
 		const std::string& instanceKey = {}
@@ -99,7 +118,9 @@ public:
 
 private:
 	void ActivatePendingScene();
-	void DiscardPendingScene();
+	void DiscardPendingScene(
+		const std::string& diagnostic = "Scene load cancelled before activation"
+	);
 	void ProcessPendingSceneUnloads();
 	BaseScene* GetActiveScene() const;
 	bool UnloadNonPersistentSceneInstances(
@@ -122,5 +143,9 @@ private:
 	SceneCatalog* sceneCatalog_ = nullptr;
 	std::string currentSceneName_;
 	SceneExecutionContext* executionContext_ = nullptr;
+	bool transitionHeld_ = false;
+	bool presentedTransitionBusy_ = false;
+	std::optional<PresentedTransitionRequest> presentedTransitionRequest_;
+	std::optional<SceneLoadOutcome> lastLoadOutcome_;
 };
 

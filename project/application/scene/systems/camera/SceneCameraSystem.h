@@ -40,6 +40,13 @@ public:
 		bool playing
 	);
 	void UpdatePaused(Camera* camera, Camera* debugCamera);
+	// 遷移中の表示同期。選択/経路/入力を進めず、初回追従位置とCamera行列だけを確定する。
+	void UpdateTransitionHold(
+		SceneDocument& document,
+		Camera* camera,
+		Player* player,
+		const std::vector<SceneRuntimeObjectBinding>& bindings
+	);
 
 	Camera* SelectSceneViewCamera(
 		Camera* camera,

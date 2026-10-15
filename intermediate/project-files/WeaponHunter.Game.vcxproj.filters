@@ -20,6 +20,7 @@
     <Filter Include="Application\scene\systems\physics" />
     <Filter Include="Application\scene\systems\rendering" />
     <Filter Include="Application\scene\systems\text" />
+    <Filter Include="Application\transition" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="$(CGProjectSourceRoot)application\camera\ThirdPersonCameraController.cpp"><Filter>Application\camera</Filter></ClCompile>
@@ -99,5 +100,7 @@
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.h"><Filter>Application\scene\systems\text</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><Filter>Application\scene\systems\text</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.h"><Filter>Application\scene\systems\text</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)application\transition\SceneTransitionController.cpp"><Filter>Application\transition</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)application\transition\SceneTransitionController.h"><Filter>Application\transition</Filter></ClInclude>
   </ItemGroup>
 </Project>

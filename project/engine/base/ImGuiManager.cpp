@@ -134,6 +134,30 @@ namespace {
 		return true;
 	}
 
+	// 演出pathは長いUTF-8も保持し、上限超過を切り詰めず診断できるようにする。
+	bool InputTransitionAssetPath(const char* label, std::string& value) {
+		const auto resize = [](ImGuiInputTextCallbackData* data) -> int {
+			auto& text = *static_cast<std::string*>(data->UserData);
+			text.resize(static_cast<size_t>(data->BufTextLen)); data->Buf = text.data(); return 0;
+		};
+		return ImGui::InputText(label,value.data(),value.capacity()+1,ImGuiInputTextFlags_CallbackResize,resize,&value);
+	}
+
+	std::string TransitionReferenceIssue(const std::string& value) {
+		if (value.empty()) return {};
+		if (value.size() > 4096 || value.find(':') != std::string::npos ||
+			std::any_of(value.begin(),value.end(),[](unsigned char c) { return c < 32 || c == 127; })) return "Invalid transition asset path";
+		try {
+			const auto path = PathFromUtf8(value);
+			if (path.has_root_path() || path.begin() == path.end() || *path.begin() != L"resources" ||
+				!value.ends_with(".transition.json")) return "Use resources/.../*.transition.json";
+			for (const auto& part : path) if (part == L"..") return "Parent path is not allowed";
+			std::error_code error;
+			if (!std::filesystem::is_regular_file(EditableResourcePath::ResolveResource(path),error) || error) return "Missing transition asset";
+		} catch (const std::exception&) { return "Invalid transition asset path"; }
+		return {};
+	}
+
 	bool InputTextMultilineString(const char* label, std::string& value) {
 		char buffer[2048]{};
 		CopyTextBuffer(buffer, sizeof(buffer), value);
@@ -1643,15 +1667,25 @@ void ImGuiManager::ApplyPendingEditorFont() {
 	editorFontRebuildRequested_ = false;
 }
 
-void ImGuiManager::EndFrame(){
+void ImGuiManager::EndFrame(bool deferPlatformWindows){
 	ImGui::Render();
 	ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), dxCommon_->GetCommandList());
-	if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+	deferredPlatformWindows_ = deferPlatformWindows && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable);
+	if (!deferredPlatformWindows_ && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)) {
 		// Platform WindowはBackend側のSwapChainとCommand Queueで描画する。
 		// メインDraw Dataの後に更新し、Dock解除したWindowをアプリ外にも表示する。
 		ImGui::UpdatePlatformWindows();
 		ImGui::RenderPlatformWindowsDefault();
 	}
+}
+
+bool ImGuiManager::RenderDeferredPlatformWindows() {
+	if (!deferredPlatformWindows_) return false;
+	deferredPlatformWindows_ = false;
+	ImGui::UpdatePlatformWindows();
+	const bool hasExtraViewports = ImGui::GetPlatformIO().Viewports.Size > 1;
+	ImGui::RenderPlatformWindowsDefault();
+	return hasExtraViewports;
 }
 
 void ImGuiManager::DrawEditorWorkspace(
@@ -1678,7 +1712,7 @@ void ImGuiManager::DrawEditorWorkspace(
 	}
 
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-	ImGui::Begin(
+	const bool sceneVisible = ImGui::Begin(
 		"Scene",
 		nullptr,
 		ImGuiWindowFlags_NoScrollbar |
@@ -1686,6 +1720,8 @@ void ImGuiManager::DrawEditorWorkspace(
 	);
 
 	const ImVec2 availableSize = ImGui::GetContentRegionAvail();
+	sceneViewRenderable_ = sceneVisible && std::isfinite(availableSize.x) && std::isfinite(availableSize.y) &&
+		availableSize.x > 0 && availableSize.y > 0;
 	sceneViewWidth_ = static_cast<uint32_t>(
 		(std::max)(availableSize.x, 1.0f)
 	);
@@ -4260,7 +4296,8 @@ void ImGuiManager::DrawPlaybackControls() {
 	}
 	else {
 		if (ImGui::SmallButton("Stop")) {
-			editorSession_->Stop();
+			if (presentedTransitionActive_) presentedTransitionStopRequested_ = true;
+			else editorSession_->Stop();
 		}
 		ImGui::SameLine();
 		if (state == EditorPlayState::Paused) {
@@ -11410,9 +11447,21 @@ void ImGuiManager::DrawInspectorWindow() {
 										action.type != "PlayTextMotion"
 									);
 								} else if (action.type == "SceneTransition") {
-									eventsChanged |= InputTextString(
-										LocalizedComponentWidgetLabel(editorLanguage_, "Scene Id"), action.sceneId
-									);
+									const auto* destination = sceneCatalog_ ? sceneCatalog_->Find(action.sceneId) : nullptr;
+									const std::string label = destination ? destination->displayName :
+										(action.sceneId.empty() ? "Select..." : "Missing: "+action.sceneId);
+									if (ImGui::BeginCombo(SelectEditorText(editorLanguage_,"移動先Scene###EventTransitionScene","Destination Scene###EventTransitionScene"),label.c_str())) {
+										if (ImGui::Selectable("None",action.sceneId.empty())) { action.sceneId.clear(); eventsChanged=true; }
+										if (sceneCatalog_) for (const auto& scene : sceneCatalog_->GetScenes()) {
+											if (ImGui::Selectable((scene.displayName+"##"+scene.id).c_str(),action.sceneId==scene.id)) { action.sceneId=scene.id; eventsChanged=true; }
+										}
+										ImGui::EndCombo();
+									}
+									eventsChanged |= InputTransitionAssetPath(SelectEditorText(editorLanguage_,"演出Asset###EventTransitionAsset","Transition Asset###EventTransitionAsset"),action.transitionAssetPath);
+									ImGui::TextDisabled("%s",SelectEditorText(editorLanguage_,"空欄は即時遷移。例: resources/transitions/sword_shatter.transition.json","Empty: immediate. Example: resources/transitions/sword_shatter.transition.json"));
+									const auto pathIssue = TransitionReferenceIssue(action.transitionAssetPath);
+									if (!pathIssue.empty()) ImGui::TextWrapped("%s",pathIssue.c_str());
+									if (!presentedTransitionStatus_.empty()) ImGui::TextWrapped("%s",presentedTransitionStatus_.c_str());
 								} else if (
 									action.type == "PlayCameraPath" ||
 									action.type == "StopCameraPath"

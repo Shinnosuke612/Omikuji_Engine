@@ -107,9 +107,11 @@
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.cpp"><ObjectFileName>$(IntDir)src_91_22D75F192810F948.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.cpp"><ObjectFileName>$(IntDir)src_92_F4DA180CA0B97C2C.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.cpp"><ObjectFileName>$(IntDir)src_93_257A45E8CB101135.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\Logger.cpp"><ObjectFileName>$(IntDir)src_94_F2AD49FDC00D64CA.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\StringUtility.cpp"><ObjectFileName>$(IntDir)src_95_EE1C4772C059CBEF.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\SystemPerformanceMonitor.cpp"><ObjectFileName>$(IntDir)src_96_CA62CDFA969B7713.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.cpp"><ObjectFileName>$(IntDir)src_94_26ACEBB586594D56.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.cpp"><ObjectFileName>$(IntDir)src_95_5EE77EE744BC2FE2.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\Logger.cpp"><ObjectFileName>$(IntDir)src_96_F2AD49FDC00D64CA.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\StringUtility.cpp"><ObjectFileName>$(IntDir)src_97_EE1C4772C059CBEF.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\SystemPerformanceMonitor.cpp"><ObjectFileName>$(IntDir)src_98_CA62CDFA969B7713.obj</ObjectFileName></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(CGProjectSourceRoot)engine\2d\Sprite.h" />
@@ -211,8 +213,11 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneSettings.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTransitionRequest.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\utility\EditableResourcePath.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\utility\Logger.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\utility\ResourceTextureCatalog.h" />

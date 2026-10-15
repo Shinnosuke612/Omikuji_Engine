@@ -59,6 +59,10 @@ public:
 		const std::wstring& filePath,
 		// Compilerに使用するProfile
 		const wchar_t* profile);
+	// 同じresolver/flags/DXCを使う準備用入口。警告も失敗とし、失敗時outは不変。
+	// diagnosticは今回の結果へ置換する。GPU使用中のDrawから呼ばない。
+	bool TryCompileShader(const std::wstring& filePath, const wchar_t* profile,
+		Microsoft::WRL::ComPtr<IDxcBlob>& out, std::string& diagnostic);
 
 	Microsoft::WRL::ComPtr <ID3D12Resource> CreateBufferResource(size_t sizeInBytes);
 

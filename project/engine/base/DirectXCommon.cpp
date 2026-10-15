@@ -452,108 +452,66 @@ void DirectXCommon::ExecuteCommandListAndWait(){
 	assert(SUCCEEDED(hr));
 }
 
-Microsoft::WRL::ComPtr<IDxcBlob> DirectXCommon::CompileShader(const std::wstring& filePath, const wchar_t* profile){
-	// 1. hlslファイルを読む
-	// // これからシェーダーをコンパイルする旨をログに出す
-	const std::wstring resolvedFilePath = ResolveRuntimePath(filePath);
+Microsoft::WRL::ComPtr<IDxcBlob> DirectXCommon::CompileShader(const std::wstring& filePath, const wchar_t* profile) {
+	Microsoft::WRL::ComPtr<IDxcBlob> shader;
+	std::string diagnostic;
+	if (!TryCompileShader(filePath, profile, shader, diagnostic)) {
+		Log(diagnostic);
+		assert(false);
+		throw std::runtime_error(diagnostic);
+	}
+	return shader;
+}
+
+bool DirectXCommon::TryCompileShader(const std::wstring& filePath, const wchar_t* profile,
+	Microsoft::WRL::ComPtr<IDxcBlob>& out, std::string& diagnostic) {
+	diagnostic.clear();
+	if (!dxcUtils || !dxcCompiler || !includeHandler || !profile || !*profile || filePath.empty()) {
+		diagnostic = "Shader compiler or arguments are not ready.";
+		return false;
+	}
+	std::wstring resolvedFilePath;
+	try {
+		resolvedFilePath = ResolveRuntimePath(filePath);
+	} catch (const std::exception& error) {
+		diagnostic = std::string("Failed resolve shader path: ") + error.what();
+		return false;
+	}
 	Log(StringUtility::ConvertString(std::format(L"Begin CompileShader, path:{}, profile:{}\n", resolvedFilePath, profile)));
-
-	// hlslファイルを読む
-	IDxcBlobEncoding* shaderSource = nullptr;
-	HRESULT hr = dxcUtils->LoadFile(resolvedFilePath.c_str(), nullptr, &shaderSource);
-	// 読めなかったら止める
-	if (FAILED(hr) || shaderSource == nullptr) {
-		const std::string message = StringUtility::ConvertString(std::format(
-			L"Failed LoadFile shader, requested:{}, resolved:{}, hr:{:#010x}\n",
-			filePath,
-			resolvedFilePath,
-			static_cast<unsigned int>(hr)
-		));
-		Log(message);
-		assert(false);
-		throw std::runtime_error(message);
-	}
-
-	// 読み込んだファイルの内容を設定する
-	DxcBuffer shaderSourceBuffer;
-	shaderSourceBuffer.Ptr = shaderSource->GetBufferPointer();
-	shaderSourceBuffer.Size = shaderSource->GetBufferSize();
-	shaderSourceBuffer.Encoding = DXC_CP_UTF8; // UTF8の文字コードであることを通知
-
-	// 2. Compileする
-	LPCWSTR arguments[] = {
-	resolvedFilePath.c_str(),     // コンパイル対象のhlslファイル名
-	L"-E", L"main",       // エントリーポイントの指定。基本的にmain以外にはしない
-	L"-T", profile,       // ShaderProfileの設定
-	L"-Zi", L"-Qembed_debug", // デバッグ用の情報を埋め込む
-	L"-Od",               // 最適化を外しておく
-	L"-Zpr",              // メモリレイアウトは行優先
+	const auto failed = [&](const char* step, HRESULT hr) {
+		diagnostic = std::format("{} shader, path:{}, hr:{:#010x}\n", step,
+			StringUtility::ConvertString(resolvedFilePath), static_cast<unsigned int>(hr));
+		return false;
 	};
-
-	// 実際にShaderをコンパイルする
-	IDxcResult* shaderResult = nullptr;
-	hr = dxcCompiler->Compile(
-		&shaderSourceBuffer,     // 読み込んだファイル
-		arguments,               // コンパイルオプション
-		_countof(arguments),     // コンパイルオプションの数
-		*&includeHandler,          // includeが含まれた場合
-		IID_PPV_ARGS(&shaderResult) // コンパイル結果
-	);
-	// コンパイルエラーではなくdxcが起動できないなど致命的な状況
-	if (FAILED(hr) || shaderResult == nullptr) {
-		const std::string message = StringUtility::ConvertString(std::format(
-			L"Failed CompileShader, path:{}, profile:{}, hr:{:#010x}\n",
-			resolvedFilePath,
-			profile,
-			static_cast<unsigned int>(hr)
-		));
-		Log(message);
-		shaderSource->Release();
-		assert(false);
-		throw std::runtime_error(message);
+	// 途中失敗でもDXCの一時COM objectを解放し、公開済みoutは交換しない。
+	Microsoft::WRL::ComPtr<IDxcBlobEncoding> source;
+	HRESULT hr = dxcUtils->LoadFile(resolvedFilePath.c_str(), nullptr, &source);
+	if (FAILED(hr) || !source) return failed("Failed LoadFile", hr);
+	DxcBuffer buffer{};
+	buffer.Ptr = source->GetBufferPointer();
+	buffer.Size = source->GetBufferSize();
+	buffer.Encoding = DXC_CP_UTF8;
+	LPCWSTR arguments[] = { resolvedFilePath.c_str(), L"-E", L"main", L"-T", profile,
+		L"-Zi", L"-Qembed_debug", L"-Od", L"-Zpr" };
+	Microsoft::WRL::ComPtr<IDxcResult> result;
+	hr = dxcCompiler->Compile(&buffer, arguments, _countof(arguments), includeHandler.Get(), IID_PPV_ARGS(&result));
+	if (FAILED(hr) || !result) return failed("Failed CompileShader", hr);
+	Microsoft::WRL::ComPtr<IDxcBlobUtf8> errors;
+	hr = result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
+	if (FAILED(hr)) return failed("Failed Get diagnostics", hr);
+	if (errors && errors->GetStringLength() != 0) {
+		diagnostic.assign(errors->GetStringPointer(), errors->GetStringLength());
+		return false; // 既存CompileShaderと同じくwarningも拒否する。
 	}
-
-	// 3. 警告・エラーがでていないか確認する
-	// 警告・エラーが出てたらログに出して止める
-	IDxcBlobUtf8* shaderError = nullptr;
-	shaderResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&shaderError), nullptr);
-	if(shaderError != nullptr && shaderError->GetStringLength() != 0){
-		Log(shaderError->GetStringPointer());
-		// 警告・エラー ダメ ゼッタイ
-		assert(false);
-		shaderSource->Release();
-		shaderResult->Release();
-		throw std::runtime_error(shaderError->GetStringPointer());
-	}
-
-	// 4. Compile結果を受け取って返す
-	// コンパイル結果から実行用のバイナリ部分を取得
-	IDxcBlob* shaderBlob = nullptr;
-	hr = shaderResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr);
-	if (FAILED(hr) || shaderBlob == nullptr) {
-		const std::string message = StringUtility::ConvertString(std::format(
-			L"Failed Get shader object, path:{}, profile:{}, hr:{:#010x}\n",
-			resolvedFilePath,
-			profile,
-			static_cast<unsigned int>(hr)
-		));
-		Log(message);
-		shaderSource->Release();
-		shaderResult->Release();
-		assert(false);
-		throw std::runtime_error(message);
-	}
-
-	// 成功したログを出す
+	HRESULT status = E_FAIL;
+	hr = result->GetStatus(&status);
+	if (FAILED(hr) || FAILED(status)) return failed("Failed shader status", FAILED(hr) ? hr : status);
+	Microsoft::WRL::ComPtr<IDxcBlob> object;
+	hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&object), nullptr);
+	if (FAILED(hr) || !object || object->GetBufferSize() == 0) return failed("Failed Get shader object", hr);
 	Log(StringUtility::ConvertString(std::format(L"Compile Succeeded, path:{}, profile:{}\n", resolvedFilePath, profile)));
-
-	// もう使わないリソースを解放
-	shaderSource->Release();
-	shaderResult->Release();
-
-	// 実行用のバイナリを返却
-	return shaderBlob;
-
+	out = object;
+	return true;
 }
 
 Microsoft::WRL::ComPtr<ID3D12Resource> DirectXCommon::CreateBufferResource(size_t sizeInBytes){

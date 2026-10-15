@@ -1105,6 +1105,7 @@ namespace {
 				{ "value", action.value },
 				{ "active", action.active },
 				{ "sceneId", action.sceneId },
+				{ "transitionAssetPath", action.transitionAssetPath },
 				{ "prefabPath", action.prefabPath },
 				{ "prefabParentToTarget", action.prefabParentToTarget },
 				{ "prefabUseTargetTransform", action.prefabUseTargetTransform },
@@ -1935,6 +1936,7 @@ namespace {
 		action.value = value.value("value", action.value);
 		action.active = value.value("active", action.active);
 		action.sceneId = value.value("sceneId", action.sceneId);
+		action.transitionAssetPath = value.value("transitionAssetPath", action.transitionAssetPath);
 		action.prefabPath = value.value("prefabPath", action.prefabPath);
 		action.prefabParentToTarget = value.value(
 			"prefabParentToTarget", action.prefabParentToTarget

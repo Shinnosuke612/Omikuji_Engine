@@ -449,7 +449,8 @@ public:
 		Camera* camera,
 		const WaterDrawFilter& filter
 	);
-	void Draw(bool drawGpuParticles = true);
+	// GPU保持中も粒子は表示する。更新停止はUpdateを抑止する呼出し側と組み合わせる。
+	void Draw(bool drawGpuParticles = true, bool advanceGpuSimulation = true);
 
 	bool CreateParticleGroup(const std::string& name, const std::string& textureFilePath);
 

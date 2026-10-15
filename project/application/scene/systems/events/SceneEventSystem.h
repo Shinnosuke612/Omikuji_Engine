@@ -70,6 +70,7 @@ struct SceneEventRuntimeSignals {
 
 struct SceneEventResult {
 	std::string sceneTransitionId;
+	std::string transitionAssetPath;
 	ScenePostProcessRequest postProcessRequest;
 	std::vector<SceneCameraRequest> cameraRequests;
 	std::vector<SceneAudioRequest> audioRequests;

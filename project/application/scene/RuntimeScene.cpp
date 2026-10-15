@@ -71,7 +71,8 @@ Camera* RuntimeScene::GetSceneViewCamera() const {
 	return cameraSystem_.SelectSceneViewCamera(
 		camera_,
 		debugCamera_,
-		executionContext && executionContext->IsPaused()
+		executionContext && executionContext->IsPaused() &&
+			!(sceneManager_ && sceneManager_->IsTransitionHeld())
 	);
 }
 
@@ -110,7 +111,8 @@ void RuntimeScene::DrawPreparedSceneContentForView(
 		viewCamera,
 		skipEntityId,
 		environmentSystem_,
-		objectSystem_
+		objectSystem_,
+		!(sceneManager_ && sceneManager_->IsTransitionHeld())
 	);
 	if (document) {
 		DirectXCommon* dxCommon = Object3dCommon::GetInstance()->GetDxCommon();
@@ -582,6 +584,12 @@ void RuntimeScene::Update(float deltaTime)
 			eventSignals
 		);
 		if (!eventResult.sceneTransitionId.empty()) {
+			// Capture前は現在のPose/Profileを保持する。拒否でも即時遷移へ落とさない。
+			if (!eventResult.transitionAssetPath.empty()) {
+				sceneManager_->RequestPresentedTransition({GetSceneInstanceId(),
+					eventResult.sceneTransitionId, eventResult.transitionAssetPath});
+				return;
+			}
 			postProcessProfileSystem_.Reset(activeDocument);
 			sceneManager_->ChangeScene(eventResult.sceneTransitionId);
 			return;
@@ -653,6 +661,24 @@ void RuntimeScene::Update(float deltaTime)
 		);
 	}
 	textRenderSystem_.Sync(activeDocument);
+}
+
+void RuntimeScene::UpdateTransitionHold()
+{
+	SceneDocument* document = GetSceneDocument();
+	if (!document) {
+		return;
+	}
+	// 次Sceneは開始Eventより前に描く。旧Sceneでは同じ同期で再生時計を保つ。
+	objectSystem_.SyncModelsForTransition(document, physicsSystem_);
+	objectSystem_.BuildBindings(*document, runtimeObjectBindings_);
+	attachmentSystem_.Update(*document, objectSystem_, runtimeObjectBindings_);
+	objectSystem_.SyncSprites(document);
+	cameraSystem_.UpdateTransitionHold(*document, camera_, player_, runtimeObjectBindings_);
+	lightingSystem_.Sync(document);
+	environmentSystem_.Sync(document, runtimeObjectBindings_);
+	// TextMotion/GameFlowの既存overrideは消さず、新Sceneだけauthoring表示を準備する。
+	textRenderSystem_.Sync(document);
 }
 
 void RuntimeScene::UpdatePaused()
@@ -740,7 +766,8 @@ void RuntimeScene::DrawForegroundEffectsWithCamera(Camera* viewCamera)
 		viewCamera,
 		0,
 		environmentSystem_,
-		objectSystem_
+		objectSystem_,
+		!(sceneManager_ && sceneManager_->IsTransitionHeld())
 	);
 }
 

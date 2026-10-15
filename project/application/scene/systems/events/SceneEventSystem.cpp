@@ -352,6 +352,7 @@ SceneEventResult SceneEventSystem::Update(
 			result.sceneTransitionId.empty()
 		) {
 			result.sceneTransitionId = action.sceneId;
+			result.transitionAssetPath = action.transitionAssetPath;
 		} else if (
 			action.type == "SetPostProcessProfile" &&
 			IsValidPostProcessProfileAction(document, action)

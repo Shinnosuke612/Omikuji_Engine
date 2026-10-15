@@ -69,22 +69,21 @@ bool SceneRenderTarget::Initialize(
 	for (uint32_t index = 0; index < 4; ++index) {
 		clearColor_[index] = desc.clearColor[index];
 	}
-	rtvHeap_ = dxCommon_->CreateDescriptorHeap(
-		D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-		1,
-		false
-	);
-	if (createDepth_) {
-		dsvHeap_ = dxCommon_->CreateDescriptorHeap(
-			D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-			1,
-			false
-		);
+	// bool初期化の失敗をcallerへ返すため、assert付きhelperを経由しない。
+	D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	heapDesc.NumDescriptors = 1;
+	HRESULT heapResult = dxCommon_->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&rtvHeap_));
+	bool heapsReady = SUCCEEDED(heapResult) && rtvHeap_;
+	if (heapsReady && createDepth_) {
+		heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+		heapResult = dxCommon_->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&dsvHeap_));
+		heapsReady = SUCCEEDED(heapResult) && dsvHeap_;
 	}
 
 	width_ = (std::max)(desc.width, 1u);
 	height_ = (std::max)(desc.height, 1u);
-	if (!CreateResources()) {
+	if (!heapsReady || !CreateResources()) {
 		colorResource_.Reset();
 		depthResource_.Reset();
 		rtvHeap_.Reset();
@@ -275,8 +274,7 @@ bool SceneRenderTarget::CreateResources() {
 		&colorClearValue,
 		IID_PPV_ARGS(&colorResource_)
 	);
-	assert(SUCCEEDED(result));
-	if (!colorResource_ || !rtvHeap_) {
+	if (FAILED(result) || !colorResource_ || !rtvHeap_) {
 		return false;
 	}
 
@@ -320,8 +318,7 @@ bool SceneRenderTarget::CreateResources() {
 		&depthClearValue,
 		IID_PPV_ARGS(&depthResource_)
 	);
-	assert(SUCCEEDED(result));
-	if (!depthResource_ || !dsvHeap_) {
+	if (FAILED(result) || !depthResource_ || !dsvHeap_) {
 		return false;
 	}
 

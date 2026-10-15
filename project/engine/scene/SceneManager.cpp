@@ -4,6 +4,7 @@
 #include <cassert>
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 #include "AbstractSceneFactory.h"
 #include "BaseScene.h"
@@ -13,7 +14,37 @@
 #include "../particle/ParticleManager.h"
 #include "../utility/Logger.h"
 
+bool SceneManager::RequestPresentedTransition(const PresentedTransitionRequest& request) {
+	if (presentedTransitionBusy_ || pendingSceneInstance_ || transitionHeld_ ||
+		!FindSceneInstance(request.sourceInstanceId) || request.destinationSceneId.empty() ||
+		request.transitionAssetPath.empty() || !sceneCatalog_ || !sceneCatalog_->Find(request.destinationSceneId)) {
+		Logger::Log("Presented SceneTransition rejected (busy or invalid reference), source:"+
+			std::to_string(request.sourceInstanceId)+", destination:"+request.destinationSceneId+
+			", asset:"+request.transitionAssetPath+"\n");
+		return false;
+	}
+	presentedTransitionRequest_ = request;
+	presentedTransitionBusy_ = true;
+	return true;
+}
+
+bool SceneManager::ConsumePresentedTransitionRequest(PresentedTransitionRequest& out) {
+	if (!presentedTransitionRequest_) return false;
+	out = std::move(*presentedTransitionRequest_);
+	presentedTransitionRequest_.reset();
+	return true;
+}
+
+void SceneManager::FinishPresentedTransitionRequest() {
+	presentedTransitionRequest_.reset();
+	presentedTransitionBusy_ = false;
+}
+
 void SceneManager::ChangeScene(const std::string& sceneId) {
+	if (presentedTransitionBusy_) {
+		Logger::Log("SceneTransition rejected while a presented transition is occupied\n");
+		return;
+	}
 	LoadScene(sceneId, SceneLoadMode::Single);
 }
 
@@ -46,6 +77,11 @@ SceneInstanceId SceneManager::LoadScene(
 	BaseScene* newScene = sceneFactory_->CreateScene(runtimeProfile);
 	if (!newScene) {
 		Logger::Log("Scene runtime profile is not registered: " + runtimeProfile + "\n");
+		return kInvalidSceneInstanceId;
+	}
+	if (transitionHeld_ && !newScene->SupportsTransitionHold()) {
+		Logger::Log("Scene runtime profile does not support transition hold: " + runtimeProfile + "\n");
+		delete newScene;
 		return kInvalidSceneInstanceId;
 	}
 
@@ -96,6 +132,26 @@ SceneInstanceId SceneManager::LoadScene(
 	pendingSceneLoadMode_ = loadMode;
 	pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
 	return instanceId;
+}
+
+bool SceneManager::CancelPendingSceneLoad(SceneInstanceId instanceId) {
+	if (instanceId == kInvalidSceneInstanceId || !pendingSceneInstance_ ||
+		pendingSceneInstance_->GetId() != instanceId) {
+		return false;
+	}
+	DiscardPendingScene();
+	return true;
+}
+
+bool SceneManager::ConsumeLoadOutcome(
+	SceneInstanceId instanceId, SceneLoadOutcome& outcome
+) {
+	if (!lastLoadOutcome_ || lastLoadOutcome_->instanceId != instanceId) {
+		return false;
+	}
+	outcome = std::move(*lastLoadOutcome_);
+	lastLoadOutcome_.reset();
+	return true;
 }
 
 bool SceneManager::UnloadScene(SceneInstanceId instanceId) {
@@ -163,6 +219,8 @@ bool SceneManager::SetScenePersistent(
 }
 
 void SceneManager::ReloadCurrentScene() {
+	// Reload/Editor Stopは演出の取消境界。旧保持を新しい予約へ持ち越さない。
+	EndTransitionHold();
 	if (pendingSceneInstance_) {
 		if (currentSceneName_.empty()) {
 			return;
@@ -334,6 +392,10 @@ bool SceneManager::TryGetActiveRuntimePostProcessSettings(
 
 void SceneManager::Update(float deltaTime)
 {
+	if (transitionHeld_) {
+		UpdateTransitionHold();
+		return;
+	}
 	ProcessPendingSceneUnloads();
 	ActivatePendingScene();
 
@@ -349,6 +411,49 @@ void SceneManager::Update(float deltaTime)
 			);
 		}
 		ParticleManager::GetInstance()->Update();
+	}
+}
+
+bool SceneManager::BeginTransitionHold() {
+	if (executionContext_ && executionContext_->IsEditing()) {
+		return false;
+	}
+	if (sceneInstances_.empty()) {
+		return false;
+	}
+	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
+		const BaseScene* scene = instance->GetScene();
+		if (!scene || !scene->SupportsTransitionHold()) {
+			return false;
+		}
+	}
+	if (pendingSceneInstance_) {
+		const BaseScene* pendingScene = pendingSceneInstance_->GetScene();
+		if (!pendingScene || !pendingScene->SupportsTransitionHold()) {
+			return false;
+		}
+	}
+	transitionHeld_ = true;
+	return true;
+}
+
+void SceneManager::EndTransitionHold() {
+	transitionHeld_ = false;
+}
+
+void SceneManager::UpdateTransitionHold() {
+	if (!transitionHeld_ || (executionContext_ && executionContext_->IsPaused())) {
+		return;
+	}
+	ProcessPendingSceneUnloads();
+	ActivatePendingScene();
+	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
+		if (BaseScene* scene = instance->GetScene()) {
+			scene->UpdateTransitionHold();
+		}
+	}
+	if (BaseScene* activeScene = GetActiveScene()) {
+		ParticleManager::GetInstance()->SetCamera(activeScene->GetRenderCamera());
 	}
 }
 
@@ -372,7 +477,9 @@ void SceneManager::ActivatePendingScene()
 			"Pending Scene does not match the active Edit SceneDocument: " +
 			descriptor->id + "\n"
 		);
-		DiscardPendingScene();
+		DiscardPendingScene(
+			"Pending Scene does not match the active Edit SceneDocument: " + descriptor->id
+		);
 		return;
 	}
 	if (
@@ -390,12 +497,12 @@ void SceneManager::ActivatePendingScene()
 			"Runtime SceneDocument could not be loaded: " +
 			descriptor->filePath + "\n"
 		);
-		DiscardPendingScene();
+		DiscardPendingScene("Runtime SceneDocument could not be loaded: " + descriptor->filePath);
 		return;
 	}
 	if (pendingSceneLoadMode_ == SceneLoadMode::Additive) {
 		if (!descriptor) {
-			DiscardPendingScene();
+			DiscardPendingScene("Additive Scene is not registered");
 			return;
 		}
 		auto document = std::make_unique<SceneDocument>();
@@ -404,7 +511,10 @@ void SceneManager::ActivatePendingScene()
 				"Additive SceneDocument could not be loaded: " +
 				descriptor->filePath + "\n" + document->GetLastLoadError() + "\n"
 			);
-			DiscardPendingScene();
+			DiscardPendingScene(
+				"Additive SceneDocument could not be loaded: " + descriptor->filePath +
+				": " + document->GetLastLoadError()
+			);
 			return;
 		}
 		document->MarkClean();
@@ -420,7 +530,10 @@ void SceneManager::ActivatePendingScene()
 				"SceneDocument could not be loaded: " +
 				descriptor->filePath + "\n" + document->GetLastLoadError() + "\n"
 			);
-			DiscardPendingScene();
+			DiscardPendingScene(
+				"SceneDocument could not be loaded: " + descriptor->filePath +
+				": " + document->GetLastLoadError()
+			);
 			return;
 		}
 		document->MarkClean();
@@ -461,13 +574,19 @@ void SceneManager::ActivatePendingScene()
 	}
 
 	sceneInstances_.back()->Initialize(this);
+	lastLoadOutcome_ = SceneLoadOutcome{ instanceId, SceneLoadStatus::Activated, {} };
 	pendingSceneLoadMode_ = SceneLoadMode::Single;
 	pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
 	pendingForceUnloadAllSceneInstances_ = false;
 }
 
-void SceneManager::DiscardPendingScene()
+void SceneManager::DiscardPendingScene(const std::string& diagnostic)
 {
+	if (pendingSceneInstance_) {
+		lastLoadOutcome_ = SceneLoadOutcome{
+			pendingSceneInstance_->GetId(), SceneLoadStatus::Failed, diagnostic
+		};
+	}
 	pendingSceneInstance_.reset();
 	pendingSceneLoadMode_ = SceneLoadMode::Single;
 	pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
@@ -506,6 +625,9 @@ void SceneManager::ProcessPendingSceneUnloads()
 
 void SceneManager::UpdatePaused()
 {
+	if (transitionHeld_) {
+		return;
+	}
 	// Pause中は遷移予約も進めず、Resume後の通常Updateで反映する。
 	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
 		if (BaseScene* scene = instance->GetScene()) {

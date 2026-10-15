@@ -51,6 +51,7 @@
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.cpp"><ObjectFileName>$(IntDir)src_35_AA0B73901ED0F5CE.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.cpp"><ObjectFileName>$(IntDir)src_36_6FED70B151E4A733.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><ObjectFileName>$(IntDir)src_37_63A4F7AAB91E5249.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\transition\SceneTransitionController.cpp"><ObjectFileName>$(IntDir)src_38_BC8BD0746BB0C56A.obj</ObjectFileName></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(CGProjectSourceRoot)application\camera\ThirdPersonCameraController.h" />
@@ -92,6 +93,7 @@
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\transition\SceneTransitionController.h" />
   </ItemGroup>
   <ItemGroup><ProjectReference Include="WeaponHunter.Engine.vcxproj"><Project>{75601FEF-7158-58C4-AEE4-F4707DE014FE}</Project></ProjectReference></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

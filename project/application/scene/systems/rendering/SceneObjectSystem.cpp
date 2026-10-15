@@ -66,6 +66,24 @@ void SceneObjectSystem::SyncModels(
 	bool allowAnimatorAutoPlay,
 	bool editing
 ) {
+	SyncModelsInternal(document, physicsSystem, deltaTime, allowAnimatorAutoPlay, editing, true);
+}
+
+void SceneObjectSystem::SyncModelsForTransition(
+	SceneDocument* document, ScenePhysicsSystem& physicsSystem
+) {
+	// 許可flagの切替はPlayAnimationを再実行するため、Runtimeのtrueを保ち時計だけ止める。
+	SyncModelsInternal(document, physicsSystem, 0.0f, true, false, false);
+}
+
+void SceneObjectSystem::SyncModelsInternal(
+	SceneDocument* document,
+	ScenePhysicsSystem& physicsSystem,
+	float deltaTime,
+	bool allowAnimatorAutoPlay,
+	bool editing,
+	bool advanceAnimation
+) {
 	// Entity IDを安定キーにし、Model変更時だけRuntime一式を作り直す。
 	if (!document) {
 		ClearModels();
@@ -73,6 +91,7 @@ void SceneObjectSystem::SyncModels(
 	}
 
 	std::unordered_set<uint64_t> requiredIds;
+	std::unordered_set<uint64_t> initialAnimationPoseIds;
 	for (const SceneEntity& entity : document->GetEntities()) {
 		const SceneComponent* meshRenderer =
 			FindEnabledComponent(entity, "MeshRenderer");
@@ -122,11 +141,15 @@ void SceneObjectSystem::SyncModels(
 			animator && animator->animatorBlendCurve == "Linear"
 			? AnimationBlendCurve::Linear
 			: AnimationBlendCurve::SmoothStep;
+		const bool initializeAnimator = !runtime.animatorInitialized;
+		if (!advanceAnimation && initializeAnimator) {
+			initialAnimationPoseIds.insert(entity.id);
+		}
 
 		if (
 			!runtime.animatorInitialized ||
-			runtime.hasAnimator != hasAnimator ||
-			runtime.animatorAutoPlayAllowed != allowAnimatorAutoPlay
+			(advanceAnimation && (runtime.hasAnimator != hasAnimator ||
+				runtime.animatorAutoPlayAllowed != allowAnimatorAutoPlay))
 		) {
 			runtime.object->SetAnimationEnabled(hasAnimator);
 			if (hasAnimator) {
@@ -144,7 +167,7 @@ void SceneObjectSystem::SyncModels(
 			}
 			runtime.animatorInitialized = true;
 			runtime.animatorAutoPlayAllowed = allowAnimatorAutoPlay;
-		} else if (hasAnimator) {
+		} else if (hasAnimator && advanceAnimation) {
 			if (runtime.animatorPlayOnStart != animator->animatorPlayOnStart) {
 				runtime.object->SetAnimationPlaying(
 					allowAnimatorAutoPlay && animator->animatorPlayOnStart
@@ -167,8 +190,10 @@ void SceneObjectSystem::SyncModels(
 				);
 			}
 		}
-		runtime.hasAnimator = hasAnimator;
-		if (animator) {
+		if (advanceAnimation || initializeAnimator) {
+			runtime.hasAnimator = hasAnimator;
+		}
+		if (animator && (advanceAnimation || initializeAnimator)) {
 			runtime.animatorPlayOnStart = animator->animatorPlayOnStart;
 			runtime.animatorLoop = animator->animatorLoop;
 			runtime.animatorSpeed = animator->animatorSpeed;
@@ -362,7 +387,9 @@ void SceneObjectSystem::SyncModels(
 			updateEntity(entity->parentId);
 		}
 		if (IsEntityActiveInHierarchy(*document, *entity)) {
-			object->UpdateAnimation(deltaTime);
+			if (advanceAnimation || initialAnimationPoseIds.contains(entityId)) {
+				object->UpdateAnimation(deltaTime);
+			}
 			object->Update();
 		}
 		updatingIds.erase(entityId);

@@ -60,6 +60,8 @@ public:
 		bool editing
 	);
 	void SyncSprites(const SceneDocument* document);
+	// Runtime姿勢/再生状態を保持し、初回モデルだけ時刻0を準備する。Animation時計は進めない。
+	void SyncModelsForTransition(SceneDocument* document, ScenePhysicsSystem& physicsSystem);
 	// Agent・Physics・Environmentへ渡す非所有参照を、Object同期直後に再構築する。
 	void BuildBindings(
 		SceneDocument& document,
@@ -93,6 +95,14 @@ public:
 	void Finalize();
 
 private:
+	void SyncModelsInternal(
+		SceneDocument* document,
+		ScenePhysicsSystem& physicsSystem,
+		float deltaTime,
+		bool allowAnimatorAutoPlay,
+		bool editing,
+		bool advanceAnimation
+	);
 	struct SpriteRuntime {
 		std::unique_ptr<Sprite> sprite;
 		std::string texturePath;
