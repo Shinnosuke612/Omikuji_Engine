@@ -1,7 +1,7 @@
 {
   "debug": {
-    "jointAxisLength": 0.06,
-    "jointRadius": 0.009,
+    "jointAxisLength": 0.05999999865889549,
+    "jointRadius": 0.008999999612569809,
     "showCameraDirection": false,
     "showCameraPath": true,
     "showCameraPathPointCameraDirection": true,
@@ -10,25 +10,19 @@
     "showJointNames": false,
     "showSkeleton": false
   },
-  "lighting": {
-    "shadowMapSize": 1024
-  },
-  "sceneName": "TITLE",
-  "teams": [],
-  "version": 27,
   "entities": [
     {
       "active": true,
       "components": [
         {
           "enabled": true,
-          "farClip": 1000,
-          "fovY": 0.45,
+          "farClip": 1000.0,
+          "fovY": 0.44999998807907104,
           "invertPitch": false,
           "invertYaw": false,
           "isMain": true,
           "localId": 1,
-          "nearClip": 0.1,
+          "nearClip": 0.10000000149011612,
           "type": "Camera"
         }
       ],
@@ -45,36 +39,36 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          100.0,
+          100.0
         ],
         "texturePath": ""
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0
         ],
         "translate": [
-          0,
-          2,
-          -8
+          0.0,
+          2.0,
+          -8.0
         ]
       }
     },
@@ -82,35 +76,35 @@
       "active": false,
       "components": [
         {
-          "characterSpacing": 0,
+          "characterSpacing": 0.0,
           "clipEnabled": false,
           "color": [
-            1,
-            1,
-            1,
-            1
+            1.0,
+            1.0,
+            1.0,
+            1.0
           ],
           "enabled": true,
           "fontFamily": "Yu Gothic UI",
-          "fontSize": 72,
+          "fontSize": 72.0,
           "fontStyle": "Normal",
           "fontWeight": "Regular",
           "horizontalAlignment": "Center",
           "layoutSize": [
-            0,
-            0
+            0.0,
+            0.0
           ],
-          "lineSpacing": 1,
+          "lineSpacing": 1.0,
           "localId": 1,
-          "opacity": 1,
+          "opacity": 1.0,
           "outlineColor": [
-            0,
-            0,
-            0,
-            1
+            0.0,
+            0.0,
+            0.0,
+            1.0
           ],
           "outlineEnabled": true,
-          "outlineWidth": 2,
+          "outlineWidth": 2.0,
           "overflowMode": "Overflow",
           "overlayPlacement": {
             "clipEnabled": false,
@@ -119,18 +113,18 @@
               0.5
             ],
             "position": [
-              0,
-              -80
+              0.0,
+              -80.0
             ],
-            "rotation": 0,
+            "rotation": 0.0,
             "scale": [
-              1,
-              1
+              1.0,
+              1.0
             ],
             "sortingOrder": 10,
             "viewportAnchor": [
               0.5,
-              0.42
+              0.41999998688697815
             ]
           },
           "pivot": [
@@ -141,34 +135,34 @@
           "scene2DPlacement": {
             "clipEnabled": false,
             "pivot": [
-              0,
-              0
+              0.0,
+              0.0
             ],
             "position": [
-              0,
-              0
+              0.0,
+              0.0
             ],
-            "rotation": 0,
+            "rotation": 0.0,
             "scale": [
-              1,
-              1
+              1.0,
+              1.0
             ],
             "sortingOrder": 0,
             "viewportAnchor": [
-              0,
-              0
+              0.0,
+              0.0
             ]
           },
           "shadowColor": [
-            0,
-            0,
-            0,
+            0.0,
+            0.0,
+            0.0,
             0.5
           ],
           "shadowEnabled": false,
           "shadowOffset": [
-            2,
-            2
+            2.0,
+            2.0
           ],
           "sortingOrder": 10,
           "text": "WEAPON HUNTER",
@@ -176,112 +170,112 @@
           "verticalAlignment": "Center",
           "viewportAnchor": [
             0.5,
-            0.42
+            0.41999998688697815
           ],
           "wrapMode": "NoWrap"
         },
         {
-          "enabled": true,
-          "localId": 2,
-          "type": "TextMotion",
           "clips": [
             {
-              "id": "intro",
               "holdFinalPose": true,
+              "id": "intro",
               "keyframes": [
                 {
-                  "timeSeconds": 0,
+                  "easingToNext": "EaseOut",
+                  "opacityMultiplier": 0.0,
                   "positionOffset": [
-                    -900,
-                    0
+                    -900.0,
+                    0.0
                   ],
-                  "rotationOffset": 0,
+                  "rotationOffset": 0.0,
                   "scaleMultiplier": [
-                    0.8,
-                    0.8
+                    0.800000011920929,
+                    0.800000011920929
                   ],
-                  "opacityMultiplier": 0,
-                  "easingToNext": "EaseOut"
+                  "timeSeconds": 0.0
                 },
                 {
-                  "timeSeconds": 0.75,
+                  "easingToNext": "EaseOut",
+                  "opacityMultiplier": 1.0,
                   "positionOffset": [
-                    40,
-                    0
+                    40.0,
+                    0.0
                   ],
-                  "rotationOffset": 0,
+                  "rotationOffset": 0.0,
                   "scaleMultiplier": [
-                    1.12,
-                    1.12
+                    1.1200000047683716,
+                    1.1200000047683716
                   ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "EaseOut"
+                  "timeSeconds": 0.75
                 },
                 {
-                  "timeSeconds": 1.1,
+                  "easingToNext": "SmoothStep",
+                  "opacityMultiplier": 1.0,
                   "positionOffset": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                   ],
-                  "rotationOffset": 0,
+                  "rotationOffset": 0.0,
                   "scaleMultiplier": [
-                    1,
-                    1
+                    1.0,
+                    1.0
                   ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "SmoothStep"
+                  "timeSeconds": 1.100000023841858
                 }
               ]
             },
             {
-              "id": "exit",
               "holdFinalPose": false,
+              "id": "exit",
               "keyframes": [
                 {
-                  "timeSeconds": 0,
+                  "easingToNext": "EaseInOut",
+                  "opacityMultiplier": 1.0,
                   "positionOffset": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                   ],
-                  "rotationOffset": 0,
+                  "rotationOffset": 0.0,
                   "scaleMultiplier": [
-                    1,
-                    1
+                    1.0,
+                    1.0
                   ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "EaseInOut"
+                  "timeSeconds": 0.0
                 },
                 {
-                  "timeSeconds": 0.22,
+                  "easingToNext": "EaseOut",
+                  "opacityMultiplier": 1.0,
                   "positionOffset": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                   ],
-                  "rotationOffset": 0,
+                  "rotationOffset": 0.0,
                   "scaleMultiplier": [
-                    1.08,
-                    0.92
+                    1.0800000429153442,
+                    0.9200000166893005
                   ],
-                  "opacityMultiplier": 1,
-                  "easingToNext": "EaseOut"
+                  "timeSeconds": 0.2199999988079071
                 },
                 {
-                  "timeSeconds": 0.75,
+                  "easingToNext": "EaseIn",
+                  "opacityMultiplier": 0.0,
                   "positionOffset": [
-                    900,
-                    0
+                    900.0,
+                    0.0
                   ],
-                  "rotationOffset": 0,
+                  "rotationOffset": 0.0,
                   "scaleMultiplier": [
-                    1,
-                    1
+                    1.0,
+                    1.0
                   ],
-                  "opacityMultiplier": 0,
-                  "easingToNext": "EaseIn"
+                  "timeSeconds": 0.75
                 }
               ]
             }
-          ]
+          ],
+          "enabled": true,
+          "localId": 2,
+          "type": "TextMotion"
         }
       ],
       "folder": false,
@@ -297,36 +291,36 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          100.0,
+          100.0
         ],
         "texturePath": ""
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0
         ],
         "translate": [
-          0,
-          0,
-          0
+          0.0,
+          0.0,
+          0.0
         ]
       }
     },
@@ -334,35 +328,35 @@
       "active": true,
       "components": [
         {
-          "characterSpacing": 0,
+          "characterSpacing": 0.0,
           "clipEnabled": false,
           "color": [
-            1,
-            1,
-            1,
-            1
+            1.0,
+            1.0,
+            1.0,
+            1.0
           ],
           "enabled": true,
           "fontFamily": "Yu Gothic UI",
-          "fontSize": 28,
+          "fontSize": 28.0,
           "fontStyle": "Normal",
           "fontWeight": "Regular",
           "horizontalAlignment": "Center",
           "layoutSize": [
-            0,
-            0
+            0.0,
+            0.0
           ],
-          "lineSpacing": 1,
+          "lineSpacing": 1.0,
           "localId": 1,
-          "opacity": 1,
+          "opacity": 1.0,
           "outlineColor": [
-            0,
-            0,
-            0,
-            1
+            0.0,
+            0.0,
+            0.0,
+            1.0
           ],
           "outlineEnabled": true,
-          "outlineWidth": 2,
+          "outlineWidth": 2.0,
           "overflowMode": "Overflow",
           "overlayPlacement": {
             "clipEnabled": false,
@@ -371,18 +365,18 @@
               0.5
             ],
             "position": [
-              0,
-              80
+              0.0,
+              80.0
             ],
-            "rotation": 0,
+            "rotation": 0.0,
             "scale": [
-              1,
-              1
+              1.0,
+              1.0
             ],
             "sortingOrder": 10,
             "viewportAnchor": [
               0.5,
-              0.58
+              0.5799999833106995
             ]
           },
           "pivot": [
@@ -393,34 +387,34 @@
           "scene2DPlacement": {
             "clipEnabled": false,
             "pivot": [
-              0,
-              0
+              0.0,
+              0.0
             ],
             "position": [
-              0,
-              0
+              0.0,
+              0.0
             ],
-            "rotation": 0,
+            "rotation": 0.0,
             "scale": [
-              1,
-              1
+              1.0,
+              1.0
             ],
             "sortingOrder": 0,
             "viewportAnchor": [
-              0,
-              0
+              0.0,
+              0.0
             ]
           },
           "shadowColor": [
-            0,
-            0,
-            0,
+            0.0,
+            0.0,
+            0.0,
             0.5
           ],
           "shadowEnabled": false,
           "shadowOffset": [
-            2,
-            2
+            2.0,
+            2.0
           ],
           "sortingOrder": 10,
           "text": "PRESS ENTER",
@@ -428,7 +422,7 @@
           "verticalAlignment": "Center",
           "viewportAnchor": [
             0.5,
-            0.58
+            0.5799999833106995
           ],
           "wrapMode": "NoWrap"
         }
@@ -446,36 +440,36 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          100.0,
+          100.0
         ],
         "texturePath": ""
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0
         ],
         "translate": [
-          0,
-          0,
-          0
+          0.0,
+          0.0,
+          0.0
         ]
       }
     },
@@ -483,9 +477,6 @@
       "active": true,
       "components": [
         {
-          "enabled": true,
-          "localId": 1,
-          "type": "EventTrigger",
           "bindings": [
             {
               "actions": [
@@ -497,6 +488,7 @@
                   "prefabParentToTarget": false,
                   "prefabPath": "",
                   "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
                   "sceneId": "",
                   "statId": "",
                   "statOperation": "Add",
@@ -504,8 +496,9 @@
                   "targetEntityId": 2,
                   "targetEntityName": "",
                   "textMotionClipId": "",
-                  "value": 0,
-                  "type": "SetEntityActive"
+                  "transitionAssetPath": "",
+                  "type": "SetEntityActive",
+                  "value": 0.0
                 },
                 {
                   "active": true,
@@ -515,6 +508,7 @@
                   "prefabParentToTarget": false,
                   "prefabPath": "",
                   "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
                   "sceneId": "",
                   "statId": "",
                   "statOperation": "Add",
@@ -522,26 +516,28 @@
                   "targetEntityId": 2,
                   "targetEntityName": "",
                   "textMotionClipId": "intro",
-                  "value": 0,
-                  "type": "PlayTextMotion"
+                  "transitionAssetPath": "",
+                  "type": "PlayTextMotion",
+                  "value": 0.0
                 }
               ],
-              "cooldown": 0,
-              "radius": 1,
+              "cooldown": 0.0,
+              "presentationClipName": "",
+              "radius": 1.0,
               "statComparison": "LessOrEqual",
               "statId": "hp",
-              "statValue": 0,
+              "statValue": 0.0,
               "targetEntityId": 0,
               "targetEntityName": "",
               "targetPosition": [
-                0,
-                0,
-                0
+                0.0,
+                0.0,
+                0.0
               ],
+              "textMotionClipId": "",
               "triggerKey": "",
               "triggerOnce": true,
-              "triggerType": "OnStart",
-              "textMotionClipId": ""
+              "triggerType": "OnStart"
             },
             {
               "actions": [
@@ -553,6 +549,7 @@
                   "prefabParentToTarget": false,
                   "prefabPath": "",
                   "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
                   "sceneId": "",
                   "statId": "",
                   "statOperation": "Add",
@@ -560,26 +557,28 @@
                   "targetEntityId": 2,
                   "targetEntityName": "",
                   "textMotionClipId": "exit",
-                  "value": 0,
-                  "type": "PlayTextMotion"
+                  "transitionAssetPath": "",
+                  "type": "PlayTextMotion",
+                  "value": 0.0
                 }
               ],
-              "cooldown": 0,
-              "radius": 1,
+              "cooldown": 0.0,
+              "presentationClipName": "",
+              "radius": 1.0,
               "statComparison": "LessOrEqual",
               "statId": "hp",
-              "statValue": 0,
+              "statValue": 0.0,
               "targetEntityId": 0,
               "targetEntityName": "",
               "targetPosition": [
-                0,
-                0,
-                0
+                0.0,
+                0.0,
+                0.0
               ],
+              "textMotionClipId": "",
               "triggerKey": "ENTER",
               "triggerOnce": true,
-              "triggerType": "OnKeyPressed",
-              "textMotionClipId": ""
+              "triggerType": "OnKeyPressed"
             },
             {
               "actions": [
@@ -591,6 +590,7 @@
                   "prefabParentToTarget": false,
                   "prefabPath": "",
                   "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
                   "sceneId": "gameplay",
                   "statId": "",
                   "statOperation": "Add",
@@ -598,28 +598,33 @@
                   "targetEntityId": 0,
                   "targetEntityName": "",
                   "textMotionClipId": "",
-                  "value": 0,
-                  "type": "SceneTransition"
+                  "transitionAssetPath": "resources/transitions/sword_shatter.transition.json",
+                  "type": "SceneTransition",
+                  "value": 0.0
                 }
               ],
-              "cooldown": 0,
-              "radius": 1,
+              "cooldown": 0.0,
+              "presentationClipName": "",
+              "radius": 1.0,
               "statComparison": "LessOrEqual",
               "statId": "hp",
-              "statValue": 0,
+              "statValue": 0.0,
               "targetEntityId": 2,
               "targetEntityName": "",
               "targetPosition": [
-                0,
-                0,
-                0
+                0.0,
+                0.0,
+                0.0
               ],
+              "textMotionClipId": "exit",
               "triggerKey": "",
               "triggerOnce": true,
-              "triggerType": "OnTextMotionCompleted",
-              "textMotionClipId": "exit"
+              "triggerType": "OnTextMotionCompleted"
             }
-          ]
+          ],
+          "enabled": true,
+          "localId": 1,
+          "type": "EventTrigger"
         }
       ],
       "folder": false,
@@ -635,38 +640,537 @@
           0.5
         ],
         "color": [
-          1,
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0,
+          1.0
         ],
         "flipX": false,
         "flipY": false,
         "size": [
-          100,
-          100
+          100.0,
+          100.0
         ],
         "texturePath": ""
       },
       "team": "",
       "transform": {
         "rotation": [
-          0,
-          0,
-          0,
-          1
+          0.0,
+          0.0,
+          0.0,
+          1.0
         ],
         "scale": [
-          1,
-          1,
-          1
+          1.0,
+          1.0,
+          1.0
         ],
         "translate": [
-          0,
-          0,
-          0
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "localId": 1,
+          "reflectionIntensity": 0.30000001192092896,
+          "skyboxEnabled": true,
+          "skyboxIntensity": 1.0,
+          "skyboxPath": "resources/klippad_dawn_1_4k.hdr",
+          "type": "Environment"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 5,
+      "locked": false,
+      "modelPath": "",
+      "name": "Enviroment",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "PlayerWeaponBlock.obj",
+          "type": "MeshRenderer"
+        },
+        {
+          "clips": [
+            {
+              "duration": 4.0,
+              "loop": true,
+              "name": "VerifyFlight",
+              "playOnStart": true,
+              "tracks": [
+                {
+                  "easing": "Linear",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "value": [
+                        -3.0,
+                        4.0,
+                        2.0
+                      ]
+                    },
+                    {
+                      "time": 1.0,
+                      "value": [
+                        -1.2000000476837158,
+                        2.5999999046325684,
+                        2.0
+                      ]
+                    },
+                    {
+                      "time": 2.0,
+                      "value": [
+                        0.0,
+                        1.2000000476837158,
+                        2.0
+                      ]
+                    },
+                    {
+                      "time": 4.0,
+                      "value": [
+                        0.0,
+                        1.2000000476837158,
+                        2.0
+                      ]
+                    }
+                  ],
+                  "property": "LocalPosition",
+                  "targetEntityId": 6,
+                  "targetEntityName": "VERIFY Weapon"
+                },
+                {
+                  "easing": "Linear",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "value": [
+                        -1.545034408569336,
+                        -1.5707963705062866,
+                        -1.545034408569336
+                      ]
+                    },
+                    {
+                      "time": 1.0,
+                      "value": [
+                        -1.5239067077636719,
+                        12.863289833068848,
+                        -1.5661619901657104
+                      ]
+                    },
+                    {
+                      "time": 2.0,
+                      "value": [
+                        -1.5708041191101074,
+                        24.985557556152344,
+                        -1.570802092552185
+                      ]
+                    },
+                    {
+                      "time": 4.0,
+                      "value": [
+                        -1.5708041191101074,
+                        24.985557556152344,
+                        -1.570802092552185
+                      ]
+                    }
+                  ],
+                  "property": "LocalRotation",
+                  "rotationInterpolation": "EulerContinuous",
+                  "targetEntityId": 6,
+                  "targetEntityName": "VERIFY Weapon"
+                },
+                {
+                  "easing": "Linear",
+                  "keyframes": [
+                    {
+                      "time": 0.0,
+                      "value": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    {
+                      "time": 1.0,
+                      "value": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    {
+                      "time": 2.0,
+                      "value": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    {
+                      "time": 4.0,
+                      "value": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    }
+                  ],
+                  "property": "LocalScale",
+                  "targetEntityId": 6,
+                  "targetEntityName": "VERIFY Weapon"
+                }
+              ]
+            }
+          ],
+          "enabled": true,
+          "localId": 2,
+          "type": "PrefabAnimator"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 6,
+      "locked": false,
+      "modelPath": "PlayerWeaponBlock.obj",
+      "name": "VERIFY Weapon",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.7071068286895752,
+          0.0,
+          0.7071068286895752
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          1.2000000476837158,
+          2.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.0,
+          "environmentReflectionOverride": true,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "Cube.obj",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 8,
+      "locked": false,
+      "modelPath": "Cube.obj",
+      "name": "Entity",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          30.0,
+          0.25099998712539673,
+          30.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "castsShadow": false,
+          "color": [
+            1.0,
+            0.8500000238418579,
+            0.6499999761581421,
+            1.0
+          ],
+          "decay": 1.0,
+          "enabled": true,
+          "innerAngle": 25.0,
+          "intensity": 2.0,
+          "lightType": "Directional",
+          "localId": 1,
+          "outerAngle": 35.0,
+          "range": 8.0,
+          "shadow": {
+            "bias": 0.0024999999441206455,
+            "distance": 45.0,
+            "farClip": 120.0,
+            "nearClip": 0.10000000149011612,
+            "normalBias": 0.019999999552965164,
+            "orthographicSize": 40.0,
+            "strength": 0.550000011920929,
+            "texelSnap": true
+          },
+          "type": "Light"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 9,
+      "locked": false,
+      "modelPath": "",
+      "name": "Entity",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.7071068286895752,
+          -0.7071068286895752,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          7.341411113739014,
+          -8.751643463256187e-07
         ]
       }
     }
-  ]
+  ],
+  "lighting": {
+    "shadowMapSize": 1024
+  },
+  "postProcess": {
+    "baseExposure": 1.0,
+    "bloomBlurIterations": 4,
+    "bloomBlurRadius": 1.0,
+    "bloomDownsampleScale": 2,
+    "bloomEnabled": true,
+    "bloomIntensity": 0.699999988079071,
+    "bloomSoftKnee": 0.5,
+    "bloomThreshold": 1.0,
+    "boxBlurEnabled": false,
+    "boxBlurKernelSize": 3,
+    "boxBlurStrength": 1.0,
+    "chromaticAberrationCenter": [
+      0.5,
+      0.5
+    ],
+    "chromaticAberrationEnabled": false,
+    "chromaticAberrationFalloff": 1.5,
+    "chromaticAberrationIntensity": 0.003000000026077032,
+    "depthOfFieldBlurStrength": 1.0,
+    "depthOfFieldEnabled": false,
+    "depthOfFieldFarStrength": 1.0,
+    "depthOfFieldFocusDistance": 10.0,
+    "depthOfFieldFocusRange": 2.0,
+    "depthOfFieldMaxRadius": 4.0,
+    "depthOfFieldNearStrength": 0.0,
+    "dissolveEdgeColor": [
+      1.0,
+      0.4000000059604645,
+      0.30000001192092896,
+      1.0
+    ],
+    "dissolveEdgeWidth": 0.029999999329447746,
+    "dissolveEnabled": false,
+    "dissolveMaskIndex": 0,
+    "dissolveThreshold": 0.0,
+    "gaussianBlurEnabled": false,
+    "gaussianBlurKernelSize": 3,
+    "gaussianBlurSigma": 1.0,
+    "gaussianBlurStrength": 1.0,
+    "grayscaleEnabled": false,
+    "motionBlurEnabled": false,
+    "motionBlurMaxRadius": 24.0,
+    "motionBlurSamples": 8,
+    "motionBlurStrength": 0.5,
+    "noiseAmount": 0.25,
+    "noiseAnimate": true,
+    "noiseEnabled": false,
+    "noiseScale": 1.0,
+    "noiseSeed": 0.0,
+    "noiseSpeed": 1.0,
+    "outlineColor": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "outlineDepthEnabled": true,
+    "outlineDepthWeight": 1.0,
+    "outlineEnabled": false,
+    "outlineLuminanceEnabled": false,
+    "outlineLuminanceWeight": 1.0,
+    "outlineSoftness": 0.05000000074505806,
+    "outlineThickness": 1.0,
+    "outlineThreshold": 0.10000000149011612,
+    "pixelationBlockSize": 4,
+    "pixelationEnabled": false,
+    "radialBlurCenter": [
+      0.5,
+      0.5
+    ],
+    "radialBlurEnabled": false,
+    "radialBlurSamples": 10,
+    "radialBlurWidth": 0.009999999776482582,
+    "toneMapMode": 0,
+    "underwaterDistortion": 0.012000000104308128,
+    "underwaterEnabled": false,
+    "underwaterFogDensity": 0.03500000014901161,
+    "underwaterIntensity": 0.6499999761581421,
+    "underwaterTintColor": [
+      0.019999999552965164,
+      0.44999998807907104,
+      0.6800000071525574,
+      1.0
+    ],
+    "vignetteEnabled": false,
+    "vignetteIntensity": 1.0,
+    "vignettePower": 0.800000011920929,
+    "vignetteScale": 16.0,
+    "waterRefractionEdgeSoftness": 0.07999999821186066,
+    "waterRefractionEnabled": false,
+    "waterRefractionStrength": 0.017999999225139618,
+    "waterRefractionTintColor": [
+      0.019999999552965164,
+      0.550000011920929,
+      0.8199999928474426,
+      1.0
+    ],
+    "waterRefractionTintStrength": 0.11999999731779099
+  },
+  "sceneName": "TITLE",
+  "teams": [],
+  "version": 27
 }
