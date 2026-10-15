@@ -5,6 +5,7 @@
 #include "SceneDocument.h"
 #include "SceneEntityQuery.h"
 #include "SceneInputKey.h"
+#include "ScenePrefabAnimationEvaluator.h"
 #include "../Audio/Audio.h"
 #include "../utility/EditableResourcePath.h"
 #include "../utility/StringUtility.h"
@@ -327,7 +328,30 @@ bool SceneValidator::ValidateDocument(
 					);
 				}
 			};
-			if (component.type == "AudioSource") {
+			if (component.type == "PrefabAnimator") {
+				for (const auto& clip : component.prefabAnimationClips) {
+					for (size_t index = 0; index < clip.tracks.size(); ++index) {
+						const auto& track = clip.tracks[index];
+						if (track.property != "LocalRotation") continue;
+						const std::string label = clip.name + " / Track " + std::to_string(index + 1);
+						if (track.rotationInterpolation != "QuaternionSlerp" &&
+							track.rotationInterpolation != "EulerContinuous") {
+							// 将来/未知方式は保存値を残し、Runtimeの互換fallbackを通知する。
+							addIssue(SceneValidationSeverity::Warning, entity.id,
+								"Unknown rotation interpolation; using QuaternionSlerp: " +
+								label + " / " + track.rotationInterpolation);
+						} else if (track.rotationInterpolation == "EulerContinuous" && !track.keyframes.empty()) {
+							Vector3 sampled{};
+							// 実再生と同じ全キー検証を使い、警告だけで不正Eulerを正当化しない。
+							if (!ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(
+								track, track.keyframes.front().time, sampled)) {
+								addIssue(SceneValidationSeverity::Error, entity.id,
+									"EulerContinuous requires finite values and nonnegative, strictly ordered key times: " + label);
+							}
+						}
+					}
+				}
+			} else if (component.type == "AudioSource") {
 				const bool validSpatialMode = IsValidAudioSpatialMode(
 					component.audioSpatialMode
 				);
@@ -985,6 +1009,100 @@ bool SceneValidator::ValidateDocument(
 					}
 					return true;
 				};
+				// 演出入口だけを診断する。従来のGameplay Clipには新制約を適用しない。
+				auto validatePresentationTarget = [&](uint64_t targetId, const std::string& targetName,
+					const std::string& clipName, bool needsClip) {
+					const SceneEntity* owner = targetId != 0 ? document.FindEntity(targetId) : nullptr;
+					if (targetId == 0 && !targetName.empty()) {
+						size_t count = 0;
+						for (const SceneEntity& candidate : document.GetEntities()) {
+							if (candidate.name == targetName) { owner = &candidate; ++count; }
+						}
+						if (count != 1) owner = nullptr;
+					}
+					const SceneComponent* animator = owner
+						? SceneEntityQuery::FindEnabledComponent(*owner, "PrefabAnimator") : nullptr;
+					if ((targetId == 0 && targetName.empty()) || !animator) {
+						addIssue(SceneValidationSeverity::Error, entity.id,
+							"Presentation target is unset, unresolved, or has no enabled PrefabAnimator");
+						return;
+					}
+					if (!needsClip) return;
+					if (!hasActiveParentHierarchy(*owner)) {
+						addIssue(SceneValidationSeverity::Error, entity.id, "Presentation target has an inactive or invalid parent");
+					}
+					auto checkOwnership = [&](const SceneEntity& target) {
+						for (const char* type : { "PhysicsBody", "PlayerBehavior", "AttackSet", "StateMachine",
+							"EnemyBehavior", "AgentBehavior", "Projectile", "BoneAttachment" }) {
+							if (SceneEntityQuery::FindEnabledComponent(target, type)) {
+								addIssue(SceneValidationSeverity::Error, entity.id,
+									"Presentation Transform ownership conflicts with " + std::string(type) +
+									" on Entity " + std::to_string(target.id));
+							}
+						}
+					};
+					checkOwnership(*owner);
+					const ScenePrefabAnimationClip* selectedClip = nullptr;
+					size_t clipCount = 0;
+					for (const ScenePrefabAnimationClip& clip : animator->prefabAnimationClips) {
+						if (clip.playOnStart) addIssue(SceneValidationSeverity::Error, entity.id,
+							"Presentation Animator conflicts with Play On Start: " + clip.name);
+						if (clip.name == clipName) { selectedClip = &clip; ++clipCount; }
+					}
+					if (clipName.empty() || clipCount != 1) {
+						addIssue(SceneValidationSeverity::Error, entity.id,
+							"Presentation requires an explicit, unique Clip name: " + clipName);
+						return;
+					}
+					if (selectedClip->loop || !std::isfinite(selectedClip->duration) || selectedClip->duration <= 0.0f) {
+						addIssue(SceneValidationSeverity::Error, entity.id,
+							"Presentation Clip must be non-Loop with a positive finite duration: " + clipName);
+					}
+					std::unordered_map<uint64_t, std::unordered_set<std::string>> properties;
+					for (const SceneAnimationTrack& track : selectedClip->tracks) {
+						const SceneEntity* target = track.targetEntityId != 0
+							? document.FindEntity(track.targetEntityId) : nullptr;
+						if (track.targetEntityId == 0) {
+							if (track.targetEntityName.empty()) target = owner;
+							else {
+								size_t count = 0;
+								for (const SceneEntity& candidate : document.GetEntities()) {
+									if (candidate.name == track.targetEntityName) { target = &candidate; ++count; }
+								}
+								if (count != 1) target = nullptr;
+							}
+						}
+						if (!target || (target->id != owner->id && !document.IsDescendantOf(target->id, owner->id))) {
+							addIssue(SceneValidationSeverity::Error, entity.id,
+								"Presentation Track target must resolve uniquely to its owner or descendant");
+							continue;
+						}
+						if (target != owner) checkOwnership(*target);
+						const SceneEntity* current = target;
+						std::unordered_set<uint64_t> visited;
+						while (current && current->id != owner->id) {
+							if (!current->active || !visited.insert(current->id).second) {
+								addIssue(SceneValidationSeverity::Error, entity.id, "Presentation Track has an inactive descendant target or parent");
+								break;
+							}
+							current = document.FindEntity(current->parentId);
+						}
+						if (track.property != "LocalPosition" && track.property != "LocalRotation" && track.property != "LocalScale") {
+							addIssue(SceneValidationSeverity::Error, entity.id, "Presentation supports Transform Tracks only: " + track.property);
+						}
+						if (!properties[target->id].insert(track.property).second) {
+							addIssue(SceneValidationSeverity::Error, entity.id, "Presentation contains a duplicate target/property Track: " + track.property);
+						}
+						for (const SceneAnimationKeyframe& key : track.keyframes) {
+							if (!std::isfinite(key.time) || !std::isfinite(key.value.x) || !std::isfinite(key.value.y) ||
+								!std::isfinite(key.value.z) || !std::isfinite(key.positionBulge.x) ||
+								!std::isfinite(key.positionBulge.y) || !std::isfinite(key.positionBulge.z)) {
+								addIssue(SceneValidationSeverity::Error, entity.id, "Presentation Track contains non-finite key values");
+								break;
+							}
+						}
+					}
+				};
 				std::unordered_set<uint64_t> onStartActivatedEntityIds;
 				if (component.enabled && activeInHierarchy) {
 					for (const SceneEventBinding& binding : component.eventBindings) {
@@ -1085,6 +1203,10 @@ bool SceneValidator::ValidateDocument(
 									binding.textMotionClipId);
 						}
 					}
+					if (binding.triggerType == "OnPresentationClipCompleted") {
+						validatePresentationTarget(binding.targetEntityId, binding.targetEntityName,
+							binding.presentationClipName, true);
+					}
 					for (size_t actionIndex = 0;
 						actionIndex < binding.actions.size();
 						++actionIndex) {
@@ -1100,7 +1222,10 @@ bool SceneValidator::ValidateDocument(
 							action.type == "ResumeAudio" ||
 							action.type == "PlayTextMotion" ||
 							action.type == "StopTextMotion" ||
-							action.type == "ResetTextMotion";
+								action.type == "ResetTextMotion" ||
+								action.type == "PlayPresentationClip" ||
+								action.type == "StopPresentationClip" ||
+								action.type == "ResetPresentationClip";
 						if (actionUsesTarget) {
 							validateEntityReference(
 								action.targetEntityId,
@@ -1194,6 +1319,11 @@ bool SceneValidator::ValidateDocument(
 											action.textMotionClipId);
 								}
 							}
+						}
+						if (action.type == "PlayPresentationClip" || action.type == "StopPresentationClip" ||
+							action.type == "ResetPresentationClip") {
+							validatePresentationTarget(action.targetEntityId, action.targetEntityName,
+								action.presentationClipName, action.type == "PlayPresentationClip");
 						}
 						if (
 							action.type == "SetPostProcessProfile" ||

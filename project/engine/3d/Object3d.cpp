@@ -206,12 +206,25 @@ void Object3d::SetRotateQuaternion(const Quaternion& rotate) {
 }
 
 void Object3d::Draw(){
+	DrawInternal(false);
+}
+
+void Object3d::DrawEditorGhost() {
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (!model || model->HasSkinning()) return;
+	DrawInternal(true);
+#endif
+}
+
+void Object3d::DrawInternal(bool editorGhost) {
 	if (!model) {
 		return;
 	}
 
 	auto* commandList = object3dCommon->GetDxCommon()->GetCommandList();
-	if (skinCluster_ && skinCluster_->IsValid()) {
+	if (editorGhost) {
+		object3dCommon->SetEditorGhostRenderState(cullMode_);
+	} else if (skinCluster_ && skinCluster_->IsValid()) {
 		DispatchSkinningIfNeeded();
 		object3dCommon->SetCommonRenderState(cullMode_);
 	}

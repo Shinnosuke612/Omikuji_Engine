@@ -56,6 +56,10 @@
 #include "../../externals/imgui/imgui_impl_dx12.h"
 #include "../../externals/ImGuizmo/ImGuizmo.h"
 #include "../../externals/nlohmann/json.hpp"
+#include <sstream>
+#include <cfloat>
+#include <iomanip>
+#include <map>
 
 namespace {
 	using json = nlohmann::json;
@@ -1695,6 +1699,13 @@ void ImGuiManager::DrawEditorWorkspace(
 	const char* sceneName
 ) {
 	prefabKeyboardFocusThisFrame_ = false;
+	UpdateAnimationRotationModeDraft();
+	spatialToolbarHovered_ = false;
+	if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) spatialCancelledGesture_ = false;
+	if (spatialDraft_.kind != SpatialDraftKind::None && ImGui::IsKeyPressed(ImGuiKey_Escape, false) &&
+		!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup)) {
+		CancelSceneSpatialDraft(); spatialEditIssue_.clear(); RefreshSceneSpatialPreviewAfterEdit();
+	}
 	if (editorSession_) {
 		const ImGuiIO& io = ImGui::GetIO();
 		const bool mayEditThisFrame =
@@ -1910,6 +1921,8 @@ void ImGuiManager::DrawEditorWorkspace(
 		textureWidth,
 		textureHeight
 	);
+	const bool spatialPointPicked = DrawSceneSpatialPreviewOverlay(sceneMin.x, sceneMin.y,
+		sceneMax.x - sceneMin.x, sceneMax.y - sceneMin.y);
 	if (sceneAxisVisible_) {
 		Camera* camera = Object3dCommon::GetInstance()
 			? Object3dCommon::GetInstance()->GetDefaultCamera()
@@ -1928,6 +1941,9 @@ void ImGuiManager::DrawEditorWorkspace(
 		editorSession_ &&
 		editorSession_->IsEditing() &&
 		ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+		!spatialPointPicked &&
+		!HasSceneSpatialPreviewPointSelection() &&
+		!spatialToolbarHovered_ &&
 		!ImGuizmo::IsUsing() &&
 		!ImGuizmo::IsOver()
 	) {
@@ -1982,6 +1998,9 @@ void ImGuiManager::DrawEditorWorkspace(
 	if (showPrefab_) {
 		DrawPrefabWindow();
 	}
+	DrawSceneSpatialPreviewControls();
+	if (prefabKeyboardFocusThisFrame_ && spatialDraft_.kind != SpatialDraftKind::None)
+		CancelSceneSpatialDraft(true);
 
 	if (editorSession_) {
 		const bool editingInteractionActive =
@@ -1991,6 +2010,23 @@ void ImGuiManager::DrawEditorWorkspace(
 			ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
 			ImGuizmo::IsUsing();
 		editorSession_->EndEditFrame(!editingInteractionActive);
+		if (!editorSession_->IsEditing()) CancelSceneSpatialDraft(true);
+		else if (!editingInteractionActive) {
+			const auto& io = ImGui::GetIO();
+			const bool documentUndo = io.KeyCtrl && !io.WantTextInput && !prefabKeyboardFocusThisFrame_ &&
+				(ImGui::IsKeyPressed(ImGuiKey_Z, false) || ImGui::IsKeyPressed(ImGuiKey_Y, false));
+			const bool documentSave = io.KeyCtrl && !io.WantTextInput && !prefabKeyboardFocusThisFrame_ &&
+				ImGui::IsKeyPressed(ImGuiKey_S, false);
+			if (documentUndo) CancelSceneSpatialDraft(true);
+			else if (!documentSave && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) && spatialDraft_.kind != SpatialDraftKind::None) {
+				// Widgetの終了後だけ確定する。入力エラーは候補を残して再入力を待つ。
+				if (spatialDraft_.valid) spatialDraft_.commitRequested = true;
+				CommitSceneSpatialDraft();
+			}
+		}
+		if (editorSession_->IsEditing() && spatialOwnerId_ != 0 && spatialCacheDirty_ &&
+			spatialGeneration_ == editorSession_->GetEditDocument().GetContentGeneration())
+			RefreshSceneSpatialPreviewAfterEdit();
 	}
 	HandleEditShortcuts();
 
@@ -2452,10 +2488,22 @@ void ImGuiManager::RebuildPrefabAnimationPreviewDocument() {
 	}
 
 	*prefabAnimationPreviewDocument_ = sourceDocument;
+	if (!ApplyAnimationRotationModeDraft(*prefabAnimationPreviewDocument_,true)) return;
+	const auto* previewAnimator=FindEnabledComponent(*prefabAnimationPreviewDocument_->FindEntity(owner->id),"PrefabAnimator");
+	for (const auto& track:previewAnimator->prefabAnimationClips[prefabAnimationPreviewClipIndex_].tracks) {
+		if (track.property!="LocalRotation") continue;
+		Vector3 value{};
+		if ((track.rotationInterpolation!="QuaternionSlerp" && track.rotationInterpolation!="EulerContinuous") ||
+			(track.rotationInterpolation=="EulerContinuous" && !track.keyframes.empty() &&
+			!ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(track,prefabAnimationPreviewTime_,value))) {
+			prefabTransformPoseStatus_="Unsupported or invalid rotation interpolation. Select a supported mode or correct the keys.";
+			return;
+		}
+	}
 	ScenePrefabAnimationEvaluator::ApplyClip(
 		*prefabAnimationPreviewDocument_,
 		owner->id,
-		animator->prefabAnimationClips[prefabAnimationPreviewClipIndex_],
+		previewAnimator->prefabAnimationClips[prefabAnimationPreviewClipIndex_],
 		prefabAnimationPreviewTime_
 	);
 	if (prefabAttackPreviewMode_) {
@@ -2641,10 +2689,12 @@ void ImGuiManager::RebuildPrefabHitBoxGhostDocument() {
 	}
 
 	*prefabHitBoxGhostDocument_ = sourceDocument;
+	if (!ApplyAnimationRotationModeDraft(*prefabHitBoxGhostDocument_,true)) return;
+	const auto* ghostAnimator=FindEnabledComponent(*prefabHitBoxGhostDocument_->FindEntity(owner->id),"PrefabAnimator");
 	ScenePrefabAnimationEvaluator::ApplyClip(
 		*prefabHitBoxGhostDocument_,
 		owner->id,
-		animator->prefabAnimationClips[prefabAnimationPreviewClipIndex_],
+		ghostAnimator->prefabAnimationClips[prefabAnimationPreviewClipIndex_],
 		prefabHitBoxGhostTime_
 	);
 }
@@ -2960,6 +3010,1307 @@ void ImGuiManager::FocusSceneCameraOnSelection() {
 	}
 }
 
+namespace {
+	bool SpatialFinite(const Vector3& v) {
+		return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+	}
+	bool SpatialFinite(const Matrix4x4& matrix) {
+		for (const auto& row : matrix.m) for (float value : row) if (!std::isfinite(value)) return false;
+		return true;
+	}
+	const SceneEntity* SpatialTrackTarget(const SceneDocument& document, uint64_t ownerId,
+		const SceneAnimationTrack& track) {
+		if (track.targetEntityId != 0) return document.FindEntity(track.targetEntityId);
+		if (track.targetEntityName.empty()) return document.FindEntity(ownerId);
+		const SceneEntity* result = nullptr;
+		for (const auto& entity : document.GetEntities()) {
+			if (entity.name != track.targetEntityName) continue;
+			if (result) return nullptr;
+			result = &entity;
+		}
+		return result;
+	}
+	const char* SpatialProperty(int operation) {
+		return operation == 0 ? "LocalPosition" : operation == 1 ? "LocalRotation" : "LocalScale";
+	}
+	// 対象/property/timeは完全一致で解決。曖昧なtrackや同時刻keyは編集しない。
+	bool SpatialFindKey(const SceneDocument& document, uint64_t owner, const ScenePrefabAnimationClip& clip,
+		uint64_t target, const char* property, float time, int& trackIndex, int& keyIndex) {
+		trackIndex = keyIndex = -1;
+		for (size_t i = 0; i < clip.tracks.size(); ++i) {
+			const auto& track = clip.tracks[i];
+			const auto* entity = SpatialTrackTarget(document, owner, track);
+			if (!entity || entity->id != target || track.property != property) continue;
+			if (trackIndex >= 0) return false;
+			trackIndex = static_cast<int>(i);
+			for (size_t j = 0; j < track.keyframes.size(); ++j) {
+				if (track.keyframes[j].time != time) continue;
+				if (keyIndex >= 0) return false;
+				keyIndex = static_cast<int>(j);
+			}
+		}
+		return true;
+	}
+	bool SpatialMatrixMatches(const Matrix4x4& candidate, const Matrix4x4& reference) {
+		if (!SpatialFinite(candidate) || !SpatialFinite(reference)) return false;
+		for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c)
+			if (std::abs(candidate.m[r][c] - reference.m[r][c]) > 1e-4f * (std::max)(1.0f, std::abs(reference.m[r][c]))) return false;
+		return true;
+	}
+	// 等価Eulerの近い分岐を選び、360度の整数回転を消さない。行列で等価性を検証する。
+	bool SpatialNearestEuler(const Quaternion& rotation, const Vector3& reference, Vector3& result) {
+		constexpr double pi = 3.14159265358979323846;
+		const auto principal = MakeEulerFromQuaternion(rotation);
+		if (!SpatialFinite(principal) || !SpatialFinite(reference)) return false;
+		const auto matrix = MakeRotateMatrix(rotation);
+		if (std::abs(std::cos(principal.y)) <= 1e-6f) {
+			// Rz→Ry→Rxの特異点ではz+s*xだけが決まる。直前値へ最も近い連続解を採る。
+			auto nearestAngle = [pi](double angle, double ref) {
+				const double turns = (ref-angle)/(2*pi);
+				const double low = std::floor(turns), high = low+1;
+				return angle + (std::abs(turns-low) <= std::abs(high-turns) ? low : high)*2*pi;
+			};
+			const double sign = matrix.m[2][0] >= 0 ? 1.0 : -1.0;
+			const double coupledReference = static_cast<double>(reference.z) + sign*reference.x;
+			const double coupled = nearestAngle(std::atan2(matrix.m[0][1],matrix.m[1][1]),coupledReference);
+			const double delta = coupled-coupledReference;
+			const Vector3 candidate{
+				static_cast<float>(reference.x+sign*delta/2),
+				static_cast<float>(nearestAngle(sign*pi/2,reference.y)),
+				static_cast<float>(reference.z+delta/2)
+			};
+			if (!SpatialFinite(candidate) || !SpatialMatrixMatches(MakeRotateMatrix(MakeQuaternionFromEuler(candidate)),matrix)) return false;
+			result = candidate; return true;
+		}
+		double best = std::numeric_limits<double>::infinity();
+		bool ambiguous=false;
+		for (int branch = 0; branch < 2; ++branch) {
+			const double values[3] = { principal.x + (branch ? pi : 0), branch ? pi - principal.y : principal.y,
+				principal.z + (branch ? pi : 0) };
+			const double refs[3] = { reference.x, reference.y, reference.z };
+			Vector3 candidate{};
+			float* components[3] = { &candidate.x, &candidate.y, &candidate.z };
+			double distance = 0;
+			for (int axis = 0; axis < 3; ++axis) {
+				const double turns = (refs[axis] - values[axis]) / (2*pi);
+				const double low = std::floor(turns), high = low + 1;
+				const double k = std::abs(turns-low) <= std::abs(high-turns) ? low : high;
+				*components[axis] = static_cast<float>(values[axis] + k*2*pi);
+				const double delta = static_cast<double>(*components[axis]) - refs[axis];
+				distance += delta*delta;
+			}
+			if (distance < best && SpatialMatrixMatches(MakeRotateMatrix(MakeQuaternionFromEuler(candidate)), matrix)) {
+				best = distance; result = candidate; ambiguous=false;
+			} else if (distance==best && (candidate.x!=result.x || candidate.y!=result.y || candidate.z!=result.z) &&
+				SpatialMatrixMatches(MakeRotateMatrix(MakeQuaternionFromEuler(candidate)),matrix)) {
+				// 同距離の別分岐を勝手に選ばない。周回指定は累積角の数値欄で行える。
+				ambiguous=true;
+			}
+		}
+		return std::isfinite(best) && !ambiguous;
+	}
+
+	bool DrawRawAnimationRotation(EditorLanguage language, Vector3& value, const Vector3* next=nullptr) {
+		constexpr double degrees=57.29577951308232, turn=6.283185307179586;
+		Vector3 edited{static_cast<float>(value.x*degrees),static_cast<float>(value.y*degrees),static_cast<float>(value.z*degrees)};
+		if (!SpatialFinite(edited)) { ImGui::TextDisabled("Rotation exceeds the degree editor range."); return false; }
+		bool changed=false;
+		if (ImGui::DragFloat3(SelectEditorText(language,"累積回転XYZ (度)","Accumulated Rotation XYZ (degrees)"),&edited.x,1.0f)) {
+			const Vector3 candidate{static_cast<float>(edited.x/degrees),static_cast<float>(edited.y/degrees),static_cast<float>(edited.z/degrees)};
+			if (SpatialFinite(candidate)) {
+				changed=candidate.x!=value.x || candidate.y!=value.y || candidate.z!=value.z;
+				if (changed) value=candidate;
+			} else {
+				ImGui::TextDisabled("Enter finite angles. Original rotation is preserved.");
+			}
+		}
+		for (int axis=0;axis<3;++axis) {
+			ImGui::PushID(axis);
+			if (axis) ImGui::SameLine();
+			ImGui::TextUnformatted(axis==0 ? "X" : axis==1 ? "Y" : "Z"); ImGui::SameLine();
+			for (int sign:{-1,1}) {
+				if (sign==1) ImGui::SameLine();
+				if (ImGui::SmallButton(sign<0 ? "-360" : "+360")) {
+					float* component=axis==0 ? &value.x : axis==1 ? &value.y : &value.z;
+					const double candidate=static_cast<double>(*component)+sign*turn;
+					// principal角に戻さず、選択軸の周回だけ変更する。
+					if (std::isfinite(candidate) && std::abs(candidate)<=(std::numeric_limits<float>::max)()) {
+						const float stored=static_cast<float>(candidate);
+						if (stored!=*component) { *component=stored; changed=true; }
+					}
+				}
+			}
+			ImGui::PopID();
+		}
+		if (next) ImGui::TextWrapped(SelectEditorText(language,
+			"次の点まで: X %.3f / Y %.3f / Z %.3f 周（軸ごとの差）",
+			"To next point: X %.3f / Y %.3f / Z %.3f turns (axis deltas)"),
+			(static_cast<double>(next->x)-value.x)/turn,(static_cast<double>(next->y)-value.y)/turn,(static_cast<double>(next->z)-value.z)/turn);
+		return changed;
+	}
+}
+
+const SceneAnimationTrack* ImGuiManager::ResolveAnimationRotationModeDraft(const SceneDocument& document) const {
+	if (!rotationModeDraft_.active || document.GetContentGeneration()!=rotationModeDraft_.generation ||
+		document.GetRevision()!=rotationModeDraft_.revision) return nullptr;
+	const auto* owner=document.FindEntity(rotationModeDraft_.ownerId);
+	const auto* animator=owner ? FindEnabledComponent(*owner,"PrefabAnimator") : nullptr;
+	if (!animator || owner->locked) return nullptr;
+	const ScenePrefabAnimationClip* clip=nullptr;
+	for (const auto& item:animator->prefabAnimationClips) if (item.name==rotationModeDraft_.clipName) {
+		if (clip) return nullptr;
+		clip=&item;
+	}
+	if (!clip || rotationModeDraft_.trackIndex>=clip->tracks.size()) return nullptr;
+	const auto& track=clip->tracks[rotationModeDraft_.trackIndex];
+	const auto* target=SpatialTrackTarget(document,owner->id,track);
+	return track.property=="LocalRotation" && track.rotationInterpolation==rotationModeDraft_.original &&
+		target && !target->locked ? &track : nullptr;
+}
+
+bool ImGuiManager::ApplyAnimationRotationModeDraft(SceneDocument& document, bool prefab) const {
+	if (!rotationModeDraft_.active || rotationModeDraft_.prefab!=prefab) return true;
+	// copyは別の内容世代を持つため、Draftの有効性は正本で検証する。
+	const SceneDocument* source=prefab
+		? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument() : nullptr)
+		: (editorSession_ && editorSession_->IsEditing() ? &editorSession_->GetEditDocument() : nullptr);
+	const auto* sourceTrack=source ? ResolveAnimationRotationModeDraft(*source) : nullptr;
+	if (!sourceTrack || document.GetRevision()!=source->GetRevision()) return false;
+	auto* owner=document.FindEntity(rotationModeDraft_.ownerId);
+	if (!owner || owner->locked) return false;
+	SceneComponent* animator=nullptr;
+	for (auto& component:owner->components) if (component.enabled && component.type=="PrefabAnimator") {
+		animator=&component; break;
+	}
+	if (!animator) return false;
+	ScenePrefabAnimationClip* clip=nullptr;
+	for (auto& item:animator->prefabAnimationClips) if (item.name==rotationModeDraft_.clipName) {
+		if (clip) return false;
+		clip=&item;
+	}
+	if (!clip || rotationModeDraft_.trackIndex>=clip->tracks.size()) return false;
+	auto& track=clip->tracks[rotationModeDraft_.trackIndex];
+	const auto* sourceTarget=SpatialTrackTarget(*source,owner->id,*sourceTrack);
+	const auto* target=SpatialTrackTarget(document,owner->id,track);
+	// 正本から作ったcopyの対応Trackだけを変更し、別対象へ候補を持ち越さない。
+	if (track.property!=sourceTrack->property || track.rotationInterpolation!=sourceTrack->rotationInterpolation ||
+		track.targetEntityId!=sourceTrack->targetEntityId || track.targetEntityName!=sourceTrack->targetEntityName ||
+		!sourceTarget || !target || target->locked || target->id!=sourceTarget->id) return false;
+	track.rotationInterpolation=rotationModeDraft_.candidate;
+	Vector3 value{};
+	return track.rotationInterpolation!="EulerContinuous" || track.keyframes.empty() ||
+		ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(track,track.keyframes.front().time,value);
+}
+
+void ImGuiManager::CancelAnimationRotationModeDraft() {
+	rotationModeDraft_={}; spatialCacheDirty_=true;
+}
+
+void ImGuiManager::UpdateAnimationRotationModeDraft() {
+	if (!rotationModeDraft_.active) return;
+	const SceneDocument* source=rotationModeDraft_.prefab
+		? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument() : nullptr)
+		: (editorSession_ && editorSession_->IsEditing() ? &editorSession_->GetEditDocument() : nullptr);
+	// 世代/外部編集/Lock/Undoで候補を破棄。別Documentへ古い配列indexを持ち越さない。
+	if (!source || !ResolveAnimationRotationModeDraft(*source) || ImGui::IsKeyPressed(ImGuiKey_Escape,false))
+		CancelAnimationRotationModeDraft();
+	if (!rotationModeDraft_.active) return;
+	const auto* owner=source->FindEntity(rotationModeDraft_.prefab ? prefabAnimationPreviewOwnerEntityId_ : spatialOwnerId_);
+	const auto* animator=owner ? FindEnabledComponent(*owner,"PrefabAnimator") : nullptr;
+	const int clipIndex=rotationModeDraft_.prefab ? prefabAnimationPreviewClipIndex_ : spatialClipIndex_;
+	if (!animator || owner->id!=rotationModeDraft_.ownerId || clipIndex<0 ||
+		clipIndex>=static_cast<int>(animator->prefabAnimationClips.size()) ||
+		animator->prefabAnimationClips[clipIndex].name!=rotationModeDraft_.clipName ||
+		(rotationModeDraft_.prefab && !showPrefab_)) CancelAnimationRotationModeDraft();
+}
+
+bool ImGuiManager::CanSaveAnimationRotationMode(bool prefab) {
+	if (!rotationModeDraft_.active || rotationModeDraft_.prefab!=prefab) return true;
+	const char* message=SelectEditorText(editorLanguage_,"回転方式の候補を確定または取り消してから保存してください",
+		"Confirm or cancel Rotation Interpolation before saving.");
+	if (prefab) prefabTransformPoseStatus_=message; else spatialEditIssue_=message;
+	return false;
+}
+
+bool ImGuiManager::DrawAnimationRotationMode(SceneDocument& document, uint64_t ownerId,
+	ScenePrefabAnimationClip& clip, size_t trackIndex, bool prefab) {
+	if (trackIndex>=clip.tracks.size() || clip.tracks[trackIndex].property!="LocalRotation") return false;
+	const auto* modeOwner=document.FindEntity(ownerId);
+	const auto* modeAnimator=modeOwner ? FindEnabledComponent(*modeOwner,"PrefabAnimator") : nullptr;
+	if (!modeAnimator) return false;
+	int resolvedClipIndex=-1;
+	for (size_t i=0;i<modeAnimator->prefabAnimationClips.size();++i)
+		if (&modeAnimator->prefabAnimationClips[i]==&clip) resolvedClipIndex=static_cast<int>(i);
+	if (resolvedClipIndex<0) return false;
+	const auto& track=clip.tracks[trackIndex];
+	const bool current=rotationModeDraft_.active && rotationModeDraft_.prefab==prefab &&
+		rotationModeDraft_.ownerId==ownerId && rotationModeDraft_.clipName==clip.name && rotationModeDraft_.trackIndex==trackIndex;
+	ImGui::PushID("RotationInterpolation");
+	ImGui::BeginDisabled((rotationModeDraft_.active && !current) || spatialDraft_.kind!=SpatialDraftKind::None || ImGuizmo::IsUsing());
+	const auto& preview=current ? rotationModeDraft_.candidate : track.rotationInterpolation;
+	if (ImGui::BeginCombo(SelectEditorText(editorLanguage_,"回転補間方式","Rotation Interpolation"),preview.c_str())) {
+		for (const char* mode:{"QuaternionSlerp","EulerContinuous"}) if (ImGui::Selectable(mode,preview==mode)) {
+			if (prefab) {
+				// Combat Rigは別SceneのClipを表示するため、方式候補はPrefab自身のPreviewで比較する。
+				playerCombatPreviewEnabled_=false;
+				prefabAnimationPreviewAssetPath_=prefabEditorSession_->GetFilePath();
+				prefabAnimationPreviewOwnerEntityId_=ownerId;
+				prefabAnimationPreviewClipIndex_=resolvedClipIndex;
+				prefabAnimationPreviewActive_=true; prefabAnimationPreviewPlaying_=false;
+			} else if (!current) {
+				BindSceneSpatialPreview(ownerId,resolvedClipIndex);
+				spatialPlaying_=false;
+			}
+			rotationModeDraft_={true,prefab,document.GetContentGeneration(),document.GetRevision(),ownerId,
+				trackIndex,clip.name,track.rotationInterpolation,mode};
+			spatialCacheDirty_=true;
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::TextDisabled("%s",SelectEditorText(editorLanguage_,
+		preview=="EulerContinuous" ? "累積角の差だけ各軸を回転します。360度を超える値も保持します。" : "Slerpは端点の向きを補間します。累積角の周回数は使いません。",
+		preview=="EulerContinuous" ? "Each axis follows its accumulated angle, including full turns." : "Slerp interpolates endpoint orientations; accumulated turns are not used."));
+	bool changed=false;
+	if (rotationModeDraft_.active && rotationModeDraft_.prefab==prefab && rotationModeDraft_.ownerId==ownerId &&
+		rotationModeDraft_.clipName==clip.name && rotationModeDraft_.trackIndex==trackIndex) {
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"未確定: キーを残したまま候補方式でプレビューします。途中の動きが変わります。",
+			"Draft: previewing the candidate mode with the original keys. Motion between keys changes."));
+		SceneDocument candidate=document;
+		const bool valid=ApplyAnimationRotationModeDraft(candidate,prefab);
+		ImGui::BeginDisabled(!valid);
+		if (ImGui::SmallButton(SelectEditorText(editorLanguage_,"方式を確定","Confirm Mode"))) {
+			// Sessionの既存EditFrame内で一fieldだけ確定。キーや周回数を正規化しない。
+			changed=track.rotationInterpolation!=rotationModeDraft_.candidate;
+			clip.tracks[trackIndex].rotationInterpolation=rotationModeDraft_.candidate;
+			CancelAnimationRotationModeDraft();
+		}
+		ImGui::EndDisabled(); ImGui::SameLine();
+		if (ImGui::SmallButton(SelectEditorText(editorLanguage_,"方式を取り消す","Cancel Mode"))) CancelAnimationRotationModeDraft();
+		if (!valid) ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"キーの値・時刻順・対象を確認してください。正本は変更していません。",
+			"Check key values, time ordering and target. Source is unchanged."));
+	}
+	ImGui::EndDisabled(); ImGui::PopID();
+	return changed;
+}
+
+bool ImGuiManager::ValidateSceneSpatialPreviewClip(uint64_t ownerId, int clipIndex,
+	SpatialPreviewValidation& result, std::string& issue) const {
+	result = {}; issue.clear();
+	auto reject = [&](const char* ja, const char* en) {
+		issue = SelectEditorText(editorLanguage_, ja, en);
+		return false;
+	};
+	if (!editorSession_ || !editorSession_->IsEditing())
+		return reject("Sceneの編集モードで利用できます", "Available in Scene Edit mode");
+	const auto& source = editorSession_->GetEditDocument();
+	const auto* owner = source.FindEntity(ownerId);
+	const auto* animator = owner ? FindEnabledComponent(*owner, "PrefabAnimator") : nullptr;
+	if (!animator || clipIndex < 0 || clipIndex >= static_cast<int>(animator->prefabAnimationClips.size()))
+		return reject("対象またはClipがありません", "Target or Clip is missing");
+	const auto& clip = animator->prefabAnimationClips[clipIndex];
+	// 絶対時刻のcopy評価ではLoop/autoplayを使わない。曖昧な参照と不正な値は拒否する。
+	if (clip.name.empty() || !std::isfinite(clip.duration) || clip.duration <= 0.0f ||
+		std::count_if(animator->prefabAnimationClips.begin(), animator->prefabAnimationClips.end(),
+			[&](const auto& item) { return item.name == clip.name; }) != 1)
+		return reject("一意のClip名と正の有限Durationが必要です", "Use a unique Clip name and positive finite Duration");
+	// 非Activeも姿勢は評価できる。循環/親欠落だけを拒否し、可視性はsample後に判定する。
+	auto validHierarchy = [&](const SceneEntity& entity) {
+		std::unordered_set<uint64_t> visited;
+		const SceneEntity* current = &entity;
+		while (current) {
+			if (!visited.insert(current->id).second) return false;
+			if (current->parentId == 0) return true;
+			current = source.FindEntity(current->parentId);
+		}
+		return false;
+	};
+	if (!validHierarchy(*owner)) return reject("Hierarchyが不正です", "Hierarchy is invalid");
+	std::unordered_map<uint64_t, unsigned> masks;
+	std::ostringstream structure;
+	structure << std::setprecision(std::numeric_limits<float>::max_digits10) << clip.name << '|' << clip.duration;
+	size_t keyCount = 0;
+	for (size_t i = 0; i < clip.tracks.size(); ++i) {
+		const auto& track = clip.tracks[i];
+		const auto* target = SpatialTrackTarget(source, owner->id, track);
+		const unsigned mask = track.property == "LocalPosition" ? 1u : track.property == "LocalRotation" ? 2u : track.property == "LocalScale" ? 4u : track.property == "Active" ? 8u : 0u;
+		if (!mask || !target || (target->id != owner->id && !source.IsDescendantOf(target->id, owner->id)) ||
+			!validHierarchy(*target) || (masks[target->id] & mask))
+			return reject("Track対象・Hierarchy・対応property・重複propertyを確認してください", "Check Track target, hierarchy, supported property, and duplicate property");
+		masks[target->id] |= mask;
+		keyCount += track.keyframes.size();
+		if (keyCount > 1024) {
+			reject("Preview上限: Clip合計1024キー", "Preview limit: 1024 keys per Clip");
+			issue += " (" + std::to_string(keyCount) + ")"; return false;
+		}
+		if (mask != 8u && !track.keyframes.empty()) {
+			result.hasTransformKeys = true;
+		}
+		structure << '|' << target->id << ':' << target->parentId << ':' << track.property;
+		if (track.property=="LocalRotation") {
+			const auto& mode=rotationModeDraft_.active && !rotationModeDraft_.prefab &&
+				rotationModeDraft_.ownerId==ownerId && rotationModeDraft_.clipName==clip.name && rotationModeDraft_.trackIndex==i
+				? rotationModeDraft_.candidate : track.rotationInterpolation;
+			if (mode!="QuaternionSlerp" && mode!="EulerContinuous")
+				return reject("未対応の回転方式です。方式を選び直してください","Unsupported rotation interpolation. Select a supported mode.");
+			structure << ':' << mode;
+		}
+		float previous = -1.0f;
+		for (const auto& key : track.keyframes) {
+			if (!std::isfinite(key.time) || key.time < 0.0f || key.time > clip.duration || key.time <= previous ||
+				!SpatialFinite(key.value) || !SpatialFinite(key.positionBulge))
+				return reject("キーは有限値・区間内・時刻の昇順が必要です", "Keys must be finite, in range, and strictly ordered");
+			previous = key.time;
+			structure << ':' << key.time;
+		}
+	}
+	for (const auto& entry : masks) result.targetIds.push_back(entry.first);
+	for (const auto& entity : source.GetEntities()) {
+		if (entity.id != owner->id && !source.IsDescendantOf(entity.id, owner->id)) continue;
+		const auto* mesh = FindEnabledComponent(entity, "MeshRenderer");
+		if (!mesh || mesh->modelPath.empty()) continue;
+		if (!validHierarchy(entity)) return reject("表示モデルのHierarchyが不正です", "Preview mesh hierarchy is invalid");
+		result.meshIds.push_back(entity.id);
+		structure << '|' << entity.id << ':' << mesh->modelPath;
+	}
+	if (result.meshIds.size() > 8) {
+		reject("Preview上限: 8モデル", "Preview limit: 8 meshes");
+		issue += " (" + std::to_string(result.meshIds.size()) + ")"; return false;
+	}
+	result.structure = structure.str();
+	return true;
+}
+
+std::vector<std::pair<uint64_t, int>> ImGuiManager::GetSceneSpatialPreviewCandidates() const {
+	std::vector<std::pair<uint64_t, int>> candidates;
+	if (!editorSession_ || !editorSession_->IsEditing()) return candidates;
+	const auto& source = editorSession_->GetEditDocument();
+	for (const auto& owner : source.GetEntities()) {
+		const auto* animator = FindEnabledComponent(owner, "PrefabAnimator");
+		if (!animator) continue;
+		// 無効Clipも選択後の診断へ辿れるよう一覧に残す。自動選択だけは共通検証を通す。
+		for (size_t i = 0; i < animator->prefabAnimationClips.size(); ++i)
+			candidates.emplace_back(owner.id, static_cast<int>(i));
+	}
+	return candidates;
+}
+
+void ImGuiManager::BindSceneSpatialPreview(uint64_t ownerId, int clipIndex) {
+	if (!editorSession_ || !editorSession_->IsEditing()) return;
+	const auto& source = editorSession_->GetEditDocument();
+	const auto* owner = source.FindEntity(ownerId);
+	const auto* animator = owner ? FindEnabledComponent(*owner, "PrefabAnimator") : nullptr;
+	if (!animator || clipIndex < 0 || clipIndex >= static_cast<int>(animator->prefabAnimationClips.size())) return;
+	ResetSceneSpatialPreview();
+	spatialOwnerId_ = ownerId; spatialClipIndex_ = clipIndex;
+	spatialClipName_ = animator->prefabAnimationClips[clipIndex].name;
+	spatialGeneration_ = source.GetContentGeneration();
+	spatialPlaying_ = true;
+}
+
+void ImGuiManager::DrawSceneSpatialPreviewControls() {
+	if (!editorSession_ || !editorSession_->IsEditing()) return;
+	// SceneDebugSystemが先に開いた同名windowへ追加。Runtimeへの依存や保存fieldを増やさない。
+	if (ImGui::Begin("Scene Controls", nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
+		ImGui::PushID("SpatialPresentationControls");
+		ImGui::SeparatorText(SelectEditorText(editorLanguage_, "演出プレビュー", "Presentation Preview"));
+		if (ImGui::Checkbox(SelectEditorText(editorLanguage_, "空間投影", "Spatial Projection"), &spatialEnabled_)) {
+			CancelSceneSpatialDraft(true); spatialCacheDirty_ = true;
+			if (!spatialEnabled_) spatialFrame_ = {};
+		}
+		const auto& source = editorSession_->GetEditDocument();
+		const auto* owner = source.FindEntity(spatialOwnerId_);
+		const std::string label = owner ? owner->name + " / " + spatialClipName_ : "-";
+		ImGui::BeginDisabled(!spatialEnabled_);
+		if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "対象 / Clip", "Target / Clip"), label.c_str())) {
+			for (const auto& [ownerId, clipIndex] : GetSceneSpatialPreviewCandidates()) {
+				const auto* candidate = source.FindEntity(ownerId);
+				const auto* animator = FindEnabledComponent(*candidate, "PrefabAnimator");
+				const std::string item = candidate->name + " [" + std::to_string(ownerId) + "] / " +
+					animator->prefabAnimationClips[clipIndex].name + "##" + std::to_string(ownerId) + ":" + std::to_string(clipIndex);
+				if (ImGui::Selectable(item.c_str(), ownerId == spatialOwnerId_ && clipIndex == spatialClipIndex_))
+					BindSceneSpatialPreview(ownerId, clipIndex);
+			}
+			ImGui::EndCombo();
+		}
+		owner = source.FindEntity(spatialOwnerId_);
+		const auto* animator = owner ? FindEnabledComponent(*owner, "PrefabAnimator") : nullptr;
+		if (animator) DrawSceneSpatialPreviewPlayback(*animator);
+		else if (!spatialIssue_.empty()) ImGui::TextWrapped("%s", spatialIssue_.c_str());
+		ImGui::EndDisabled();
+		ImGui::PopID();
+	}
+	ImGui::End();
+}
+
+bool ImGuiManager::ResolveSceneSpatialPoint(const SpatialPointAddress& point,
+    int& clipIndex, int& trackIndex, int& keyIndex) const {
+    clipIndex = trackIndex = keyIndex = -1;
+    if (!editorSession_ || !editorSession_->IsEditing() || point.generation == 0) return false;
+    const auto& source = editorSession_->GetEditDocument();
+    if (source.GetContentGeneration() != point.generation) return false;
+    const auto* owner = source.FindEntity(point.ownerId);
+    const auto* animator = owner ? FindEnabledComponent(*owner, "PrefabAnimator") : nullptr;
+    if (!animator) return false;
+    for (size_t i=0;i<animator->prefabAnimationClips.size();++i) {
+        if (animator->prefabAnimationClips[i].name != point.clipName) continue;
+        if (clipIndex >= 0) return false;
+        clipIndex = static_cast<int>(i);
+    }
+    if (clipIndex < 0) return false;
+    // 点の寿命はtarget/timeで決める。位置キーがない回転/拡縮地点も同じ選択単位。
+    for (int op=0;op<3;++op) {
+        int ti, ki;
+        if (!SpatialFindKey(source,owner->id,animator->prefabAnimationClips[clipIndex],
+            point.targetId,SpatialProperty(op),point.time,ti,ki)) return false;
+        if (ki >= 0 && trackIndex < 0) { trackIndex=ti; keyIndex=ki; }
+    }
+    return trackIndex >= 0;
+}
+
+void ImGuiManager::SelectSceneSpatialPoint(int trackIndex, int keyIndex) {
+	const auto& source = editorSession_->GetEditDocument();
+	const auto* owner = source.FindEntity(spatialOwnerId_);
+	const auto* animator = owner ? FindEnabledComponent(*owner, "PrefabAnimator") : nullptr;
+	if (!animator || spatialClipIndex_ < 0 || spatialClipIndex_ >= static_cast<int>(animator->prefabAnimationClips.size())) return;
+	const auto& clip = animator->prefabAnimationClips[spatialClipIndex_];
+	if (trackIndex < 0 || trackIndex >= static_cast<int>(clip.tracks.size())) return;
+	const auto& track = clip.tracks[trackIndex];
+	const auto* target = SpatialTrackTarget(source, owner->id, track);
+	if (!target || (track.property != "LocalPosition" && track.property != "LocalRotation" && track.property != "LocalScale") || keyIndex < 0 || keyIndex >= static_cast<int>(track.keyframes.size())) return;
+	const SpatialPointAddress point{source.GetContentGeneration(), owner->id, target->id, clip.name, track.keyframes[keyIndex].time};
+	CancelSceneSpatialDraft();
+	spatialPoint_ = point;
+	spatialTrackIndex_ = trackIndex; spatialKeyIndex_ = keyIndex;
+	spatialPlaying_ = false; spatialCacheDirty_ = true;
+}
+
+void ImGuiManager::CancelSceneSpatialDraft(bool clearSelection) {
+	if (spatialDraft_.kind != SpatialDraftKind::None) {
+		spatialCancelledGesture_ = spatialCancelledGesture_ || spatialDragging_;
+		++spatialDraftRevision_;
+		spatialCacheDirty_ = true;
+	}
+	spatialDraft_ = {};
+	spatialDragging_ = false;
+	if (clearSelection) { spatialPoint_ = {}; spatialKeyIndex_ = -1; spatialCacheDirty_ = true; }
+}
+
+bool ImGuiManager::BeginSceneSpatialDraft(SpatialDraftKind kind, int operation) {
+    if (rotationModeDraft_.active) return false;
+    if (spatialDraft_.kind != SpatialDraftKind::None)
+        return spatialDraft_.kind == kind && spatialDraft_.operation == operation;
+    int ci, ti, ki;
+    if (!ResolveSceneSpatialPoint(spatialPoint_,ci,ti,ki)) return false;
+    const auto& source=editorSession_->GetEditDocument();
+    const auto* owner=source.FindEntity(spatialPoint_.ownerId);
+    const auto* target=source.FindEntity(spatialPoint_.targetId);
+    if (!owner || !target || owner->locked || target->locked) return false;
+    const auto& clip=FindEnabledComponent(*owner,"PrefabAnimator")->prefabAnimationClips[ci];
+    // 編集開始時の全姿勢を固定する。sourceの補間値を取得してもキーは追加しない。
+    SceneDocument sample=source;
+    ScenePrefabAnimationEvaluator::ApplyClip(sample,owner->id,clip,spatialPoint_.time);
+    const auto& pose=sample.FindEntity(target->id)->transform;
+    SpatialEditDraft draft;
+    draft.kind=kind; draft.point=spatialPoint_; draft.sourceRevision=source.GetRevision();
+    draft.operation=operation; draft.time=draft.validTime=spatialPoint_.time;
+    for (int op=0;op<3;++op) {
+        if (!SpatialFindKey(source,owner->id,clip,target->id,SpatialProperty(op),spatialPoint_.time,ti,ki)) return false;
+        Vector3 value=op==0 ? pose.translate : op==2 ? pose.scale : MakeEulerFromQuaternion(pose.rotate);
+        if (ki>=0) value=clip.tracks[ti].keyframes[ki].value;
+        else if (op==1 && ti>=0 && clip.tracks[ti].rotationInterpolation=="EulerContinuous") {
+            if (!ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(clip.tracks[ti],spatialPoint_.time,value)) return false;
+        } else if (op==1) {
+            Vector3 reference=value;
+            if (ti>=0) {
+                const SceneAnimationKeyframe* nearest=nullptr;
+                for (const auto& key:clip.tracks[ti].keyframes)
+                    if (!nearest || std::abs(key.time-spatialPoint_.time)<std::abs(nearest->time-spatialPoint_.time)) nearest=&key;
+                if (nearest) reference=nearest->value;
+            }
+            if (!SpatialNearestEuler(pose.rotate,reference,value)) {
+                spatialEditIssue_=SelectEditorText(editorLanguage_,"回転の等価変換が成立しません","Cannot convert the sampled rotation safely"); return false;
+            }
+        }
+        if (!SpatialFinite(value)) return false;
+        draft.keys.push_back({SpatialProperty(op),value,value});
+    }
+    draft.validKeys=draft.keys; spatialDraft_=std::move(draft);
+    spatialPlaying_=false; return true;
+}
+
+bool ImGuiManager::ValidateSceneSpatialDraft(std::string& issue) const {
+    auto reject=[&](const char* ja,const char* en) { issue=SelectEditorText(editorLanguage_,ja,en); return false; };
+    int ci, ti, ki;
+    if (!ResolveSceneSpatialPoint(spatialDraft_.point,ci,ti,ki))
+        return reject("編集対象が変わりました。候補を取り消してください","The editing target changed. Cancel the draft.");
+    const auto& source=editorSession_->GetEditDocument();
+    if (source.GetRevision()!=spatialDraft_.sourceRevision)
+        return reject("別の編集が入りました。候補を取り消してください","Another edit occurred. Cancel the draft.");
+    const auto* owner=source.FindEntity(spatialDraft_.point.ownerId);
+    const auto* target=source.FindEntity(spatialDraft_.point.targetId);
+    if (!owner || !target || owner->locked || target->locked) return reject("対象は編集できません","The target cannot be edited.");
+    const auto& clip=FindEnabledComponent(*owner,"PrefabAnimator")->prefabAnimationClips[ci];
+    if (!std::isfinite(spatialDraft_.time) || spatialDraft_.time<0 || spatialDraft_.time>clip.duration)
+        return reject("時刻はClip内の有限値を入力してください","Enter a finite time inside the Clip.");
+    if (spatialDraft_.keys.size()!=3) return reject("姿勢の三成分を解決できません","Cannot resolve all three pose components");
+    size_t count=0, additions=0;
+    for (const auto& track:clip.tracks) count+=track.keyframes.size();
+    bool changed=spatialDraft_.time!=spatialDraft_.point.time;
+    for (const auto& edit:spatialDraft_.keys) {
+        if (!SpatialFinite(edit.value)) return reject("有限の数値を入力してください。前の有効値を表示しています","Enter finite values. Showing the last valid preview.");
+        if (edit.property=="LocalScale" && (edit.value.x<1e-6f || edit.value.y<1e-6f || edit.value.z<1e-6f))
+            return reject("拡縮には正の値が必要です。前の有効値を表示しています","Scale must be positive. Showing the last valid preview.");
+        if (!SpatialFindKey(source,owner->id,clip,target->id,edit.property.c_str(),spatialDraft_.point.time,ti,ki))
+            return reject("キーを一意に解決できません","Cannot resolve the key uniquely.");
+        if (ki<0) ++additions;
+        if (ti>=0) for (size_t i=0;i<clip.tracks[ti].keyframes.size();++i)
+            if (static_cast<int>(i)!=ki && clip.tracks[ti].keyframes[i].time==spatialDraft_.time)
+                return reject("同じ時刻のキーがあります。別の時刻を入力してください","A key already exists at this time. Enter another time.");
+        changed|=edit.value.x!=edit.original.x || edit.value.y!=edit.original.y || edit.value.z!=edit.original.z;
+    }
+    if (changed && count+additions>1024) return reject("TRS補完後に1024キーを超えます","TRS completion exceeds 1024 keys");
+    return true;
+}
+
+bool ImGuiManager::ApplySceneSpatialDraft(SceneDocument& document, int clipIndex, bool lastValid) const {
+    const auto& edits=lastValid ? spatialDraft_.validKeys : spatialDraft_.keys;
+    const float time=lastValid ? spatialDraft_.validTime : spatialDraft_.time;
+    bool changed=time!=spatialDraft_.point.time;
+    for (const auto& edit:edits) changed|=edit.value.x!=edit.original.x || edit.value.y!=edit.original.y || edit.value.z!=edit.original.z;
+    if (!changed) return true; // No-op/表示だけの候補は不足キーを補完しない。
+    auto* owner=document.FindEntity(spatialDraft_.point.ownerId);
+    auto* animator=owner ? FindComponent(*owner,"PrefabAnimator") : nullptr;
+    if (!animator || clipIndex<0 || clipIndex>=static_cast<int>(animator->prefabAnimationClips.size())) return false;
+    auto& clip=animator->prefabAnimationClips[clipIndex];
+    for (const auto& edit:edits) {
+        int ti, ki;
+        if (!SpatialFindKey(document,owner->id,clip,spatialDraft_.point.targetId,edit.property.c_str(),spatialDraft_.point.time,ti,ki)) return false;
+        if (ti<0) {
+            SceneAnimationTrack track; track.targetEntityId=spatialDraft_.point.targetId; track.property=edit.property;
+            clip.tracks.push_back(std::move(track)); ti=static_cast<int>(clip.tracks.size()-1);
+        }
+        auto& keys=clip.tracks[ti].keyframes;
+        if (ki>=0) { keys[ki].time=time; keys[ki].value=edit.value; }
+        else { SceneAnimationKeyframe key; key.time=time; key.value=edit.value; keys.push_back(std::move(key)); }
+        // 既存segment metadataを保持し、時刻と値だけ移す。補完は既存の既定値を使う。
+        std::stable_sort(keys.begin(),keys.end(),[](const auto& a,const auto& b){return a.time<b.time;});
+    }
+    return true;
+}
+
+void ImGuiManager::UpdateSceneSpatialDraftPreview() {
+	spatialDraft_.valid = ValidateSceneSpatialDraft(spatialEditIssue_);
+	spatialDraft_.commitRequested = false;
+	if (!spatialDraft_.valid) return;
+	spatialDraft_.validKeys = spatialDraft_.keys;
+	spatialDraft_.validTime = spatialDraft_.time;
+	++spatialDraftRevision_;
+	spatialEditIssue_.clear(); spatialCacheDirty_ = true;
+	RefreshSceneSpatialPreviewAfterEdit();
+}
+
+float ImGuiManager::SceneSpatialPreviewKeyTime(uint64_t targetId, float time) const {
+	return spatialDraft_.kind == SpatialDraftKind::Time && spatialDraft_.point.targetId == targetId &&
+		spatialDraft_.point.time == time ? spatialDraft_.validTime : time;
+}
+
+void ImGuiManager::CommitSceneSpatialDraft() {
+    if (spatialDraft_.kind==SpatialDraftKind::None || !spatialDraft_.commitRequested) return;
+    if (!spatialDraft_.valid) { spatialDraft_.commitRequested=false; return; }
+    if (!ValidateSceneSpatialDraft(spatialEditIssue_)) {
+        spatialDraft_.valid=false; spatialDraft_.commitRequested=false; return;
+    }
+    bool changed=spatialDraft_.time!=spatialDraft_.point.time;
+    for (const auto& edit:spatialDraft_.keys) changed|=edit.value.x!=edit.original.x || edit.value.y!=edit.original.y || edit.value.z!=edit.original.z;
+    if (changed) {
+        int ci, ti, ki;
+        if (!ResolveSceneSpatialPoint(spatialDraft_.point,ci,ti,ki)) return;
+        auto& source=editorSession_->GetEditDocument();
+        // 全変更をcopyに組み立ててからClip一件だけ交換。失敗時に正本の一部を変更しない。
+        SceneDocument candidate=source;
+        if (!ApplySceneSpatialDraft(candidate,ci,false)) return;
+        auto& candidateClip=FindComponent(*candidate.FindEntity(spatialDraft_.point.ownerId),"PrefabAnimator")->prefabAnimationClips[ci];
+        editorSession_->BeginEditFrame();
+        FindComponent(*source.FindEntity(spatialDraft_.point.ownerId),"PrefabAnimator")->prefabAnimationClips[ci]=std::move(candidateClip);
+        source.MarkDirty(); editorSession_->EndEditFrame(true);
+        spatialPoint_.time=spatialDraft_.time;
+    }
+    CancelSceneSpatialDraft(); spatialOwnEdit_=true; spatialEditIssue_.clear();
+    RefreshSceneSpatialPreviewAfterEdit();
+}
+
+bool ImGuiManager::CanSaveSceneSpatialDraft() {
+	if (!CanSaveAnimationRotationMode(false)) return false;
+	if (spatialDraft_.kind == SpatialDraftKind::None) return true;
+	spatialEditIssue_ = SelectEditorText(editorLanguage_,
+		"保存する前に入力を確定・修正、または取り消してください", "Confirm, correct, or cancel the draft before saving.");
+	return false;
+}
+
+void ImGuiManager::ResetSceneSpatialPreview() {
+	if (rotationModeDraft_.active && !rotationModeDraft_.prefab) CancelAnimationRotationModeDraft();
+	// Scene/Play切替では古い評価結果だけを破棄し、ユーザーの表示設定を保持する。
+	spatialPlaying_ = spatialDragging_ = false;
+	CancelSceneSpatialDraft(true);
+	spatialOwnEdit_ = false;
+	spatialOwnerId_ = spatialGeneration_ = spatialRevision_ = 0;
+	spatialCandidateRevision_ = 0; spatialCandidatesChecked_ = false;
+	spatialClipIndex_ = spatialTrackIndex_ = spatialKeyIndex_ = -1;
+	spatialClipName_.clear();
+	spatialTime_ = 0.0f;
+	spatialOperation_ = 0; spatialEditIssue_.clear();
+	spatialFrame_ = {}; spatialStaticFrame_ = {};
+	spatialBasePoses_.clear(); spatialBaseActive_.clear(); spatialMeshIds_.clear();
+	spatialIssue_.clear(); spatialRenderIssue_.clear(); spatialStructure_.clear();
+	spatialCacheDirty_ = true;
+}
+
+bool ImGuiManager::IsSceneSpatialPreviewCurrent() const {
+	return spatialEnabled_ && editorSession_ && editorSession_->IsEditing() &&
+		spatialOwnerId_ != 0 && spatialFrame_.ownerId == spatialOwnerId_ &&
+		spatialFrame_.clipIndex == spatialClipIndex_ && spatialFrame_.clipName == spatialClipName_ &&
+		spatialFrame_.sourceGeneration != 0 &&
+		spatialFrame_.sourceGeneration == editorSession_->GetEditDocument().GetContentGeneration() &&
+		spatialFrame_.sourceRevision == editorSession_->GetEditDocument().GetRevision();
+}
+
+bool ImGuiManager::HasSceneSpatialPreviewPointSelection() const {
+	// 編集モードはpacketのRevisionとは独立。再評価待ちでも通常Entity操作へ落とさない。
+	if (!spatialEnabled_ || !editorSession_ || !editorSession_->IsEditing() ||
+		spatialOwnerId_ != selectedEntityId_ || spatialClipIndex_ < 0 || spatialTrackIndex_ < 0 || spatialKeyIndex_ < 0) return false;
+	int ci, ti, ki;
+	return spatialPoint_.ownerId == spatialOwnerId_ && spatialPoint_.clipName == spatialClipName_ &&
+		ResolveSceneSpatialPoint(spatialPoint_, ci, ti, ki);
+}
+
+void ImGuiManager::RefreshSceneSpatialPreviewAfterEdit() {
+	// UIの同Frame用CPU packetだけを再評価。時計/Dirty/Undo/GPU資源には触れない。
+	if (!RebuildSceneSpatialPreview()) return;
+	spatialFrame_ = spatialStaticFrame_;
+	spatialFrame_.serial=++spatialFrameSerial_;
+	AppendSceneSpatialPreviewPose(spatialFrame_,spatialTime_,0,{0.3f,1,0.6f,0.55f},true);
+	if (!spatialIssue_.empty()) { spatialFrame_ = {}; spatialPlaying_ = false; }
+}
+
+void ImGuiManager::SampleSceneSpatialPreview(float time) {
+	// 絶対時刻で評価し、Scrubを戻したときにも累積したPoseを残さない。
+	for (const auto& [id, pose] : spatialBasePoses_) spatialSampleDocument_->FindEntity(id)->transform = pose;
+	for (const auto& [id, active] : spatialBaseActive_) spatialSampleDocument_->FindEntity(id)->active = active;
+	const auto* owner = spatialBaseDocument_->FindEntity(spatialOwnerId_);
+	const auto* animator = FindEnabledComponent(*owner, "PrefabAnimator");
+	ScenePrefabAnimationEvaluator::ApplyClip(*spatialSampleDocument_, spatialOwnerId_,
+		animator->prefabAnimationClips[spatialClipIndex_], time);
+}
+
+void ImGuiManager::AppendSceneSpatialPreviewPose(SceneSpatialPreviewFrame& frame, float time,
+	uint32_t poseId, const Vector4& tint, bool moving, bool alreadySampled) {
+	if (!alreadySampled) SampleSceneSpatialPreview(time);
+	for (uint64_t id : spatialMeshIds_) {
+		const auto* entity = spatialSampleDocument_->FindEntity(id);
+		if (moving && !IsEntityActiveInHierarchy(*spatialSampleDocument_,*entity)) continue;
+		const auto* mesh = FindEnabledComponent(*entity, "MeshRenderer");
+		const auto world = ResolveSceneWorldMatrix(*spatialSampleDocument_, *entity);
+		if (!SpatialFinite(world)) {
+			spatialIssue_ = SelectEditorText(editorLanguage_, "虚像の評価行列が不正です", "Invalid ghost matrix");
+			continue;
+		}
+		frame.meshes.push_back({ poseId, moving, id, mesh->modelPath, mesh->meshCullMode, world, tint });
+	}
+}
+
+bool ImGuiManager::RebuildSceneSpatialPreview() {
+    const auto& source=editorSession_->GetEditDocument();
+    spatialIssue_.clear();
+    auto reject=[&](const char* ja,const char* en) {
+        spatialIssue_=SelectEditorText(editorLanguage_,ja,en);
+        spatialFrame_={}; spatialStaticFrame_={}; spatialPlaying_=spatialDragging_=false; return false;
+    };
+    const auto* owner=source.FindEntity(spatialOwnerId_);
+    const auto* animator=owner ? FindEnabledComponent(*owner,"PrefabAnimator") : nullptr;
+    spatialClipIndex_=-1;
+    if (animator) for (size_t i=0;i<animator->prefabAnimationClips.size();++i)
+        if (animator->prefabAnimationClips[i].name==spatialClipName_) { spatialClipIndex_=static_cast<int>(i); break; }
+    if (!animator || spatialClipIndex_<0) return reject("対象またはClipがありません","Target or Clip is missing");
+    const auto& clip=animator->prefabAnimationClips[spatialClipIndex_];
+    if (spatialPoint_.generation!=0) {
+        int ci, ti, ki;
+        if (ResolveSceneSpatialPoint(spatialPoint_,ci,ti,ki)) { spatialTrackIndex_=ti; spatialKeyIndex_=ki; }
+        else CancelSceneSpatialDraft(true);
+    }
+    SpatialPreviewValidation validation;
+    if (!ValidateSceneSpatialPreviewClip(spatialOwnerId_,spatialClipIndex_,validation,spatialIssue_)) {
+        spatialFrame_={}; spatialStaticFrame_={}; spatialPlaying_=spatialDragging_=false; return false;
+    }
+    if (!spatialStructure_.empty() && spatialStructure_!=validation.structure && !spatialOwnEdit_) {
+        CancelSceneSpatialDraft(true); spatialPlaying_=false;
+    }
+    spatialStructure_=validation.structure; spatialMeshIds_=std::move(validation.meshIds);
+    if (!spatialBaseDocument_) spatialBaseDocument_=new SceneDocument();
+    if (!spatialSampleDocument_) spatialSampleDocument_=new SceneDocument();
+    *spatialBaseDocument_=source;
+    if (!ApplyAnimationRotationModeDraft(*spatialBaseDocument_,false))
+        return reject("回転方式候補を評価できません","Cannot evaluate the rotation interpolation draft");
+    if (spatialDraft_.kind!=SpatialDraftKind::None && spatialDraft_.sourceRevision==source.GetRevision() &&
+        !ApplySceneSpatialDraft(*spatialBaseDocument_,spatialClipIndex_,true))
+        return reject("候補姿勢を評価できません","Cannot evaluate the draft pose");
+    *spatialSampleDocument_=*spatialBaseDocument_;
+    spatialBasePoses_.clear(); spatialBaseActive_.clear();
+    for (uint64_t id:validation.targetIds) {
+        const auto* target=source.FindEntity(id);
+        spatialBasePoses_.push_back({id,target->transform}); spatialBaseActive_.push_back({id,target->active});
+    }
+    spatialRevision_=source.GetRevision(); spatialStaticFrame_={};
+    spatialStaticFrame_.sourceGeneration=source.GetContentGeneration(); spatialStaticFrame_.sourceRevision=spatialRevision_;
+    spatialStaticFrame_.ownerId=owner->id; spatialStaticFrame_.clipIndex=spatialClipIndex_; spatialStaticFrame_.clipName=clip.name;
+    // 保存Trackの配列ではなくtarget/timeを統合。Draftの時刻だけ表示用に写像する。
+    std::map<std::pair<uint64_t,float>,SceneSpatialPreviewFrame::KeyPoint> points;
+    for (size_t ti=0;ti<clip.tracks.size();++ti) {
+        const auto& track=clip.tracks[ti];
+        const unsigned mask=track.property=="LocalPosition" ? 1u : track.property=="LocalRotation" ? 2u : track.property=="LocalScale" ? 4u : 0u;
+        if (!mask) continue;
+        const auto* target=SpatialTrackTarget(source,owner->id,track);
+        for (size_t ki=0;ki<track.keyframes.size();++ki) {
+            const float time=track.keyframes[ki].time;
+            auto [it,inserted]=points.try_emplace({target->id,time});
+            auto& point=it->second;
+            if (inserted) { point.trackIndex=ti; point.keyIndex=ki; point.targetId=target->id; point.sourceTime=time; }
+            point.trsMask|=mask; point.keyTime=SceneSpatialPreviewKeyTime(target->id,time);
+        }
+    }
+    std::vector<float> times;
+    std::map<uint64_t,std::vector<float>> targetTimes;
+    for (const auto& entry:points) {
+        spatialStaticFrame_.keyPoints.push_back(entry.second); times.push_back(entry.second.keyTime);
+        targetTimes[entry.second.targetId].push_back(entry.second.keyTime);
+    }
+    std::sort(times.begin(),times.end()); times.erase(std::unique(times.begin(),times.end()),times.end());
+    for (size_t pose=0;pose<times.size();++pose) {
+        const float time=times[pose]; SampleSceneSpatialPreview(time);
+        for (auto& point:spatialStaticFrame_.keyPoints) {
+            if (point.keyTime!=time) continue;
+            const auto* target=spatialSampleDocument_->FindEntity(point.targetId);
+            point.world=ResolveSceneWorldMatrix(*spatialSampleDocument_,*target);
+            if (!SpatialFinite(point.world)) return reject("評価行列が有限値ではありません","Evaluated matrix is not finite");
+            point.worldPosition={point.world.m[3][0],point.world.m[3][1],point.world.m[3][2]};
+            point.active=IsEntityActiveInHierarchy(*spatialSampleDocument_,*target);
+            // 全地点の基底を表示。非一様Scale/反射でもEuler分解せず軸の向きを採取する。
+            const Vector4 colors[]={{1,0.3f,0.3f,0.8f},{0.3f,1,0.3f,0.8f},{0.3f,0.5f,1,0.8f}};
+            for (int axis=0;axis<3;++axis) {
+                const double ax=point.world.m[axis][0], ay=point.world.m[axis][1], az=point.world.m[axis][2];
+                const double length=std::sqrt(ax*ax+ay*ay+az*az);
+                if (length==0) { spatialStaticFrame_.issue="姿勢軸が潰れた地点があります / Some pose axes are collapsed"; continue; }
+                const Vector3 direction{static_cast<float>(ax/length),static_cast<float>(ay/length),static_cast<float>(az/length)};
+                spatialStaticFrame_.lines.push_back({point.worldPosition,Math::Add(point.worldPosition,Math::Multiply(direction,0.12f)),colors[axis]});
+            }
+        }
+        if (spatialGhosts_) {
+            const bool selected=spatialPoint_.generation!=0 && SceneSpatialPreviewKeyTime(spatialPoint_.targetId,spatialPoint_.time)==time;
+            AppendSceneSpatialPreviewPose(spatialStaticFrame_,time,static_cast<uint32_t>(pose),
+                selected ? Vector4{1,0.75f,0.2f,0.45f} : Vector4{0.25f,0.75f,1,0.18f},false,true);
+            ++spatialStaticFrame_.staticPoseCount;
+        }
+    }
+    if (spatialPath_ && !targetTimes.empty()) {
+        // FrameworkのDebugRenderer既定容量131072 verticesに収める。全地点/軸を先に確保する。
+        constexpr size_t lineBudget=131072/2;
+        const size_t reserved=spatialStaticFrame_.lines.size()+3*(points.size()+2*targetTimes.size());
+        const size_t intervals=(std::min)(size_t{128},(lineBudget-reserved)/(3*targetTimes.size()));
+        if (intervals<128) spatialStaticFrame_.issue="線の容量に合わせ補間sampleを減らしました（全地点は保持） / Trajectory sampling reduced; all key points retained";
+        for (const auto& entry:targetTimes) {
+            auto samples=entry.second;
+            samples.push_back(0); samples.push_back(clip.duration);
+            for (size_t i=0;i<=intervals;++i) samples.push_back(clip.duration*(static_cast<float>(i)/static_cast<float>(intervals)));
+            std::sort(samples.begin(),samples.end()); samples.erase(std::unique(samples.begin(),samples.end()),samples.end());
+            Vector3 previous{};
+            for (size_t i=0;i<samples.size();++i) {
+                SampleSceneSpatialPreview(samples[i]);
+                const auto world=ResolveSceneWorldMatrix(*spatialSampleDocument_,*spatialSampleDocument_->FindEntity(entry.first));
+                if (!SpatialFinite(world)) return reject("軌道の評価値が不正です","Invalid trajectory evaluation");
+                const Vector3 point{world.m[3][0],world.m[3][1],world.m[3][2]};
+                const auto direction=Math::Subtract(point,previous);
+                if (i && (direction.x!=0 || direction.y!=0 || direction.z!=0)) {
+                    spatialStaticFrame_.lines.push_back({previous,point,{0.25f,0.75f,1,0.7f}});
+                    const float length=Math::Length(direction);
+                    if (i%16==0 && std::isfinite(length) && length>0.0001f) {
+                        const auto forward=Math::Normalize(direction);
+                        const auto side=Math::Normalize(Math::Cross(forward,std::abs(forward.y)<0.9f ? Vector3{0,1,0} : Vector3{1,0,0}));
+                        for (float sign:{-1.0f,1.0f}) spatialStaticFrame_.lines.push_back({point,
+                            Math::Add(Math::Subtract(point,Math::Multiply(forward,0.12f)),Math::Multiply(side,sign*0.06f)),{0.25f,0.75f,1,0.7f}});
+                    }
+                }
+                previous=point;
+            }
+        }
+    }
+    if (!spatialIssue_.empty()) { spatialFrame_={}; spatialStaticFrame_={}; return false; }
+    spatialCacheDirty_=spatialOwnEdit_=false; spatialSampledDraftRevision_=spatialDraftRevision_; return true;
+}
+
+void ImGuiManager::UpdateSceneSpatialPreview(float deltaTime) {
+	UpdateAnimationRotationModeDraft();
+	if (!editorSession_ || !editorSession_->IsEditing()) {
+		ResetSceneSpatialPreview(); return;
+	}
+	const auto& source = editorSession_->GetEditDocument();
+	if (spatialGeneration_ == 0 || spatialGeneration_ != source.GetContentGeneration()) {
+		ResetSceneSpatialPreview();
+		spatialGeneration_ = source.GetContentGeneration();
+	}
+	if (spatialOwnerId_ == 0 && (!spatialCandidatesChecked_ || spatialCandidateRevision_ != source.GetRevision())) {
+		const auto candidates = GetSceneSpatialPreviewCandidates();
+		std::vector<std::pair<uint64_t, int>> eligible;
+		for (const auto& candidate : candidates) {
+			SpatialPreviewValidation validation;
+			std::string issue;
+			if (ValidateSceneSpatialPreviewClip(candidate.first, candidate.second, validation, issue) &&
+				validation.hasTransformKeys) eligible.push_back(candidate);
+		}
+		// 未BindingだけをRevision変更で再試行。明示対象/無効Clipや表示OFFを乗り換えない。
+		if (eligible.size() == 1) BindSceneSpatialPreview(eligible[0].first, eligible[0].second);
+		else spatialIssue_ = eligible.empty()
+			? SelectEditorText(editorLanguage_, candidates.empty()
+				? "PrefabAnimatorのClipがありません。"
+				: "表示可能な候補がありません。対象 / Clipを選んで診断を確認してください（TRSキー・データ検証）。",
+				candidates.empty() ? "No PrefabAnimator Clip."
+				: "No eligible preview candidate. Select Target / Clip for diagnostics (TRS keys, data validation).")
+			: SelectEditorText(editorLanguage_, "Scene Controlsでプレビュー対象を選んでください（複数候補）。",
+				"Choose a preview target in Scene Controls (multiple candidates).");
+		spatialCandidateRevision_ = source.GetRevision(); spatialCandidatesChecked_ = true;
+	}
+	if (!spatialEnabled_ || spatialOwnerId_ == 0) { spatialFrame_ = {}; return; }
+	if (spatialOwnerId_ != selectedEntityId_ && (spatialKeyIndex_ >= 0 || spatialDragging_)) {
+		CancelSceneSpatialDraft(true);
+	}
+	if ((spatialDraft_.kind != SpatialDraftKind::None && source.GetRevision() != spatialDraft_.sourceRevision) ||
+		(spatialRevision_ != 0 && source.GetRevision() != spatialRevision_ && !spatialOwnEdit_)) {
+		const bool hadDraft = spatialDraft_.kind != SpatialDraftKind::None;
+		CancelSceneSpatialDraft(true); spatialPlaying_ = false;
+		if (hadDraft) spatialEditIssue_ = SelectEditorText(editorLanguage_,
+			"別の編集が入ったため候補を取り消しました", "Draft cancelled because another edit occurred.");
+	}
+	if (spatialCacheDirty_ || spatialRevision_ != source.GetRevision() || spatialDraftRevision_ != spatialSampledDraftRevision_) {
+		if (!RebuildSceneSpatialPreview()) return;
+	}
+	const auto* animator = FindEnabledComponent(*spatialBaseDocument_->FindEntity(spatialOwnerId_), "PrefabAnimator");
+	const float duration = animator->prefabAnimationClips[spatialClipIndex_].duration;
+	// 時計は選択/focusと独立して一回だけ進め、地点編集とテキスト入力を優先する。
+	if (spatialPlaying_ && !spatialDragging_ && !ImGui::GetIO().WantTextInput) {
+		const float elapsed = std::isfinite(deltaTime) ? (std::max)(deltaTime, 0.0f) : 0.0f;
+		if (elapsed > 0) spatialTime_ = spatialTime_ >= duration ? 0.0f : (std::min)(spatialTime_ + elapsed, duration);
+	}
+	spatialTime_ = std::clamp(spatialTime_, 0.0f, duration);
+	spatialFrame_ = spatialStaticFrame_;
+	spatialFrame_.serial=++spatialFrameSerial_;
+	AppendSceneSpatialPreviewPose(spatialFrame_, spatialTime_, 0, {0.3f,1,0.6f,0.55f},true);
+	if (!spatialIssue_.empty()) { spatialFrame_ = {}; spatialPlaying_ = false; }
+}
+
+void ImGuiManager::DrawSceneSpatialPreviewOperations(bool shortcuts) {
+	ImGui::BeginGroup();
+	if (shortcuts && spatialDraft_.kind == SpatialDraftKind::None && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+		!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing()) {
+		for (int i = 0; i < 3; ++i) {
+			const ImGuiKey keys[] = { ImGuiKey_W, ImGuiKey_E, ImGuiKey_R };
+			if (ImGui::IsKeyPressed(keys[i], false)) { spatialOperation_ = i; spatialEditIssue_.clear(); }
+		}
+	}
+	ImGui::BeginDisabled(ImGuizmo::IsUsing() || spatialDraft_.kind != SpatialDraftKind::None);
+	for (int i = 0; i < 3; ++i) {
+		if (i) ImGui::SameLine();
+		const char* ja[] = { "移動(W)##Spatial", "回転(E)##Spatial", "拡縮(R)##Spatial" };
+		const char* en[] = { "Move(W)##Spatial", "Rotate(E)##Spatial", "Scale(R)##Spatial" };
+		if (ImGui::RadioButton(SelectEditorText(editorLanguage_, ja[i], en[i]), spatialOperation_ == i)) {
+			spatialOperation_ = i; spatialEditIssue_.clear();
+		}
+	}
+	ImGui::EndDisabled();
+	ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_,
+		"移動: World / 回転・拡縮: Local / Pivot: Entity原点", "Move: World / Rotate & Scale: Local / Pivot: Entity origin"));
+	const float snap = spatialOperation_ == 0 ? gizmoTranslationSnap_ : spatialOperation_ == 1 ? gizmoRotationSnapDegrees_ : gizmoScaleSnap_;
+	ImGui::TextDisabled(SelectEditorText(editorLanguage_, "Snap: %s / %.3f %s", "Snap: %s / %.3f %s"),
+		gizmoSnapEnabled_ ? "ON" : "OFF", snap, spatialOperation_ == 1 ? "deg" : spatialOperation_ == 2 ? "scale" : "units");
+	ImGui::EndGroup();
+	if (shortcuts) spatialToolbarHovered_ = ImGui::IsItemHovered();
+}
+
+void ImGuiManager::DrawSceneSpatialPreviewKeyEditor(SceneEntity& owner, SceneComponent& animator) {
+    if (rotationModeDraft_.active) {
+        ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+            "回転の補間方式を確定または取り消してから、点を編集してください。",
+            "Confirm or cancel Rotation Interpolation before editing the point."));
+        return;
+    }
+    if (!IsSceneSpatialPreviewCurrent() || spatialPoint_.generation==0 || !spatialIssue_.empty()) return;
+    int ci, ti, ki;
+    if (!ResolveSceneSpatialPoint(spatialPoint_,ci,ti,ki)) return;
+    const auto& source=editorSession_->GetEditDocument();
+    const auto* target=source.FindEntity(spatialPoint_.targetId);
+    if (!target) return;
+    const float time=spatialPoint_.time;
+    ImGui::Text(SelectEditorText(editorLanguage_,"選択した点: %s / %.3f秒","Selected point: %s / %.3f s"),
+        target->name.c_str(),time);
+    // copy評価を読むだけ。数値変更を始めるまで不足キーを作らない。
+    SampleSceneSpatialPreview(SceneSpatialPreviewKeyTime(target->id,time));
+    const auto pose=spatialSampleDocument_->FindEntity(target->id)->transform;
+    auto& clip=animator.prefabAnimationClips[ci];
+    ImGui::BeginDisabled(owner.locked || target->locked || ImGuizmo::IsUsing());
+    ImGui::BeginDisabled(spatialDraft_.kind!=SpatialDraftKind::None && spatialDraft_.kind!=SpatialDraftKind::Time);
+    float editedTime=spatialDraft_.kind==SpatialDraftKind::Time ? spatialDraft_.time : time;
+    if (ImGui::DragFloat(SelectEditorText(editorLanguage_,"点の設定時刻（秒）","Point time (seconds)"),&editedTime,0.01f,0,clip.duration,"%.3f"))
+        if (BeginSceneSpatialDraft(SpatialDraftKind::Time,0)) { spatialDraft_.time=editedTime; UpdateSceneSpatialDraftPreview(); }
+    if (ImGui::IsItemDeactivatedAfterEdit() && spatialDraft_.kind==SpatialDraftKind::Time) spatialDraft_.commitRequested=true;
+    ImGui::EndDisabled();
+    ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+        "位置・拡縮は親を基準とするローカル値です。回転は累積角度で指定します。",
+        "Position and scale are local to the parent. Rotation uses accumulated angles."));
+    for (int op=0;op<3;++op) {
+        ImGui::PushID(op);
+        const bool editing=spatialDraft_.kind==SpatialDraftKind::Value && spatialDraft_.operation==op;
+        ImGui::BeginDisabled(spatialDraft_.kind!=SpatialDraftKind::None && !editing);
+        int trackIndex, keyIndex;
+        if (SpatialFindKey(source,owner.id,clip,target->id,SpatialProperty(op),time,trackIndex,keyIndex)) {
+            Vector3 value=op==0 ? pose.translate : op==2 ? pose.scale : MakeEulerFromQuaternion(pose.rotate);
+            if (keyIndex>=0) value=clip.tracks[trackIndex].keyframes[keyIndex].value;
+            else if (op==1 && trackIndex>=0 && clip.tracks[trackIndex].rotationInterpolation=="EulerContinuous") {
+                if (!ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(clip.tracks[trackIndex],time,value)) {
+                    ImGui::EndDisabled(); ImGui::PopID(); continue;
+                }
+            } else if (op==1) {
+                Vector3 reference=value;
+                if (trackIndex>=0) {
+                    const SceneAnimationKeyframe* nearest=nullptr;
+                    for (const auto& key:clip.tracks[trackIndex].keyframes)
+                        if (!nearest || std::abs(key.time-time)<std::abs(nearest->time-time)) nearest=&key;
+                    if (nearest) reference=nearest->value;
+                }
+                // 数値欄とDraft開始で同じEuler分岐を使い、操作開始時の見かけの飛びを防ぐ。
+                if (!SpatialNearestEuler(pose.rotate,reference,value)) {
+                    spatialEditIssue_=SelectEditorText(editorLanguage_,"回転の等価変換が成立しません","Cannot convert the sampled rotation safely");
+                    ImGui::EndDisabled(); ImGui::PopID(); continue;
+                }
+            }
+            if (editing) value=spatialDraft_.keys[op].value;
+            const char* ja[]={"位置 XYZ","回転（累積角度・度）","拡縮 XYZ"};
+            const char* en[]={"Position XYZ","Rotation (accumulated degrees)","Scale XYZ"};
+            ImGui::Spacing();
+            ImGui::SeparatorText(SelectEditorText(editorLanguage_,ja[op],en[op]));
+            const Vector3* next=nullptr;
+            if (op==1 && trackIndex>=0) for (const auto& key:clip.tracks[trackIndex].keyframes)
+                if (key.time>time) { next=&key.value; break; }
+            const bool changed=op==1 ? DrawRawAnimationRotation(editorLanguage_,value,next) :
+                ImGui::DragFloat3("XYZ",&value.x,0.01f);
+            if (changed) {
+                if (BeginSceneSpatialDraft(SpatialDraftKind::Value,op)) { spatialDraft_.keys[op].value=value; UpdateSceneSpatialDraftPreview(); }
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && spatialDraft_.kind==SpatialDraftKind::Value && spatialDraft_.operation==op)
+                spatialDraft_.commitRequested=true;
+        }
+        ImGui::EndDisabled(); ImGui::PopID();
+    }
+    ImGui::EndDisabled();
+    DrawSceneSpatialPreviewOperations(false);
+    if (ImGui::Button(SelectEditorText(editorLanguage_,"選択地点の時刻へ移動","Go to selected point time"))) {
+        CancelSceneSpatialDraft(); spatialTime_=time; spatialPlaying_=false;
+    }
+    if (spatialDraft_.kind!=SpatialDraftKind::None) {
+        ImGui::TextDisabled("%s",SelectEditorText(editorLanguage_,spatialDraft_.valid ? "未確定の姿勢を表示中" : "入力エラー: 前の有効な姿勢を表示中",
+            spatialDraft_.valid ? "Showing the unconfirmed pose" : "Invalid input: showing the last valid pose"));
+        ImGui::BeginDisabled(!spatialDraft_.valid || ImGuizmo::IsUsing());
+        if (ImGui::Button(SelectEditorText(editorLanguage_,"入力を確定","Confirm input"))) spatialDraft_.commitRequested=true;
+        ImGui::EndDisabled(); ImGui::SameLine();
+        if (ImGui::Button(SelectEditorText(editorLanguage_,"入力を取り消す","Cancel input"))) {
+            CancelSceneSpatialDraft(); spatialEditIssue_.clear(); RefreshSceneSpatialPreviewAfterEdit();
+        }
+    }
+    ImGui::TextDisabled("%s",SelectEditorText(editorLanguage_,"確定時にこの点のTRSをまとめて保存します。補完による区間変化も虚像・軌道に反映されます。",
+        "Confirm saves this point's complete TRS. Ghosts and trajectory include completed-key interpolation changes."));
+}
+
+void ImGuiManager::DrawSceneSpatialPreviewPlayback(const SceneComponent& animator) {
+	if (ImGui::BeginCombo(SelectEditorText(editorLanguage_,"アニメーション###SpatialClip","Animation###SpatialClip"), spatialClipName_.c_str())) {
+		for (size_t i = 0; i < animator.prefabAnimationClips.size(); ++i) {
+			ImGui::PushID(static_cast<int>(i));
+			if (ImGui::Selectable(animator.prefabAnimationClips[i].name.c_str(), spatialClipIndex_ == static_cast<int>(i))) {
+				BindSceneSpatialPreview(spatialOwnerId_, static_cast<int>(i));
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndCombo();
+	}
+	spatialCacheDirty_ |= ImGui::Checkbox(SelectEditorText(editorLanguage_, "地点の虚像", "Key Ghosts"), &spatialGhosts_);
+	ImGui::SameLine();
+	spatialCacheDirty_ |= ImGui::Checkbox(SelectEditorText(editorLanguage_, "軌道線", "Trajectory"), &spatialPath_);
+	if (!spatialIssue_.empty()) ImGui::TextWrapped("%s", spatialIssue_.c_str());
+	if (!spatialRenderIssue_.empty()) ImGui::TextWrapped("%s", spatialRenderIssue_.c_str());
+	if (!spatialEditIssue_.empty()) ImGui::TextWrapped("%s", spatialEditIssue_.c_str());
+	if (!spatialFrame_.issue.empty()) ImGui::TextWrapped("%s",spatialFrame_.issue.c_str());
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_,"描画の詳細###SpatialDrawDetails","Rendering Details###SpatialDrawDetails"))) {
+		if (spatialRenderSerial_==spatialFrame_.serial && spatialFrame_.serial!=0)
+			ImGui::TextDisabled(SelectEditorText(editorLanguage_,"描画: 要求%zu / 準備%zu / 送信%zu","Draw: requested %zu / prepared %zu / submitted %zu"),
+				spatialFrame_.meshes.size(),spatialPreparedCount_,spatialSubmittedCount_);
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,
+			"物理・他Animator・外部制御はこのプレビューで実行しません。",
+			"Physics, other Animators, and external controllers are not simulated by this preview."));
+		ImGui::TreePop();
+	}
+
+	// 選択入口は表示OFFでも使える。評価結果と時計の操作は有効時だけ表示する。
+	if (!spatialEnabled_) {
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,
+			"Scene Controlsで空間投影をONにすると、点と動きをプレビューできます。",
+			"Enable spatial projection in Scene Controls to preview points and motion."));
+		return;
+	}
+
+	if (spatialClipIndex_ < 0 || spatialClipIndex_ >= static_cast<int>(animator.prefabAnimationClips.size())) return;
+	const auto& clip = animator.prefabAnimationClips[spatialClipIndex_];
+	if (!spatialIssue_.empty() || !std::isfinite(clip.duration) || clip.duration <= 0) return;
+	ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_,
+		"選択したアニメーションの位置・姿勢をプレビューします。",
+		"Previewing the position and orientation of the selected animation."));
+	if (ImGui::Button(SelectEditorText(editorLanguage_, spatialPlaying_ ? "動作プレビューを一時停止" : "動作プレビューを再生",
+		spatialPlaying_ ? "Pause Motion Preview" : "Play Motion Preview"))) {
+		CancelSceneSpatialDraft(true); spatialPlaying_ = !spatialPlaying_; spatialCacheDirty_ = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "先頭", "Rewind"))) {
+		CancelSceneSpatialDraft(); spatialTime_ = 0; spatialPlaying_ = false;
+	}
+	if (ImGui::SliderFloat(SelectEditorText(editorLanguage_, "再生時刻（秒）", "Playback time (seconds)"), &spatialTime_, 0, clip.duration, "%.3f")) {
+		CancelSceneSpatialDraft(); spatialPlaying_ = false;
+	}
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "緑の虚像が動きを再生します。点の選択・時刻指定で一時停止します。",
+		"The green ghost plays the motion. Point selection and scrubbing pause playback."));
+}
+
+void ImGuiManager::DrawSceneSpatialPreviewInspector(SceneEntity& entity, SceneComponent& animator) {
+    if (!editorSession_->IsEditing()) return;
+    ImGui::SeparatorText(SelectEditorText(editorLanguage_,"アニメーション編集","Animation Editing"));
+    if (spatialOwnerId_!=entity.id) {
+        if (!animator.prefabAnimationClips.empty() && ImGui::Button(SelectEditorText(editorLanguage_,"この演出をプレビュー対象にする","Use this presentation for preview"))) BindSceneSpatialPreview(entity.id,0);
+        return;
+    }
+    DrawSceneSpatialPreviewPlayback(animator);
+    // 無効な方式候補で評価できない場合も、確定/取消の入口を隠さない。
+    const bool ownerModeDraft=rotationModeDraft_.active && !rotationModeDraft_.prefab &&
+        rotationModeDraft_.ownerId==entity.id && rotationModeDraft_.clipName==spatialClipName_;
+    if (ownerModeDraft && spatialClipIndex_>=0 && spatialClipIndex_<static_cast<int>(animator.prefabAnimationClips.size())) {
+        if (ImGui::BeginChild("SpatialPoseEditor",ImVec2(0,0),ImGuiChildFlags_Borders|ImGuiChildFlags_AutoResizeY)) {
+            auto& document=editorSession_->GetEditDocument();
+            auto& clip=animator.prefabAnimationClips[spatialClipIndex_];
+            ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,
+                "回転の補間方式を変更中です。確定または取り消すと点の編集へ戻れます。",
+                "Rotation Interpolation is being changed. Confirm or cancel to return to point editing."));
+            if (DrawAnimationRotationMode(document,entity.id,clip,rotationModeDraft_.trackIndex,false)) document.MarkDirty();
+        }
+        ImGui::EndChild();
+        return;
+    }
+    if (!spatialEnabled_) return;
+    if (!IsSceneSpatialPreviewCurrent()) return;
+    ImGui::Text(SelectEditorText(editorLanguage_,"設定した点: %zu","Pose points: %zu"),spatialFrame_.keyPoints.size());
+    if (ImGui::Button(SelectEditorText(editorLanguage_,"地点選択を解除","Deselect Point"))) { CancelSceneSpatialDraft(true); spatialCacheDirty_=true; }
+    if (ImGui::BeginChild("SpatialKeys",ImVec2(0,140),true)) {
+        for (size_t i=0;i<spatialFrame_.keyPoints.size();++i) {
+            const auto point=spatialFrame_.keyPoints[i];
+            ImGui::PushID(static_cast<int>(i));
+            const auto* target=editorSession_->GetEditDocument().FindEntity(point.targetId);
+            const std::string label=std::to_string(i+1)+" : "+(target ? target->name : "Missing")+" / "+std::to_string(point.keyTime)+" s"+(point.active ? "" : " (inactive)");
+            const bool selected=spatialPoint_.generation!=0 && spatialPoint_.targetId==point.targetId && spatialPoint_.time==point.sourceTime;
+            if (ImGui::Selectable(label.c_str(),selected)) SelectSceneSpatialPoint(static_cast<int>(point.trackIndex),static_cast<int>(point.keyIndex));
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    if (spatialPoint_.generation==0) {
+        ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,
+            "一覧または空間の点を選ぶと、時刻・位置・回転・拡縮をまとめて編集できます。",
+            "Select a point in the list or viewport to edit its time, position, rotation, and scale."));
+        return;
+    }
+    // 一つの点の入力と方式候補を同じ枠へまとめる。保存/Draftの所有は既存経路に残す。
+    if (ImGui::BeginChild("SpatialPoseEditor",ImVec2(0,0),ImGuiChildFlags_Borders|ImGuiChildFlags_AutoResizeY)) {
+        if (!spatialEditIssue_.empty()) ImGui::TextWrapped("%s",spatialEditIssue_.c_str());
+        DrawSceneSpatialPreviewKeyEditor(entity,animator);
+        auto& document=editorSession_->GetEditDocument();
+        auto& clip=animator.prefabAnimationClips[spatialClipIndex_];
+        int ti=-1,ki=-1;
+        if (spatialPoint_.generation!=0)
+            SpatialFindKey(document,entity.id,clip,spatialPoint_.targetId,"LocalRotation",spatialPoint_.time,ti,ki);
+        if (ti>=0) {
+            const bool currentMode=rotationModeDraft_.active && !rotationModeDraft_.prefab &&
+                rotationModeDraft_.ownerId==entity.id && rotationModeDraft_.clipName==clip.name &&
+                rotationModeDraft_.trackIndex==static_cast<size_t>(ti);
+            const auto& mode=currentMode ? rotationModeDraft_.candidate : clip.tracks[ti].rotationInterpolation;
+            const std::string modeLabel=std::string(SelectEditorText(editorLanguage_,
+                "回転の補間方式: ","Rotation Interpolation: "))+mode+"###SpatialRotationMode";
+            if (currentMode) ImGui::SetNextItemOpen(true,ImGuiCond_Always);
+            if (ImGui::TreeNode(modeLabel.c_str())) {
+                if (DrawAnimationRotationMode(document,entity.id,clip,static_cast<size_t>(ti),false)) document.MarkDirty();
+                ImGui::TreePop();
+            }
+        }
+    }
+    ImGui::EndChild();
+}
+
+bool ImGuiManager::DrawSceneSpatialPreviewOverlay(float x, float y, float width, float height) {
+	if (!IsSceneSpatialPreviewCurrent() || width <= 1 || height <= 1) return false;
+	const auto* camera = Object3dCommon::GetInstance()->GetDefaultCamera();
+	if (!camera) return false;
+	const auto vp = Multiply(camera->GetViewMatrix(), camera->GetProjectionMatrix());
+	auto* draw = ImGui::GetWindowDrawList();
+	draw->PushClipRect(ImVec2(x,y), ImVec2(x+width,y+height), true);
+	const std::string status = spatialClipName_ + " / " + std::to_string(spatialTime_) + " s (Preview)";
+	draw->AddText(ImVec2(x+8,y+(spatialKeyIndex_ >= 0 ? 80.0f : 44.0f)), IM_COL32(100,240,180,255), status.c_str());
+	if (spatialKeyIndex_ >= 0 && !spatialEditIssue_.empty()) {
+		draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(x+8,y+100),IM_COL32(255,190,80,255),
+			spatialEditIssue_.c_str(),nullptr,(std::max)(1.0f,width-16.0f));
+	}
+	int picked = -1;
+	float bestDistance = FLT_MAX, bestDepth = FLT_MAX;
+	const auto mouse = ImGui::GetMousePos();
+	const float radius = 8.0f * static_cast<float>(GetDpiForWindow(winApp_->GetHwnd())) / 96.0f;
+	for (size_t pointIndex=0;pointIndex<spatialFrame_.keyPoints.size();++pointIndex) {
+		const auto& point=spatialFrame_.keyPoints[pointIndex];
+		const auto& p = point.worldPosition;
+		const float w = p.x*vp.m[0][3]+p.y*vp.m[1][3]+p.z*vp.m[2][3]+vp.m[3][3];
+		if (!std::isfinite(w) || w <= 0) continue;
+		const auto ndc = TransformCoord(p,vp);
+		if (!SpatialFinite(ndc) || ndc.z < 0 || ndc.z > 1 || std::abs(ndc.x) > 1 || std::abs(ndc.y) > 1) continue;
+		const ImVec2 screen{x+(ndc.x+1)*width*0.5f,y+(1-ndc.y)*height*0.5f};
+		const auto color = (spatialPoint_.generation!=0 && point.targetId==spatialPoint_.targetId && point.sourceTime==spatialPoint_.time) ? IM_COL32(255,200,70,255) : IM_COL32(80,200,255,220);
+		draw->AddCircleFilled(screen,4.0f,color);
+		const bool draftPoint = spatialDraft_.kind != SpatialDraftKind::None && point.targetId == spatialDraft_.point.targetId &&
+			(spatialPoint_.generation!=0 && point.targetId==spatialPoint_.targetId && point.sourceTime==spatialPoint_.time);
+		const std::string label = std::to_string(pointIndex+1)+" / "+std::to_string(point.keyTime)+" s" +
+			(draftPoint ? SelectEditorText(editorLanguage_, " (未確定)", " (draft)") : "");
+		draw->AddText(ImVec2(screen.x+6,screen.y-8),color,label.c_str());
+		const float distance = (screen.x-mouse.x)*(screen.x-mouse.x)+(screen.y-mouse.y)*(screen.y-mouse.y);
+		if (distance <= radius*radius && (distance < bestDistance || (distance == bestDistance && ndc.z < bestDepth))) {
+			bestDistance = distance; bestDepth = ndc.z; picked = static_cast<int>(pointIndex);
+		}
+	}
+	draw->PopClipRect();
+	if (picked >= 0 && mouse.x >= x && mouse.x <= x+width && mouse.y >= y+40 && mouse.y <= y+height &&
+		ImGui::IsWindowHovered() && !spatialToolbarHovered_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing() && !ImGuizmo::IsOver()) {
+		selectedEntityId_ = spatialOwnerId_;
+		const auto point=spatialFrame_.keyPoints[picked];
+		SelectSceneSpatialPoint(static_cast<int>(point.trackIndex),static_cast<int>(point.keyIndex));
+		return true;
+	}
+	return false;
+}
+
+void ImGuiManager::DrawSceneSpatialPreviewGizmo(float x, float y, float width, float height) {
+	if (rotationModeDraft_.active) return;
+	if (!IsSceneSpatialPreviewCurrent() || spatialKeyIndex_ < 0 || !spatialIssue_.empty()) return;
+	if (spatialDraft_.kind != SpatialDraftKind::None && spatialDraft_.kind != SpatialDraftKind::Gizmo) return;
+	ImGui::SetCursorScreenPos(ImVec2(x+8,y+8));
+	DrawSceneSpatialPreviewOperations(true);
+	SceneDocument& source = editorSession_->GetEditDocument();
+	auto* owner = source.FindEntity(spatialOwnerId_);
+	auto* animator = owner ? FindComponent(*owner,"PrefabAnimator") : nullptr;
+	if (!animator || spatialClipIndex_ >= static_cast<int>(animator->prefabAnimationClips.size())) return;
+	auto& clip = animator->prefabAnimationClips[spatialClipIndex_];
+	if (spatialTrackIndex_ < 0 || spatialTrackIndex_ >= static_cast<int>(clip.tracks.size())) return;
+	auto& track = clip.tracks[spatialTrackIndex_];
+	if (track.property == "Active" || spatialKeyIndex_ >= static_cast<int>(track.keyframes.size())) return;
+	const auto& pointKey = track.keyframes[spatialKeyIndex_];
+	const auto* target = SpatialTrackTarget(source,owner->id,track);
+	const auto* camera = Object3dCommon::GetInstance()->GetDefaultCamera();
+	if (!target || !camera || owner->locked || target->locked || clip.name != spatialClipName_) return;
+	int editTrack, editKey;
+	if (!SpatialFindKey(source,owner->id,clip,target->id,SpatialProperty(spatialOperation_),pointKey.time,editTrack,editKey)) return;
+	if (spatialDragging_ && (source.GetRevision() != spatialDragRevision_ || pointKey.time != spatialDragKeyTime_ ||
+		spatialOperation_ != spatialDragOperation_ || spatialTrackIndex_ != spatialDragPositionTrack_ || spatialKeyIndex_ != spatialDragPositionKey_ ||
+		target->id != spatialDragTarget_ || editTrack != spatialDragTrack_ || editKey != spatialDragKey_)) {
+		CancelSceneSpatialDraft(true); return;
+	}
+	SampleSceneSpatialPreview(pointKey.time);
+	const auto* sampleTarget = spatialSampleDocument_->FindEntity(target->id);
+	auto world = ResolveSceneWorldMatrix(*spatialSampleDocument_,*sampleTarget);
+	if (!spatialDragging_) {
+		spatialDragParent_ = target->parentId == 0 ? MakeIdentity4x4() :
+			ResolveSceneWorldMatrix(*spatialSampleDocument_,*spatialSampleDocument_->FindEntity(target->parentId));
+		spatialDragRevision_ = source.GetRevision(); spatialDragKeyTime_ = pointKey.time;
+		spatialDragOperation_ = spatialOperation_; spatialDragTarget_ = target->id;
+		spatialDragPositionTrack_ = spatialTrackIndex_; spatialDragPositionKey_ = spatialKeyIndex_;
+		spatialDragTrack_ = editTrack; spatialDragKey_ = editKey;
+	}
+	Vector3 axes[3]{};
+	for (int i=0;i<3;++i) {
+		axes[i] = {spatialDragParent_.m[i][0],spatialDragParent_.m[i][1],spatialDragParent_.m[i][2]};
+		if (!SpatialFinite(axes[i]) || Math::Length(axes[i]) <= 0) {
+			spatialEditIssue_ = SelectEditorText(editorLanguage_,"親の軸が潰れているためGizmoを使用できません","Cannot use Gizmo: collapsed parent axis"); return;
+		}
+		axes[i] = Math::Normalize(axes[i]);
+	}
+	if (!SpatialFinite(spatialDragParent_) || std::abs(Math::Dot(axes[0],Math::Cross(axes[1],axes[2]))) <= 1e-6f) {
+		spatialEditIssue_ = SelectEditorText(editorLanguage_,"親行列を安全に逆変換できません","Cannot safely invert parent matrix"); return;
+	}
+	const auto inverse = Inverse(spatialDragParent_);
+	// 既存Inverseは小さい行列式で零行列を返す。有限値だけでは成功判定できない。
+	if (!SpatialFinite(inverse) || inverse.m[3][3] == 0.0f) {
+		spatialEditIssue_ = SelectEditorText(editorLanguage_,"親行列を安全に逆変換できません","Cannot safely invert parent matrix"); return;
+	}
+	if (spatialOperation_ != 0) {
+		float lengths[3]{};
+		for (int i=0;i<3;++i) lengths[i] = Math::Length({spatialDragParent_.m[i][0],spatialDragParent_.m[i][1],spatialDragParent_.m[i][2]});
+		const float largest = (std::max)({lengths[0],lengths[1],lengths[2]});
+		bool uniform = Math::Dot(axes[0],Math::Cross(axes[1],axes[2])) > 0;
+		for (int i=0;i<3;++i) {
+			uniform &= std::isfinite(lengths[i]) && std::abs(lengths[i]-largest) <= 1e-4f*largest;
+			for (int j=i+1;j<3;++j) uniform &= std::abs(Math::Dot(axes[i],axes[j])) <= 1e-4f;
+		}
+		const auto& scale = sampleTarget->transform.scale;
+		if (!uniform || !SpatialFinite(scale) || scale.x < 1e-6f || scale.y < 1e-6f || scale.z < 1e-6f) {
+			spatialEditIssue_ = SelectEditorText(editorLanguage_,"回転・拡縮Gizmoは正の一様な親と正の対象Scaleが必要です。Local数値欄で編集してください",
+				"Rotate/Scale Gizmo requires a positive uniform parent and positive target scale. Use local numeric fields."); return;
+		}
+	}
+	ImGuizmo::SetOrthographic(false); ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+	ImGuizmo::SetRect(x,y,width,height);
+	const float snapValue = spatialOperation_ == 0 ? gizmoTranslationSnap_ : spatialOperation_ == 1 ? gizmoRotationSnapDegrees_ : gizmoScaleSnap_;
+	const float snap[3] = {snapValue,snapValue,snapValue};
+	const auto operation = spatialOperation_ == 0 ? ImGuizmo::TRANSLATE : spatialOperation_ == 1 ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
+	const bool changed = ImGuizmo::Manipulate(&camera->GetViewMatrix().m[0][0],&camera->GetProjectionMatrix().m[0][0],
+		operation,spatialOperation_ == 0 ? ImGuizmo::WORLD : ImGuizmo::LOCAL,&world.m[0][0],nullptr,gizmoSnapEnabled_ ? snap : nullptr);
+	const bool wasDragging = spatialDragging_;
+	spatialDragging_ = ImGuizmo::IsUsing();
+	if (spatialCancelledGesture_) {
+		if (!spatialDragging_) spatialCancelledGesture_ = false;
+		return;
+	}
+	if (wasDragging && !spatialDragging_ && spatialDraft_.kind == SpatialDraftKind::Gizmo)
+		spatialDraft_.commitRequested = true;
+	if (!changed || !spatialDragging_) return;
+	if (!BeginSceneSpatialDraft(SpatialDraftKind::Gizmo, spatialOperation_)) return;
+	spatialPlaying_ = false;
+	Vector3 value = TransformCoord({world.m[3][0],world.m[3][1],world.m[3][2]},inverse);
+	if (spatialOperation_ != 0) {
+		const auto localMatrix = Multiply(world,inverse);
+		Vector3 scale{}, translate{}; Quaternion rotation{};
+		if (!SpatialFinite(localMatrix) || !DecomposeAffineMatrix(localMatrix,scale,rotation,translate) ||
+			!SpatialFinite(scale) || scale.x < 1e-6f || scale.y < 1e-6f || scale.z < 1e-6f ||
+			!SpatialMatrixMatches(MakeAffineMatrix(scale,rotation,translate),localMatrix)) {
+			spatialEditIssue_ = SelectEditorText(editorLanguage_,"Gizmoの結果にshearまたは不正なScaleがあります。元キーを保持します",
+				"Gizmo result contains shear or invalid scale. Original key is preserved.");
+			spatialDraft_.valid = false; spatialDraft_.commitRequested = false; return;
+		}
+		value = scale;
+		if (spatialOperation_ == 1) {
+			if (!SpatialNearestEuler(rotation,spatialDraft_.validKeys[1].value,value)) {
+				spatialEditIssue_ = SelectEditorText(editorLanguage_,"回転を一意に戻せません。回転の数値欄を使用してください",
+					"Cannot resolve rotation uniquely. Use numeric rotation fields.");
+				spatialDraft_.valid = false; spatialDraft_.commitRequested = false; return;
+			}
+		}
+	}
+	spatialDraft_.keys[spatialOperation_].value = value;
+	UpdateSceneSpatialDraftPreview();
+}
+
 void ImGuiManager::DrawSceneGizmo(
 	float x,
 	float y,
@@ -2974,6 +4325,10 @@ void ImGuiManager::DrawSceneGizmo(
 		width <= 1.0f ||
 		height <= 1.0f
 	) {
+		return;
+	}
+	if (HasSceneSpatialPreviewPointSelection()) {
+		DrawSceneSpatialPreviewGizmo(x,y,width,height);
 		return;
 	}
 
@@ -3204,6 +4559,8 @@ void ImGuiManager::DrawSceneGizmo(
 }
 
 void ImGuiManager::Finalize(){
+	delete spatialBaseDocument_; spatialBaseDocument_ = nullptr;
+	delete spatialSampleDocument_; spatialSampleDocument_ = nullptr;
 	StopAudioPreview();
 	delete prefabEditorSession_;
 	prefabEditorSession_ = nullptr;
@@ -3476,12 +4833,19 @@ void ImGuiManager::DrawSceneSwitchConfirmation() {
 	}
 	ImGui::Separator();
 
+	if (spatialDraft_.kind != SpatialDraftKind::None) {
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+			"保存する前に演出の入力を確定・修正、または取り消してください。",
+			"Confirm, correct, or cancel the presentation draft before saving."));
+	}
 	if (ImGui::Button(SelectEditorText(
 		editorLanguage_,
 		"保存して開く###SaveAndOpenScene",
 		"Save and Open###SaveAndOpenScene"
 	))) {
-		if (editorSession_ && editorSession_->Save()) {
+		if (!CanSaveSceneSpatialDraft()) {
+			sceneSaveFailed_ = false;
+		} else if (editorSession_ && editorSession_->Save()) {
 			requestedSceneId_ = pendingSceneId_;
 			requestedSceneDiscardUnsavedChanges_ = false;
 			pendingSceneId_.clear();
@@ -4317,7 +5681,7 @@ void ImGuiManager::DrawPlaybackControls() {
 	const bool saveRequested = ImGui::SmallButton("Save Scene");
 	ImGui::EndDisabled();
 	if (editorSession_->IsEditing() && saveRequested) {
-		editorSession_->Save();
+		if (CanSaveSceneSpatialDraft()) editorSession_->Save();
 	}
 
 	ImGui::SameLine();
@@ -4335,9 +5699,11 @@ void ImGuiManager::DrawPlaybackControls() {
 	const bool redoRequested = ImGui::SmallButton("Redo");
 	ImGui::EndDisabled();
 	if (editorSession_->IsEditing() && undoRequested) {
+		CancelSceneSpatialDraft(true);
 		editorSession_->Undo();
 	}
 	if (editorSession_->IsEditing() && redoRequested) {
+		CancelSceneSpatialDraft(true);
 		editorSession_->Redo();
 	}
 
@@ -8973,7 +10339,7 @@ void ImGuiManager::DrawInspectorWindow() {
 					}
 					component.environmentSkyboxPath = texturePath;
 					environmentChanged = true;
-					editorSession_->RequestSceneReload();
+					// Sceneと同じDocumentをSyncするため画像変更だけのReloadは不要。失敗時に旧Skyboxを保持する。
 				};
 
 				const char* currentSkybox =
@@ -11181,6 +12547,79 @@ void ImGuiManager::DrawInspectorWindow() {
 						ImGui::EndCombo();
 					}
 				};
+				// 候補をAnimatorに絞り、同名EntityはHierarchyとIDで区別する。
+				auto drawPresentationTargetAndClip = [this, &document, &eventsChanged](
+					uint64_t& targetId, std::string& targetName, std::string& clipName, bool needsClip
+				) {
+					const SceneEntity* selected = targetId != 0 ? document.FindEntity(targetId) : nullptr;
+					if (targetId == 0 && !targetName.empty()) {
+						size_t count = 0;
+						for (const SceneEntity& candidate : document.GetEntities()) {
+							if (candidate.name == targetName) { selected = &candidate; ++count; }
+						}
+						if (count != 1) selected = nullptr;
+					}
+					const SceneComponent* animator = selected ? FindEnabledComponent(*selected, "PrefabAnimator") : nullptr;
+					const std::string preview = animator
+						? BuildEntityHierarchyLabel(document, *selected) + " [" + std::to_string(selected->id) + "]"
+						: SelectEditorText(editorLanguage_, "演出対象を選択", "Select Presentation Target");
+					if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "演出対象###PresentationTarget", "Presentation Target###PresentationTarget"), preview.c_str())) {
+						static ImGuiTextFilter filter;
+						if (ImGui::IsWindowAppearing()) filter.Clear();
+						filter.Draw(SelectEditorText(editorLanguage_, "検索###PresentationSearch", "Search###PresentationSearch"));
+						bool hasCandidate = false;
+						for (const SceneEntity& candidate : document.GetEntities()) {
+							if (!FindEnabledComponent(candidate, "PrefabAnimator")) continue;
+							const std::string label = BuildEntityHierarchyLabel(document, candidate) + " [" + std::to_string(candidate.id) + "]";
+							if (!filter.PassFilter(label.c_str())) continue;
+							hasCandidate = true;
+							if (ImGui::Selectable(label.c_str(), targetId == candidate.id)) {
+								if (targetId != candidate.id) clipName.clear();
+								targetId = candidate.id;
+								targetName = candidate.name;
+								selected = &candidate;
+								animator = FindEnabledComponent(candidate, "PrefabAnimator");
+								eventsChanged = true;
+							}
+						}
+						if (!hasCandidate) ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "候補がありません", "No Matching Animator"));
+						ImGui::EndCombo();
+					}
+					if (!animator) {
+						ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "対象が未設定、または有効なPrefabAnimatorがありません", "Target is unset, missing, or has no enabled PrefabAnimator"));
+						return;
+					}
+					if (!needsClip) return;
+					if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Clip"), clipName.empty()
+						? SelectEditorText(editorLanguage_, "Clipを選択", "Select Clip") : clipName.c_str())) {
+						for (size_t index = 0; index < animator->prefabAnimationClips.size(); ++index) {
+							const ScenePrefabAnimationClip& clip = animator->prefabAnimationClips[index];
+							ImGui::PushID(static_cast<int>(index));
+							if (ImGui::Selectable(clip.name.c_str(), clip.name == clipName)) {
+								clipName = clip.name;
+								eventsChanged = true;
+							}
+							ImGui::PopID();
+						}
+						ImGui::EndCombo();
+					}
+					if (clipName.empty() || std::count_if(animator->prefabAnimationClips.begin(), animator->prefabAnimationClips.end(),
+						[&](const ScenePrefabAnimationClip& clip) { return clip.name == clipName; }) != 1) {
+						ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "一意なClip名を選択してください", "Select a Unique Clip Name"));
+					}
+					for (const ScenePrefabAnimationClip& clip : animator->prefabAnimationClips) {
+						if (clip.name != clipName) continue;
+						if (clip.loop || !std::isfinite(clip.duration) || clip.duration <= 0.0f) {
+							ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_,
+								"Loopを無効にし、正の有限Durationを設定してください", "Disable Loop and Set a Positive Finite Duration"));
+						}
+					}
+					if (std::any_of(animator->prefabAnimationClips.begin(), animator->prefabAnimationClips.end(),
+						[](const ScenePrefabAnimationClip& clip) { return clip.playOnStart; })) {
+						ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "演出対象のClipはPlay On Startを無効にしてください", "Disable Play On Start on the Presentation Animator Clips"));
+					}
+					ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "非LoopのTransform Clip専用。親は有効にしてください。", "Transform Clips Only; Disable Loop and Keep Parents Active."));
+				};
 				int removeBindingIndex = -1;
 				for (size_t bindingIndex = 0;
 					bindingIndex < component.eventBindings.size();
@@ -11199,7 +12638,7 @@ void ImGuiManager::DrawInspectorWindow() {
 								"OnStart", "OnInterval", "OnStatReachedMin", "OnStatCompare",
 								"OnPositionReached", "OnKeyPressed",
 								"OnCameraPathCompleted", "OnAudioFinished",
-								"OnTextMotionCompleted"
+								"OnTextMotionCompleted", "OnPresentationClipCompleted"
 							}) {
 								if (ImGui::Selectable(
 									trigger,
@@ -11249,6 +12688,9 @@ void ImGuiManager::DrawInspectorWindow() {
 								binding.textMotionClipId,
 								true
 							);
+						} else if (binding.triggerType == "OnPresentationClipCompleted") {
+							drawPresentationTargetAndClip(binding.targetEntityId, binding.targetEntityName,
+								binding.presentationClipName, true);
 						} else if (triggerNeedsTarget) {
 							eventsChanged |= ImGui::InputScalar(
 								LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Id"),
@@ -11347,7 +12789,8 @@ void ImGuiManager::DrawInspectorWindow() {
 										"ResetPostProcessProfile", "PlayCameraPath",
 										"StopCameraPath", "SelectCamera", "PlayAudio",
 									"StopAudio", "PauseAudio", "ResumeAudio",
-									"PlayTextMotion", "StopTextMotion", "ResetTextMotion"
+									"PlayTextMotion", "StopTextMotion", "ResetTextMotion",
+									"PlayPresentationClip", "StopPresentationClip", "ResetPresentationClip"
 									}) {
 										if (ImGui::Selectable(
 											actionType,
@@ -11369,7 +12812,10 @@ void ImGuiManager::DrawInspectorWindow() {
 								action.type != "SelectCamera" &&
 								action.type != "PlayTextMotion" &&
 								action.type != "StopTextMotion" &&
-								action.type != "ResetTextMotion"
+								action.type != "ResetTextMotion" &&
+								action.type != "PlayPresentationClip" &&
+								action.type != "StopPresentationClip" &&
+								action.type != "ResetPresentationClip"
 								) {
 									eventsChanged |= ImGui::InputScalar(
 										LocalizedComponentWidgetLabel(editorLanguage_, "Action Target Entity Id"),
@@ -11446,6 +12892,10 @@ void ImGuiManager::DrawInspectorWindow() {
 										action.textMotionClipId,
 										action.type != "PlayTextMotion"
 									);
+								} else if (action.type == "PlayPresentationClip" || action.type == "StopPresentationClip" ||
+									action.type == "ResetPresentationClip") {
+									drawPresentationTargetAndClip(action.targetEntityId, action.targetEntityName,
+										action.presentationClipName, action.type == "PlayPresentationClip");
 								} else if (action.type == "SceneTransition") {
 									const auto* destination = sceneCatalog_ ? sceneCatalog_->Find(action.sceneId) : nullptr;
 									const std::string label = destination ? destination->displayName :
@@ -11752,195 +13202,201 @@ void ImGuiManager::DrawInspectorWindow() {
 				ImGui::EndDisabled();
 			} else if (component.type == "PrefabAnimator") {
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
+				DrawSceneSpatialPreviewInspector(*entity, component);
 				bool animationChanged = false;
-				int removeClipIndex = -1;
-				for (size_t clipIndex = 0;
-					clipIndex < component.prefabAnimationClips.size();
-					++clipIndex) {
-					ScenePrefabAnimationClip& clip =
-						component.prefabAnimationClips[clipIndex];
-					ImGui::PushID(static_cast<int>(clipIndex));
-					if (ImGui::TreeNodeEx(
-						"Prefab Clip",
-						ImGuiTreeNodeFlags_DefaultOpen,
-						"Clip %zu: %s",
-						clipIndex + 1,
-						clip.name.c_str()
-					)) {
-						animationChanged |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Clip Name"), clip.name);
-						animationChanged |= ImGui::DragFloat(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Duration"), &clip.duration, 0.01f, 0.001f, 10000.0f
-						);
-						animationChanged |= ImGui::Checkbox(LocalizedComponentWidgetLabel(editorLanguage_, "Loop"), &clip.loop);
-						animationChanged |= ImGui::Checkbox(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Play On Start"), &clip.playOnStart
-						);
-						clip.duration = (std::max)(clip.duration, 0.001f);
-						int removeTrackIndex = -1;
-						for (size_t trackIndex = 0;
-							trackIndex < clip.tracks.size();
-							++trackIndex) {
-							SceneAnimationTrack& track = clip.tracks[trackIndex];
-							ImGui::PushID(static_cast<int>(trackIndex));
-							if (ImGui::TreeNodeEx(
-								"Track",
-								ImGuiTreeNodeFlags_DefaultOpen,
-								"Track %zu: %s",
-								trackIndex + 1,
-								track.property.c_str()
-							)) {
-								animationChanged |= ImGui::InputScalar(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Id"),
-									ImGuiDataType_U64,
-									&track.targetEntityId
-								);
-								animationChanged |= InputTextString(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Name"), track.targetEntityName
-								);
-								if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Property"), track.property.c_str())) {
-									for (const char* property : {
-										"LocalPosition", "LocalRotation", "LocalScale", "Active"
-									}) {
-										if (ImGui::Selectable(
-											property,
-											track.property == property
-										)) {
-											track.property = property;
-											animationChanged = true;
-										}
-									}
-									ImGui::EndCombo();
-								}
-								if (track.property != "Active") {
-									if (ImGui::BeginCombo(
-										LocalizedComponentWidgetLabel(editorLanguage_, "Easing"),
-										track.easing.empty()
-											? "SmoothStep"
-											: track.easing.c_str()
-									)) {
-										for (const char* easing : {
-											"Linear", "EaseIn", "EaseOut", "EaseInOut",
-											"SmoothStep"
+				// 通常は統合点を編集する。保存形式に沿う旧編集は明示的に詳細を開いた時だけ表示する。
+				if (ImGui::CollapsingHeader(SelectEditorText(editorLanguage_,
+					"詳細編集（項目別）###SceneAnimationAdvanced", "Advanced Property Editing###SceneAnimationAdvanced"))) {
+					int removeClipIndex = -1;
+					for (size_t clipIndex = 0;
+						clipIndex < component.prefabAnimationClips.size();
+						++clipIndex) {
+						ScenePrefabAnimationClip& clip =
+							component.prefabAnimationClips[clipIndex];
+						ImGui::PushID(static_cast<int>(clipIndex));
+						if (ImGui::TreeNodeEx(
+							"Prefab Clip",
+							ImGuiTreeNodeFlags_DefaultOpen,
+							SelectEditorText(editorLanguage_, "アニメーション: %s", "Animation: %s"),
+							clip.name.c_str()
+						)) {
+							animationChanged |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Clip Name"), clip.name);
+							animationChanged |= ImGui::DragFloat(
+								LocalizedComponentWidgetLabel(editorLanguage_, "Duration"), &clip.duration, 0.01f, 0.001f, 10000.0f
+							);
+							animationChanged |= ImGui::Checkbox(LocalizedComponentWidgetLabel(editorLanguage_, "Loop"), &clip.loop);
+							animationChanged |= ImGui::Checkbox(
+								LocalizedComponentWidgetLabel(editorLanguage_, "Play On Start"), &clip.playOnStart
+							);
+							clip.duration = (std::max)(clip.duration, 0.001f);
+							int removeTrackIndex = -1;
+							for (size_t trackIndex = 0;
+								trackIndex < clip.tracks.size();
+								++trackIndex) {
+								SceneAnimationTrack& track = clip.tracks[trackIndex];
+								ImGui::PushID(static_cast<int>(trackIndex));
+								if (ImGui::TreeNodeEx(
+									"Track",
+									ImGuiTreeNodeFlags_DefaultOpen,
+									SelectEditorText(editorLanguage_, "編集項目 %zu: %s", "Property %zu: %s"),
+									trackIndex + 1,
+									track.property.c_str()
+								)) {
+									animationChanged |= ImGui::InputScalar(
+										LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Id"),
+										ImGuiDataType_U64,
+										&track.targetEntityId
+									);
+									animationChanged |= InputTextString(
+										LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Name"), track.targetEntityName
+									);
+									if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Property"), track.property.c_str())) {
+										for (const char* property : {
+											"LocalPosition", "LocalRotation", "LocalScale", "Active"
 										}) {
 											if (ImGui::Selectable(
-												easing,
-												track.easing == easing
+												property,
+												track.property == property
 											)) {
-												track.easing = easing;
+												track.property = property;
 												animationChanged = true;
 											}
 										}
 										ImGui::EndCombo();
 									}
-								}
-								int removeKeyframeIndex = -1;
-								bool keyframeTimeChanged = false;
-								for (size_t keyframeIndex = 0;
-									keyframeIndex < track.keyframes.size();
-									++keyframeIndex) {
-									SceneAnimationKeyframe& keyframe =
-										track.keyframes[keyframeIndex];
-									ImGui::PushID(static_cast<int>(keyframeIndex));
-									ImGui::SeparatorText(SelectEditorText(editorLanguage_, "Keyframe", "Keyframe"));
-									if (ImGui::DragFloat(
-										LocalizedComponentWidgetLabel(editorLanguage_, "Time"), &keyframe.time, 0.01f, 0.0f, clip.duration
-									)) {
-										keyframe.time = std::clamp(
-											keyframe.time,
-											0.0f,
-											clip.duration
-										);
-										keyframeTimeChanged = true;
-										animationChanged = true;
+									animationChanged |= DrawAnimationRotationMode(document,entity->id,clip,trackIndex,false);
+									if (track.property != "Active") {
+										if (ImGui::BeginCombo(
+											LocalizedComponentWidgetLabel(editorLanguage_, "Easing"),
+											track.easing.empty()
+												? "SmoothStep"
+												: track.easing.c_str()
+										)) {
+											for (const char* easing : {
+												"Linear", "EaseIn", "EaseOut", "EaseInOut",
+												"SmoothStep"
+											}) {
+												if (ImGui::Selectable(
+													easing,
+													track.easing == easing
+												)) {
+													track.easing = easing;
+													animationChanged = true;
+												}
+											}
+											ImGui::EndCombo();
+										}
 									}
-									if (track.property == "Active") {
-										bool activeValue = keyframe.value.x >= 0.5f;
-										if (ImGui::Checkbox(LocalizedComponentWidgetLabel(editorLanguage_, "Active Value"), &activeValue)) {
-											keyframe.value.x = activeValue ? 1.0f : 0.0f;
+									int removeKeyframeIndex = -1;
+									bool keyframeTimeChanged = false;
+									for (size_t keyframeIndex = 0;
+										keyframeIndex < track.keyframes.size();
+										++keyframeIndex) {
+										SceneAnimationKeyframe& keyframe =
+											track.keyframes[keyframeIndex];
+										ImGui::PushID(static_cast<int>(keyframeIndex));
+										ImGui::SeparatorText(SelectEditorText(editorLanguage_, "Keyframe", "Keyframe"));
+										if (ImGui::DragFloat(
+											LocalizedComponentWidgetLabel(editorLanguage_, "Time"), &keyframe.time, 0.01f, 0.0f, clip.duration
+										)) {
+											keyframe.time = std::clamp(
+												keyframe.time,
+												0.0f,
+												clip.duration
+											);
+											keyframeTimeChanged = true;
 											animationChanged = true;
 										}
-									} else {
-										animationChanged |= ImGui::DragFloat3(
-											track.property == "LocalRotation"
-												? LocalizedComponentWidgetLabel(editorLanguage_, "Euler Value (Radians)")
-												: LocalizedComponentWidgetLabel(editorLanguage_, "Value"),
-											&keyframe.value.x,
-											0.01f
-										);
-									}
-									if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Keyframeを削除###RemoveKeyframe", "Remove Keyframe###RemoveKeyframe"))) {
-										removeKeyframeIndex = static_cast<int>(keyframeIndex);
-									}
-									ImGui::PopID();
-								}
-								if (removeKeyframeIndex >= 0) {
-									track.keyframes.erase(
-										track.keyframes.begin() + removeKeyframeIndex
-									);
-									animationChanged = true;
-								}
-								if (keyframeTimeChanged) {
-									std::stable_sort(
-										track.keyframes.begin(),
-										track.keyframes.end(),
-										[](const SceneAnimationKeyframe& left,
-											const SceneAnimationKeyframe& right) {
-											return left.time < right.time;
+										if (track.property == "Active") {
+											bool activeValue = keyframe.value.x >= 0.5f;
+											if (ImGui::Checkbox(LocalizedComponentWidgetLabel(editorLanguage_, "Active Value"), &activeValue)) {
+												keyframe.value.x = activeValue ? 1.0f : 0.0f;
+												animationChanged = true;
+											}
+										} else {
+											if (track.property=="LocalRotation") {
+												ImGui::BeginDisabled(rotationModeDraft_.active);
+												animationChanged |= DrawRawAnimationRotation(editorLanguage_,keyframe.value,
+													keyframeIndex+1<track.keyframes.size() ? &track.keyframes[keyframeIndex+1].value : nullptr);
+												ImGui::EndDisabled();
+											} else {
+												animationChanged |= ImGui::DragFloat3(LocalizedComponentWidgetLabel(editorLanguage_, "Value"),&keyframe.value.x,0.01f);
+											}
 										}
-									);
-								}
-								if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Keyframeを追加###AddKeyframe", "Add Keyframe###AddKeyframe"))) {
-									SceneAnimationKeyframe keyframe{};
-									keyframe.time = track.keyframes.empty()
-										? 0.0f
-										: (std::min)(
-											track.keyframes.back().time + 0.1f,
-											clip.duration
-										);
-									if (!track.keyframes.empty()) {
-										keyframe.value = track.keyframes.back().value;
+										if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Keyframeを削除###RemoveKeyframe", "Remove Keyframe###RemoveKeyframe"))) {
+											removeKeyframeIndex = static_cast<int>(keyframeIndex);
+										}
+										ImGui::PopID();
 									}
-									track.keyframes.push_back(keyframe);
-									animationChanged = true;
+									if (removeKeyframeIndex >= 0) {
+										track.keyframes.erase(
+											track.keyframes.begin() + removeKeyframeIndex
+										);
+										animationChanged = true;
+									}
+									if (keyframeTimeChanged) {
+										std::stable_sort(
+											track.keyframes.begin(),
+											track.keyframes.end(),
+											[](const SceneAnimationKeyframe& left,
+												const SceneAnimationKeyframe& right) {
+												return left.time < right.time;
+											}
+										);
+									}
+									if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Keyframeを追加###AddKeyframe", "Add Keyframe###AddKeyframe"))) {
+										SceneAnimationKeyframe keyframe{};
+										keyframe.time = track.keyframes.empty()
+											? 0.0f
+											: (std::min)(
+												track.keyframes.back().time + 0.1f,
+												clip.duration
+											);
+										if (!track.keyframes.empty()) {
+											keyframe.value = track.keyframes.back().value;
+										}
+										track.keyframes.push_back(keyframe);
+										animationChanged = true;
+									}
+									if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "編集項目を削除###RemoveTrack", "Remove Property###RemoveTrack"))) {
+										removeTrackIndex = static_cast<int>(trackIndex);
+									}
+									ImGui::TreePop();
 								}
-								if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Trackを削除###RemoveTrack", "Remove Track###RemoveTrack"))) {
-									removeTrackIndex = static_cast<int>(trackIndex);
-								}
-								ImGui::TreePop();
+								ImGui::PopID();
 							}
-							ImGui::PopID();
+							if (removeTrackIndex >= 0) {
+								clip.tracks.erase(clip.tracks.begin() + removeTrackIndex);
+								animationChanged = true;
+							}
+							if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "編集項目を追加###AddTrack", "Add Property###AddTrack"))) {
+								SceneAnimationTrack track{};
+								track.keyframes = {
+									{ 0.0f, {} },
+									{ clip.duration, {} }
+								};
+								clip.tracks.push_back(std::move(track));
+								animationChanged = true;
+							}
+							if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "アニメーションを削除###RemoveClip", "Remove Animation###RemoveClip"))) {
+								removeClipIndex = static_cast<int>(clipIndex);
+							}
+							ImGui::TreePop();
 						}
-						if (removeTrackIndex >= 0) {
-							clip.tracks.erase(clip.tracks.begin() + removeTrackIndex);
-							animationChanged = true;
-						}
-						if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Trackを追加###AddTrack", "Add Track###AddTrack"))) {
-							SceneAnimationTrack track{};
-							track.keyframes = {
-								{ 0.0f, {} },
-								{ clip.duration, {} }
-							};
-							clip.tracks.push_back(std::move(track));
-							animationChanged = true;
-						}
-						if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Clipを削除###RemoveClip", "Remove Clip###RemoveClip"))) {
-							removeClipIndex = static_cast<int>(clipIndex);
-						}
-						ImGui::TreePop();
+						ImGui::PopID();
 					}
-					ImGui::PopID();
-				}
-				if (removeClipIndex >= 0) {
-					component.prefabAnimationClips.erase(
-						component.prefabAnimationClips.begin() + removeClipIndex
-					);
-					animationChanged = true;
-				}
-				if (ImGui::Button(SelectEditorText(editorLanguage_, "Clipを追加###AddClip", "Add Clip###AddClip"))) {
-					component.prefabAnimationClips.push_back(
-						ScenePrefabAnimationClip{}
-					);
-					animationChanged = true;
+					if (removeClipIndex >= 0) {
+						component.prefabAnimationClips.erase(
+							component.prefabAnimationClips.begin() + removeClipIndex
+						);
+						animationChanged = true;
+					}
+					if (ImGui::Button(SelectEditorText(editorLanguage_, "アニメーションを追加###AddClip", "Add Animation###AddClip"))) {
+						component.prefabAnimationClips.push_back(
+							ScenePrefabAnimationClip{}
+						);
+						animationChanged = true;
+					}
 				}
 				if (animationChanged) {
 					document.MarkDirty();
@@ -14507,7 +15963,7 @@ void ImGuiManager::DrawPrefabOpenConfirmation() {
 		"保存して開く###SaveAndOpenPrefab",
 		"Save and Open###SaveAndOpenPrefab"
 	))) {
-		if (prefabEditorSession_->Save()) {
+		if (CanSaveAnimationRotationMode(true) && prefabEditorSession_->Save()) {
 			OpenPrefab(
 				pendingPrefabOpenPath_,
 				pendingPrefabHistoryIndex_
@@ -15294,7 +16750,7 @@ void ImGuiManager::DrawPrefabWindow() {
 		ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.25f, 1.0f), "Unsaved");
 	}
 	if (ImGui::Button("Save")) {
-		if (prefabEditorSession_->Save()) {
+		if (CanSaveAnimationRotationMode(true) && prefabEditorSession_->Save()) {
 			InvalidateProjectCache();
 		}
 	}
@@ -15511,7 +16967,7 @@ void ImGuiManager::DrawPrefabWindow() {
 	)) {
 		ImGui::TextUnformatted("The Prefab has unsaved changes.");
 		if (ImGui::Button("Save and Close")) {
-			if (prefabEditorSession_->Save()) {
+			if (CanSaveAnimationRotationMode(true) && prefabEditorSession_->Save()) {
 				prefabEditorSession_->Close(true);
 				showPrefab_ = false;
 				prefabSelectedEntityId_ = 0;
@@ -15990,7 +17446,7 @@ void ImGuiManager::HandleEditShortcuts() {
 		prefabEditorSession_ &&
 		prefabEditorSession_->IsOpen()
 	) {
-		if (saveRequested && prefabEditorSession_->Save()) {
+		if (saveRequested && CanSaveAnimationRotationMode(true) && prefabEditorSession_->Save()) {
 			InvalidateProjectCache();
 		}
 		if (undoRequested) {
@@ -16006,12 +17462,14 @@ void ImGuiManager::HandleEditShortcuts() {
 		return;
 	}
 	if (saveRequested) {
-		editorSession_->Save();
+		if (CanSaveSceneSpatialDraft()) editorSession_->Save();
 	}
 	if (undoRequested) {
+		CancelSceneSpatialDraft(true);
 		editorSession_->Undo();
 	}
 	if (redoRequested) {
+		CancelSceneSpatialDraft(true);
 		editorSession_->Redo();
 	}
 }
@@ -17039,8 +18497,6 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 		animator->prefabAnimationClips[prefabAnimationPreviewClipIndex_];
 	const float duration = (std::max)(clip.duration, 0.001f);
 	constexpr float kKeyTimeTolerance = 0.005f;
-	constexpr float kRadiansToDegrees = 57.2957795f;
-	constexpr float kDegreesToRadians = 0.0174532925f;
 
 	const auto resolveTrackTargetId = [&](const SceneAnimationTrack& track) {
 		if (track.targetEntityId != 0) {
@@ -17144,6 +18600,13 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 		}
 
 		Vector3 value = authoringValue(property);
+		if (property==1) for (const auto& track:clip.tracks) {
+			if (track.property=="LocalRotation" && resolveTrackTargetId(track)==entity.id && track.rotationInterpolation=="EulerContinuous") {
+				if (!ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(track,pose.time,value))
+					value={std::numeric_limits<float>::quiet_NaN(),0,0};
+				return value;
+			}
+		}
 		float latestTime = -1.0f;
 		for (size_t trackIndex = 0;
 			trackIndex < clip.tracks.size();
@@ -17187,6 +18650,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 		return static_cast<int>(clip.tracks.size() - 1);
 	};
 	const auto upsertKey = [&](int property, float time, const Vector3& value) {
+		if (!SpatialFinite(value)) return;
 		SceneAnimationTrack& track = clip.tracks[ensureTrack(property)];
 		for (SceneAnimationKeyframe& keyframe : track.keyframes) {
 			if (std::abs(keyframe.time - time) <= kKeyTimeTolerance) {
@@ -17230,6 +18694,13 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 	)) {
 		return;
 	}
+	for (size_t ti=0;ti<clip.tracks.size();++ti) {
+		if (clip.tracks[ti].property!="LocalRotation" || resolveTrackTargetId(clip.tracks[ti])!=entity.id) continue;
+		ImGui::PushID(static_cast<int>(ti));
+		if (DrawAnimationRotationMode(document,owner->id,clip,ti,true)) document.MarkDirty();
+		ImGui::PopID();
+	}
+	if (rotationModeDraft_.active) return;
 	ImGui::TextDisabled("Model Forward: -Z");
 	ImGui::SameLine();
 	ImGui::TextDisabled("%s / %s", owner->name.c_str(), clip.name.c_str());
@@ -17284,9 +18755,12 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 		} else {
 			TransformPose newPose{};
 			newPose.time = time;
-			for (int property = 0; property < 3; ++property) {
-				upsertKey(property, time, resolvePoseValue(newPose, property));
+			const Vector3 values[]={resolvePoseValue(newPose,0),resolvePoseValue(newPose,1),resolvePoseValue(newPose,2)};
+			if (!SpatialFinite(values[0]) || !SpatialFinite(values[1]) || !SpatialFinite(values[2])) {
+				prefabTransformPoseStatus_="Cannot sample the pose safely. Original keys are preserved.";
+				return;
 			}
+			for (int property = 0; property < 3; ++property) upsertKey(property,time,values[property]);
 			document.MarkDirty();
 			activatePreviewAt(time);
 			char message[96]{};
@@ -17394,21 +18868,16 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 			}
 
 			Vector3 position = resolvePoseValue(pose, 0);
-			Vector3 rotationDegrees = resolvePoseValue(pose, 1);
-			rotationDegrees.x *= kRadiansToDegrees;
-			rotationDegrees.y *= kRadiansToDegrees;
-			rotationDegrees.z *= kRadiansToDegrees;
+			Vector3 rotationValue = resolvePoseValue(pose, 1);
 			Vector3 scale = resolvePoseValue(pose, 2);
 			if (ImGui::DragFloat3("Position", &position.x, 0.01f)) {
 				upsertKey(0, pose.time, position);
 				document.MarkDirty();
 				activatePreviewAt(pose.time);
 			}
-			if (ImGui::DragFloat3("Rotation (Degrees)", &rotationDegrees.x, 0.1f)) {
-				rotationDegrees.x *= kDegreesToRadians;
-				rotationDegrees.y *= kDegreesToRadians;
-				rotationDegrees.z *= kDegreesToRadians;
-				upsertKey(1, pose.time, rotationDegrees);
+			const Vector3 nextRotation=hasNextPose ? resolvePoseValue(poses[poseIndex+1],1) : Vector3{};
+			if (DrawRawAnimationRotation(editorLanguage_,rotationValue,hasNextPose ? &nextRotation : nullptr)) {
+				upsertKey(1, pose.time, rotationValue);
 				document.MarkDirty();
 				activatePreviewAt(pose.time);
 			}
@@ -17505,7 +18974,10 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 	}
 			}
 
-			if (!complete && ImGui::SmallButton("Complete Pose")) {
+			const bool poseValuesValid=SpatialFinite(resolvePoseValue(pose,0)) &&
+				SpatialFinite(resolvePoseValue(pose,1)) && SpatialFinite(resolvePoseValue(pose,2));
+			if (!poseValuesValid) ImGui::TextDisabled("Cannot sample this pose safely. Completion/duplication is disabled.");
+			if (!complete && poseValuesValid && ImGui::SmallButton("Complete Pose")) {
 				for (int property = 0; property < 3; ++property) {
 					if (pose.keys[property].trackIndex < 0) {
 						upsertKey(
@@ -17529,7 +19001,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 				prefabAnimationPreviewActive_ = true;
 			}
 			ImGui::SameLine();
-			if (ImGui::SmallButton("Duplicate")) {
+			if (poseValuesValid && ImGui::SmallButton("Duplicate")) {
 				float duplicateTime = (std::min)(pose.time + 0.1f, duration);
 				if (std::abs(duplicateTime - pose.time) <= kKeyTimeTolerance) {
 					duplicateTime = (std::max)(pose.time - 0.1f, 0.0f);
@@ -17575,6 +19047,8 @@ bool ImGuiManager::WritePrefabAnimationGizmoKey(
 	const std::string& property,
 	const Vector3& value
 ) {
+	if (rotationModeDraft_.active) return false;
+	if (!SpatialFinite(value)) return false;
 	if (
 		!prefabAnimationPreviewActive_ ||
 		!prefabEditorSession_ ||
@@ -17620,6 +19094,10 @@ bool ImGuiManager::WritePrefabAnimationGizmoKey(
 		return owner->id;
 	};
 
+	const float keyTime = std::clamp(
+		prefabAnimationPreviewTime_,0.0f,(std::max)(clip.duration,0.0f)
+	);
+	if (!std::isfinite(keyTime)) return false;
 	SceneAnimationTrack* destinationTrack = nullptr;
 	for (SceneAnimationTrack& track : clip.tracks) {
 		if (
@@ -17639,23 +19117,28 @@ bool ImGuiManager::WritePrefabAnimationGizmoKey(
 		destinationTrack = &clip.tracks.back();
 	}
 
-	const float keyTime = std::clamp(
-		prefabAnimationPreviewTime_,
-		0.0f,
-		(std::max)(clip.duration, 0.0f)
-	);
+	Vector3 storedValue=value;
+	if (property=="LocalRotation" && destinationTrack->rotationInterpolation=="EulerContinuous") {
+		Vector3 reference{};
+		if (!ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(*destinationTrack,keyTime,reference) ||
+			!SpatialNearestEuler(MakeQuaternionFromEuler(value),reference,storedValue)) {
+			prefabTransformPoseStatus_="Cannot preserve accumulated rotation. Use numeric rotation fields.";
+			return false;
+		}
+	}
+	if (!SpatialFinite(storedValue)) return false;
 	constexpr float kKeyTimeTolerance = 0.005f;
 	for (SceneAnimationKeyframe& keyframe : destinationTrack->keyframes) {
 		if (std::abs(keyframe.time - keyTime) > kKeyTimeTolerance) {
 			continue;
 		}
 		prefabAnimationPreviewTime_ = keyframe.time;
-		keyframe.value = value;
+		keyframe.value = storedValue;
 		document.MarkDirty();
 		return true;
 	}
 
-	destinationTrack->keyframes.push_back({ keyTime, value });
+	destinationTrack->keyframes.push_back({ keyTime, storedValue });
 	std::stable_sort(
 		destinationTrack->keyframes.begin(),
 		destinationTrack->keyframes.end(),
@@ -17778,6 +19261,11 @@ void ImGuiManager::DrawPrefabGizmo(
 	if (prefabAnimationPreviewActive_) {
 		// Preview Documentは一時表示専用。操作値はSource Clipの現在時刻へ
 		// 書き戻し、次のPreview再構築で表示へ反映する。
+		if (gizmoOperation_==1 && (!SpatialFinite(localMatrix) ||
+			!SpatialMatrixMatches(MakeAffineMatrix(localScale,localRotate,localTranslate),localMatrix))) {
+			prefabTransformPoseStatus_="Cannot record a sheared or invalid rotation. Use local numeric fields.";
+			return;
+		}
 		prefabAnimationPreviewPlaying_ = false;
 		const std::string property = gizmoOperation_ == 0
 			? "LocalPosition"
@@ -19865,6 +21353,7 @@ void ImGuiManager::DrawPrefabInspector() {
 								}
 								ImGui::EndCombo();
 							}
+							changed |= DrawAnimationRotationMode(document,entity->id,clip,trackIndex,true);
 							if (track.property != "Active" && ImGui::BeginCombo(
 								LocalizedComponentWidgetLabel(editorLanguage_, "Easing"),
 								track.easing.empty() ? "SmoothStep" : track.easing.c_str()
@@ -19901,13 +21390,14 @@ void ImGuiManager::DrawPrefabInspector() {
 										changed = true;
 									}
 								} else {
-									changed |= ImGui::DragFloat3(
-										track.property == "LocalRotation"
-											? LocalizedComponentWidgetLabel(editorLanguage_, "Euler Value (Radians)")
-											: LocalizedComponentWidgetLabel(editorLanguage_, "Value"),
-										&key.value.x,
-										0.01f
-									);
+									if (track.property=="LocalRotation") {
+										ImGui::BeginDisabled(rotationModeDraft_.active);
+										changed |= DrawRawAnimationRotation(editorLanguage_,key.value,
+											keyIndex+1<track.keyframes.size() ? &track.keyframes[keyIndex+1].value : nullptr);
+										ImGui::EndDisabled();
+									} else {
+										changed |= ImGui::DragFloat3(LocalizedComponentWidgetLabel(editorLanguage_, "Value"),&key.value.x,0.01f);
+									}
 								}
 								ImGui::SameLine();
 								if (ImGui::SmallButton("X")) {

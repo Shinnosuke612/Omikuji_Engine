@@ -247,6 +247,8 @@ void RuntimeScene::Update(float deltaTime)
 		const std::string targetSceneId =
 			transitionSystem_.Update(*activeDocument);
 		if (!targetSceneId.empty()) {
+			pendingPresentationRequests_.clear();
+			pendingPresentationDocumentGeneration_ = 0;
 			sceneManager_->ChangeScene(targetSceneId);
 			return;
 		}
@@ -323,6 +325,24 @@ void RuntimeScene::Update(float deltaTime)
 		projectileSystem_.FlushRemovals(*activeDocument);
 		// 保存値を実行時状態へ展開し、Transform AnimationをObject同期前に反映する。
 		statSystem_.Update(*activeDocument);
+		// 前Frame Eventの順を保ち、active化と時刻0 PoseをObject同期より前にまとめる。
+		// 内容差替え後の同IDへ古い要求を適用しない。Persistent detachは同世代を維持する。
+		if (pendingPresentationDocumentGeneration_ != 0 &&
+			pendingPresentationDocumentGeneration_ == activeDocument->GetContentGeneration()) {
+			for (const ScenePresentationRequest& request : pendingPresentationRequests_) {
+				if (request.type == ScenePresentationRequestType::Play) {
+					prefabAnimationSystem_.PlayPresentation(*activeDocument, request.entityId, request.clipName);
+				} else if (request.type == ScenePresentationRequestType::Stop) {
+					prefabAnimationSystem_.StopPresentation(request.entityId);
+				} else {
+					prefabAnimationSystem_.ResetPresentation(*activeDocument, request.entityId);
+				}
+			}
+		}
+		pendingPresentationRequests_.clear();
+		pendingPresentationDocumentGeneration_ = 0;
+		// 演出だけ通常deltaTimeで更新し、GameFlow permission/HitStopから独立させる。
+		prefabAnimationSystem_.UpdatePresentations(*activeDocument, deltaTime);
 		if (gameFlowResult.gameplayAllowed) {
 			enemySpawnerSystem_.Update(*activeDocument, gameplayDeltaTime);
 		}
@@ -357,7 +377,9 @@ void RuntimeScene::Update(float deltaTime)
 		statSystem_.Clear();
 		attackRunnerSystem_.Clear(activeDocument);
 		runtimeEffectSystem_.Clear(activeDocument);
-		prefabAnimationSystem_.Clear();
+		prefabAnimationSystem_.Clear(activeDocument);
+		pendingPresentationRequests_.clear();
+		pendingPresentationDocumentGeneration_ = 0;
 		eventSystem_.Clear();
 		textMotionSystem_.Clear();
 		gameFlowSystem_.Clear();
@@ -433,6 +455,8 @@ void RuntimeScene::Update(float deltaTime)
 		stateMachineSystem_.Clear();
 		attackRunnerSystem_.Clear();
 		prefabAnimationSystem_.Clear();
+		pendingPresentationRequests_.clear();
+		pendingPresentationDocumentGeneration_ = 0;
 		projectileSystem_.Clear();
 		statSystem_.Clear();
 		physicsSystem_.Clear();
@@ -552,7 +576,7 @@ void RuntimeScene::Update(float deltaTime)
 	// Transform確定後に環境設定とDebug形状を登録し、描画時の状態を揃える。
 	environmentSystem_.Sync(activeDocument, runtimeObjectBindings_);
 	if (activeDocument && playing) {
-		// Eventは同FrameのTextMotion completionを次Packageで受け取れる位置に置く。
+		// TextMotionの自然終了もTransform演出の完了も、この後のEvent段階で受け取る。
 		textMotionSystem_.Update(*activeDocument, deltaTime);
 	} else {
 		textMotionSystem_.Clear();
@@ -571,10 +595,12 @@ void RuntimeScene::Update(float deltaTime)
 #endif
 	if (activeDocument && playing && gameplayDeltaTime > 0.0f) {
 		// Prefab生成はEntity配列を再配置し得るため、bindingを使い終えた最後に行う。
+		// HitStop中は既存Event gateを維持し、演出完了pulseは次の評価まで保持する。
 		const SceneEventRuntimeSignals eventSignals{
 			cameraSystem_.ConsumeCompletedCameraPathEntityId(),
 			audioSystem_.ConsumeFinishedEntityIds(*activeDocument),
-			textMotionSystem_.ConsumeCompletions()
+			textMotionSystem_.ConsumeCompletions(),
+			prefabAnimationSystem_.ConsumePresentationCompletions()
 		};
 		const SceneEventResult eventResult = eventSystem_.Update(
 			*activeDocument,
@@ -590,10 +616,14 @@ void RuntimeScene::Update(float deltaTime)
 					eventResult.sceneTransitionId, eventResult.transitionAssetPath});
 				return;
 			}
+			pendingPresentationRequests_.clear();
+			pendingPresentationDocumentGeneration_ = 0;
 			postProcessProfileSystem_.Reset(activeDocument);
 			sceneManager_->ChangeScene(eventResult.sceneTransitionId);
 			return;
 		}
+		pendingPresentationRequests_ = eventResult.presentationRequests;
+		pendingPresentationDocumentGeneration_ = activeDocument->GetContentGeneration();
 		for (const SceneTextMotionRequest& request : eventResult.textMotionRequests) {
 			if (request.type == SceneTextMotionRequestType::Play) {
 				textMotionSystem_.Play(*activeDocument, request.entityId, request.clipId);
@@ -847,7 +877,9 @@ void RuntimeScene::Finalize()
 	stateMachineSystem_.Clear();
 	attackRunnerSystem_.Clear();
 	physicsSystem_.Clear();
-	prefabAnimationSystem_.Clear();
+	prefabAnimationSystem_.Clear(GetSceneDocument());
+	pendingPresentationRequests_.clear();
+	pendingPresentationDocumentGeneration_ = 0;
 	projectileSystem_.Clear();
 	statSystem_.Clear();
 
@@ -876,6 +908,9 @@ void RuntimeScene::Finalize()
 
 void RuntimeScene::PrepareForSceneTransition()
 {
+	prefabAnimationSystem_.Clear(GetSceneDocument());
+	pendingPresentationRequests_.clear();
+	pendingPresentationDocumentGeneration_ = 0;
 	textMotionSystem_.Clear();
 	gameFlowSystem_.Clear();
 	SceneExecutionContext* executionContext = sceneManager_

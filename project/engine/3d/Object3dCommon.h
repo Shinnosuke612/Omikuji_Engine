@@ -28,6 +28,8 @@ public: //メンバ関数
 	//共通描画設定
 	void SetCommonRenderState();
 	void SetCommonRenderState(CullMode cullMode);
+	// 通常PSOと同じbindingで、Editor虚像のDepth writeだけを無効にする。
+	void SetEditorGhostRenderState(CullMode cullMode);
 	void SetSkinningRenderState();
 	void SetSkinningRenderState(CullMode cullMode);
 	// Shadow passのCullModeに対応するPSOを設定する。既定Backは既存callerとの互換用。
@@ -76,6 +78,8 @@ private://メンバ変数
 	//ルートシグネチャ
 	Microsoft::WRL::ComPtr < ID3D12RootSignature> rootSignature_ = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> graphicsPipelineStates_
+		[static_cast<uint32_t>(CullMode::kCount)];
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> editorGhostPipelineStates_
 		[static_cast<uint32_t>(CullMode::kCount)];
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> skinningPipelineStates_
 		[static_cast<uint32_t>(CullMode::kCount)];

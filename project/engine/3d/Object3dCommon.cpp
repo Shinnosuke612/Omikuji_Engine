@@ -63,6 +63,14 @@ void Object3dCommon::SetCommonRenderState(CullMode cullMode) {
 	dxCommon_->GetCommandList()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
 
+void Object3dCommon::SetEditorGhostRenderState(CullMode cullMode) {
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	dxCommon_->GetCommandList()->SetGraphicsRootSignature(rootSignature_.Get());
+	dxCommon_->GetCommandList()->SetPipelineState(editorGhostPipelineStates_[ToCullIndex(cullMode)].Get());
+	dxCommon_->GetCommandList()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+#endif
+}
+
 void Object3dCommon::SetSkinningRenderState() {
 	SetSkinningRenderState(CullMode::kBack);
 }
@@ -358,6 +366,18 @@ void Object3dCommon::GenerateGraphicsPipeline(){
 			IID_PPV_ARGS(&graphicsPipelineStates_[cullIndex])
 		);
 		assert(SUCCEEDED(hr));
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+		// descriptorのcopyだけを変え、通常モデル/影のDepth契約を維持する。
+		auto ghostDesc = graphicsPipelineStateDesc;
+		ghostDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+		ghostDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+		ghostDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+		ghostDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+		ghostDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+		hr = dxCommon_->GetDevice()->CreateGraphicsPipelineState(
+			&ghostDesc, IID_PPV_ARGS(&editorGhostPipelineStates_[cullIndex]));
+		assert(SUCCEEDED(hr));
+#endif
 	}
 
 }

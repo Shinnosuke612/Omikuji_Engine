@@ -32,6 +32,7 @@
 #include "../engine/3d/Object3d.h"
 #include "../engine/3d/Model.h"
 #include "../engine/3d/ModelManager.h"
+#include "../engine/math/Math.h"
 #include "../engine/3d/SrvManager.h"
 #include "../engine/particle/ParticleCommon.h"
 #include "../engine/particle/ParticleManager.h"
@@ -59,8 +60,53 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include <iterator>
+#include <cstring>
+#include <cstddef>
+#include <limits>
+#include <unordered_map>
 
 namespace {
+
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+    // Object3dとObject3D shaderのCB契約。Previewはshadow/skin資源を持たない。
+    struct SpatialGhostMatrix { Matrix4x4 wvp, world; };
+    struct SpatialGhostCamera { Vector3 position; float environment = 0; };
+    struct SpatialGhostMaterial {
+        Vector4 color{};
+        int32_t lighting = 0;
+        float emissive = 0, padding[2]{};
+        Matrix4x4 uv = MakeIdentity4x4();
+        Vector4 emissiveColor{1,1,1,1};
+        float shininess = 40, dissolve = 0, edgeWidth = 0.08f, noiseScale = 6;
+    };
+    static_assert(sizeof(SpatialGhostMatrix)==128 && offsetof(SpatialGhostMatrix,world)==64);
+    static_assert(sizeof(SpatialGhostCamera)==16 && offsetof(SpatialGhostCamera,environment)==12);
+    static_assert(sizeof(SpatialGhostMaterial)==128 && offsetof(SpatialGhostMaterial,uv)==32 &&
+        offsetof(SpatialGhostMaterial,emissiveColor)==96 && offsetof(SpatialGhostMaterial,shininess)==112);
+    constexpr size_t spatialCbStride=D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
+    static_assert(sizeof(SpatialGhostMatrix)<=spatialCbStride && sizeof(SpatialGhostMaterial)<=spatialCbStride);
+
+    bool CreateSpatialGhostBuffer(ID3D12Device* device, size_t bytes,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& buffer, void** mapped, std::string& issue) {
+        D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER; desc.Width=bytes; desc.Height=1;
+        desc.DepthOrArraySize=1; desc.MipLevels=1; desc.SampleDesc.Count=1; desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        HRESULT hr=device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(buffer.ReleaseAndGetAddressOf()));
+        if (SUCCEEDED(hr)) { D3D12_RANGE noRead{0,0}; hr=buffer->Map(0,&noRead,mapped); }
+        if (FAILED(hr)) {
+            issue="虚像Bufferを作成できません / Ghost Buffer creation failed: "+std::to_string(static_cast<long>(hr));
+            buffer.Reset(); *mapped=nullptr; return false;
+        }
+        return true;
+    }
+    bool SpatialGhostFinite(const Matrix4x4& matrix) {
+        for (const auto& row:matrix.m) for (float value:row) if (!std::isfinite(value)) return false;
+        return true;
+    }
+#endif
 	using SceneEntityQuery::FindEnabledComponent;
 	using SceneEntityQuery::IsEntityActiveInHierarchy;
 	using SceneTransformResolver::ResolveScene3DTransform;
@@ -750,6 +796,10 @@ void Game::Update() {
 	if (preserveEditorCamera) {
 		RestoreCameraSnapshot(editorCameraSnapshot);
 	}
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (imguiManager_) imguiManager_->UpdateSceneSpatialPreview(deltaTime);
+	PrepareSceneSpatialPreview();
+#endif
 	editorWasEditingLastFrame_ =
 		executionContext_ && executionContext_->IsEditing();
 	wasPausedLastFrame_ = paused;
@@ -1681,6 +1731,7 @@ void Game::Draw() {
 	Object3dCommon::GetInstance()->SetCommonRenderState();
 	sceneManager_->Draw();
 #if defined(_DEBUG) || defined(DEVELOPMENT)
+	DrawSceneSpatialPreview();
 	if (
 		editorSession_ &&
 		editorSession_->IsEditing() &&
@@ -2736,9 +2787,167 @@ void Game::DrawPrefabPreview() {
 	);
 }
 
+void Game::ClearSceneSpatialPreview() {
+    // 前FrameのPostDraw完了後のみ。各poseの生GPU addressより先にDraw記録を破棄する。
+    spatialPreviewModels_.clear(); spatialPreviewLines_.clear(); spatialPreviewMaterials_.clear();
+    spatialPreviewBuffer_.Reset(); spatialPreviewMapped_=nullptr; spatialPreviewCapacity_=0;
+    spatialPreviewGeneration_=spatialPreviewRevision_=spatialPreviewSerial_=0; spatialPreviewIssue_.clear();
+}
+
+void Game::PrepareSceneSpatialPreview() {
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+    if (!imguiManager_ || !editorSession_ || !editorSession_->IsEditing()) { ClearSceneSpatialPreview(); return; }
+    const auto& frame=imguiManager_->GetSceneSpatialPreviewFrame();
+    const auto& source=editorSession_->GetEditDocument();
+    if (frame.sourceGeneration==0 || frame.sourceGeneration!=source.GetContentGeneration() || frame.sourceRevision!=source.GetRevision()) {
+        ClearSceneSpatialPreview(); return;
+    }
+    spatialPreviewGeneration_=frame.sourceGeneration; spatialPreviewRevision_=frame.sourceRevision; spatialPreviewSerial_=frame.serial;
+    spatialPreviewModels_.clear(); spatialPreviewLines_.clear(); spatialPreviewIssue_.clear();
+    for (const auto& line:frame.lines) spatialPreviewLines_.push_back({line.start,line.end,line.color});
+    auto report=[&]() { imguiManager_->SetSceneSpatialPreviewRenderIssue(spatialPreviewIssue_,frame.serial,spatialPreviewModels_.size(),0); };
+    auto addIssue=[&](const std::string& text) {
+        if (spatialPreviewIssue_.find(text)!=std::string::npos) return;
+        if (!spatialPreviewIssue_.empty()) spatialPreviewIssue_+='\n';
+        spatialPreviewIssue_+=text;
+    };
+    auto* common=Object3dCommon::GetInstance();
+    auto* camera=common->GetDefaultCamera();
+    if (!camera || !SpatialGhostFinite(camera->GetViewProjectionMatrix()) ||
+        !std::isfinite(camera->GetTranslate().x) || !std::isfinite(camera->GetTranslate().y) || !std::isfinite(camera->GetTranslate().z)) {
+        addIssue("Previewカメラがありません、または不正です / Missing or invalid preview camera"); report(); return;
+    }
+    if (frame.meshes.size()>8200 || frame.meshes.size()+1>(std::numeric_limits<size_t>::max)()/spatialCbStride) {
+        addIssue("虚像の必要数が入力上限を超えています / Ghost count exceeds the admitted input bounds"); report(); return;
+    }
+    if (!frame.meshes.empty() && spatialPreviewCapacity_<frame.meshes.size()) {
+        // 新BufferがMapできるまで旧Bufferを保持する。失敗してもmarker/axisは残す。
+        Microsoft::WRL::ComPtr<ID3D12Resource> next;
+        void* mapped=nullptr; std::string issue;
+        if (!CreateSpatialGhostBuffer(dxCommon_->GetDevice(),(frame.meshes.size()+1)*spatialCbStride,next,&mapped,issue)) {
+            addIssue(issue); report(); return;
+        }
+        spatialPreviewBuffer_=std::move(next); spatialPreviewMapped_=static_cast<unsigned char*>(mapped);
+        spatialPreviewCapacity_=frame.meshes.size();
+    }
+    if (!frame.meshes.empty()) {
+        const SpatialGhostCamera cameraData{camera->GetTranslate(),0};
+        std::memcpy(spatialPreviewMapped_,&cameraData,sizeof(cameraData));
+        TextureManager::GetInstance()->LoadTexture("resources/rostock_laage_airport_4k.dds");
+    }
+    for (auto& group:spatialPreviewMaterials_) group.used=false;
+    std::unordered_map<std::string,Model*> resolved;
+    for (const auto& mesh:frame.meshes) {
+        if (!SpatialGhostFinite(mesh.world)) { addIssue("虚像の行列が不正です / Invalid ghost matrix"); continue; }
+        auto found=resolved.find(mesh.modelPath);
+        if (found==resolved.end()) {
+            ModelManager::GetInstance()->LoadModel(mesh.modelPath);
+            found=resolved.emplace(mesh.modelPath,ModelManager::GetInstance()->FindModel(mesh.modelPath)).first;
+        }
+        Model* model=found->second;
+        if (!model || model->HasSkinning() || model->GetMaterialSlots().empty()) {
+            addIssue("Previewモデルを表示できません（static mesh/materialが必要） / Static mesh/material unavailable: "+mesh.modelPath); continue;
+        }
+        const auto world=Multiply(model->GetRootNodeLocalMatrix(),mesh.world);
+        const SpatialGhostMatrix matrices{Multiply(world,camera->GetViewProjectionMatrix()),world};
+        if (!SpatialGhostFinite(matrices.world) || !SpatialGhostFinite(matrices.wvp)) {
+            addIssue("虚像のWorld/WVPが不正です / Invalid ghost World/WVP: "+mesh.modelPath); continue;
+        }
+        auto groupIt=std::find_if(spatialPreviewMaterials_.begin(),spatialPreviewMaterials_.end(),[&](const auto& group) {
+            return group.model==model && group.tint.x==mesh.tint.x && group.tint.y==mesh.tint.y && group.tint.z==mesh.tint.z && group.tint.w==mesh.tint.w;
+        });
+        if (groupIt==spatialPreviewMaterials_.end()) {
+            SpatialPreviewMaterials group; group.model=model; group.tint=mesh.tint;
+            spatialPreviewMaterials_.push_back(std::move(group)); groupIt=std::prev(spatialPreviewMaterials_.end());
+        }
+        auto& group=*groupIt;
+        if (!group.used) {
+            group.used=true; group.valid=true;
+            const auto& materials=model->GetMaterialSlots();
+            if (group.owned.size()!=materials.size()) { group.owned.clear(); group.resources.clear(); }
+            for (size_t i=0;i<materials.size();++i) {
+                void* mapped=nullptr; std::string issue;
+                if (i>=group.owned.size()) {
+                    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+                    if (!CreateSpatialGhostBuffer(dxCommon_->GetDevice(),spatialCbStride,resource,&mapped,issue)) {
+                        addIssue(issue); group.valid=false; break;
+                    }
+                    group.resources.push_back(resource.Get()); group.owned.push_back(std::move(resource));
+                } else {
+                    D3D12_RANGE noRead{0,0};
+                    if (FAILED(group.owned[i]->Map(0,&noRead,&mapped))) {
+                        addIssue("虚像材質をMapできません / Cannot map ghost material"); group.valid=false; break;
+                    }
+                }
+                SpatialGhostMaterial data;
+                const auto& color=materials[i].baseColor;
+                data.color={color.x*mesh.tint.x,color.y*mesh.tint.y,color.z*mesh.tint.z,color.w*mesh.tint.w};
+                std::memcpy(mapped,&data,sizeof(data)); group.owned[i]->Unmap(0,nullptr);
+            }
+        }
+        if (!group.valid) continue;
+        const size_t offset=(spatialPreviewModels_.size()+1)*spatialCbStride;
+        std::memcpy(spatialPreviewMapped_+offset,&matrices,sizeof(matrices));
+        SpatialPreviewModel draw;
+        draw.model=model; draw.materialGroup=static_cast<size_t>(groupIt-spatialPreviewMaterials_.begin());
+        draw.matrixAddress=spatialPreviewBuffer_->GetGPUVirtualAddress()+offset;
+        draw.poseId=mesh.poseId; draw.moving=mesh.moving; draw.entityId=mesh.entityId; draw.cullMode=mesh.meshCullMode;
+        draw.worldPosition={mesh.world.m[3][0],mesh.world.m[3][1],mesh.world.m[3][2]};
+        spatialPreviewModels_.push_back(std::move(draw));
+    }
+    // 未使用の色/モデル資源もFence完了後に解放し、Drawのgroup indexを同時に再対応する。
+    std::vector<size_t> remap(spatialPreviewMaterials_.size());
+    std::vector<SpatialPreviewMaterials> retained;
+    for (size_t i=0;i<spatialPreviewMaterials_.size();++i) if (spatialPreviewMaterials_[i].used) {
+        remap[i]=retained.size(); retained.push_back(std::move(spatialPreviewMaterials_[i]));
+    }
+    for (auto& draw:spatialPreviewModels_) draw.materialGroup=remap[draw.materialGroup];
+    spatialPreviewMaterials_=std::move(retained); report();
+#endif
+}
+
+void Game::DrawSceneSpatialPreview() {
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+    if (!editorSession_ || !editorSession_->IsEditing() || spatialPreviewGeneration_==0 ||
+        spatialPreviewGeneration_!=editorSession_->GetEditDocument().GetContentGeneration() ||
+        spatialPreviewRevision_!=editorSession_->GetEditDocument().GetRevision() ||
+        imguiManager_->GetSceneSpatialPreviewFrame().serial!=spatialPreviewSerial_) return;
+    const auto* camera=Object3dCommon::GetInstance()->GetDefaultCamera();
+    if (!camera || !SpatialGhostFinite(camera->GetViewProjectionMatrix())) return;
+    const Vector3 cameraPosition=camera->GetTranslate();
+    if (!std::isfinite(cameraPosition.x) || !std::isfinite(cameraPosition.y) || !std::isfinite(cameraPosition.z)) return;
+    std::vector<const SpatialPreviewModel*> sorted;
+    for (const auto& draw:spatialPreviewModels_) sorted.push_back(&draw);
+    auto distance=[&](const auto* draw) {
+        const double x=static_cast<double>(draw->worldPosition.x)-cameraPosition.x;
+        const double y=static_cast<double>(draw->worldPosition.y)-cameraPosition.y;
+        const double z=static_cast<double>(draw->worldPosition.z)-cameraPosition.z; return x*x+y*y+z*z;
+    };
+    std::sort(sorted.begin(),sorted.end(),[&](const auto* a,const auto* b) {
+        const double da=distance(a), db=distance(b);
+        if (da!=db) return da>db;
+        if (a->moving!=b->moving) return a->moving<b->moving;
+        return std::pair<uint32_t,uint64_t>{a->poseId,a->entityId}<std::pair<uint32_t,uint64_t>{b->poseId,b->entityId};
+    });
+    auto* common=Object3dCommon::GetInstance();
+    auto* commandList=dxCommon_->GetCommandList();
+    for (const auto* draw:sorted) {
+        common->SetEditorGhostRenderState(draw->cullMode=="None" ? Object3dCommon::CullMode::kNone :
+            draw->cullMode=="Front" ? Object3dCommon::CullMode::kFront : Object3dCommon::CullMode::kBack);
+        commandList->SetGraphicsRootConstantBufferView(1,draw->matrixAddress);
+        commandList->SetGraphicsRootConstantBufferView(4,spatialPreviewBuffer_->GetGPUVirtualAddress());
+        commandList->SetGraphicsRootDescriptorTable(7,TextureManager::GetInstance()->GetSrvHandleGPU("resources/rostock_laage_airport_4k.dds"));
+        draw->model->DrawWithMaterialSlots(spatialPreviewMaterials_[draw->materialGroup].resources,{});
+    }
+    for (const auto& line:spatialPreviewLines_) DebugRenderer::GetInstance()->AddDepthTestedLine(line.start,line.end,line.color);
+    imguiManager_->SetSceneSpatialPreviewRenderIssue(spatialPreviewIssue_,spatialPreviewSerial_,spatialPreviewModels_.size(),sorted.size());
+#endif
+}
+
 void Game::Finalize() {
 	CancelPresentedTransition();
 	presentedTransition_.reset();
+	ClearSceneSpatialPreview();
 	if (Input* input = Input::GetInstance()) {
 		input->SetCursorCapture(false);
 	}

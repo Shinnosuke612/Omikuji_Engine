@@ -15,6 +15,19 @@
 #include <unordered_set>
 
 namespace {
+	SceneEntity* ResolvePresentationOwner(SceneDocument& document,
+		uint64_t id, const std::string& name) {
+		if (id != 0) return document.FindEntity(id);
+		if (name.empty()) return nullptr;
+		SceneEntity* result = nullptr;
+		for (SceneEntity& entity : document.GetEntities()) {
+			if (entity.name != name) continue;
+			if (result) return nullptr;
+			result = &entity;
+		}
+		return result;
+	}
+
 	SceneEntity* ResolveEntity(
 		SceneDocument& document,
 		uint64_t id,
@@ -270,6 +283,18 @@ SceneEventResult SceneEventSystem::Update(
 						}
 					);
 				shouldFire = condition;
+			} else if (binding.triggerType == "OnPresentationClipCompleted") {
+				const SceneEntity* presentationOwner = ResolvePresentationOwner(document,
+					binding.targetEntityId, binding.targetEntityName);
+				condition = presentationOwner && !binding.presentationClipName.empty() &&
+					SceneEntityQuery::FindEnabledComponent(*presentationOwner, "PrefabAnimator") &&
+					std::any_of(signals.presentationCompletions.begin(), signals.presentationCompletions.end(),
+						[&](const ScenePresentationCompletion& completion) {
+							return completion.entityId == presentationOwner->id &&
+								completion.clipName == binding.presentationClipName;
+						});
+				// 自然終了pulseは連続Frameでもgenerationごとに評価する。
+				shouldFire = condition;
 			}
 
 			if (
@@ -405,6 +430,18 @@ SceneEventResult SceneEventSystem::Update(
 				action.textMotionClipId
 			});
 		} else if (
+			action.type == "PlayPresentationClip" || action.type == "StopPresentationClip" ||
+				action.type == "ResetPresentationClip"
+		) {
+			const SceneEntity* presentationOwner = ResolvePresentationOwner(document,
+				action.targetEntityId, action.targetEntityName);
+			if (!presentationOwner) continue;
+			ScenePresentationRequestType type = ScenePresentationRequestType::Play;
+			if (action.type == "StopPresentationClip") type = ScenePresentationRequestType::Stop;
+			else if (action.type == "ResetPresentationClip") type = ScenePresentationRequestType::Reset;
+			// 非Active ownerも要求を受ける。Clipと親/所有競合は同期前に再検証する。
+			result.presentationRequests.push_back({ type, presentationOwner->id, action.presentationClipName });
+		} else if (
 			action.type == "PlayCameraPath" &&
 			IsValidCameraAction(document, action, "CameraPath")
 		) {
@@ -438,6 +475,7 @@ SceneEventResult SceneEventSystem::Update(
 		result.cameraRequests.clear();
 		result.audioRequests.clear();
 		result.textMotionRequests.clear();
+		result.presentationRequests.clear();
 	}
 	return result;
 }

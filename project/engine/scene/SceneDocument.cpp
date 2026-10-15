@@ -10,6 +10,7 @@
 #include "../utility/StringUtility.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +28,17 @@
 #include "../../externals/nlohmann/json.hpp"
 
 namespace {
+	uint64_t AllocateContentGeneration() {
+		static std::atomic<uint64_t> next{ 1 };
+		uint64_t candidate = next.load(std::memory_order_relaxed);
+		// 枯渇時は0で識別を拒否する。wrapによる旧世代の再利用を避ける。
+		while (candidate != (std::numeric_limits<uint64_t>::max)()) {
+			if (next.compare_exchange_weak(candidate, candidate + 1, std::memory_order_relaxed)) {
+				return candidate;
+			}
+		}
+		return 0;
+	}
 	using json = nlohmann::json;
 	using SceneEntityQuery::FindComponent;
 	using SceneTransformResolver::ResolveSceneWorldMatrix;
@@ -1113,7 +1126,8 @@ namespace {
 				{ "postProcessManagerEntityId", action.postProcessManagerEntityId },
 				{ "postProcessManagerEntityName", action.postProcessManagerEntityName },
 				{ "postProcessProfileId", action.postProcessProfileId },
-				{ "textMotionClipId", action.textMotionClipId }
+				{ "textMotionClipId", action.textMotionClipId },
+				{ "presentationClipName", action.presentationClipName }
 			});
 		}
 		return result;
@@ -1135,6 +1149,7 @@ namespace {
 				{ "triggerOnce", binding.triggerOnce },
 				{ "cooldown", binding.cooldown },
 				{ "textMotionClipId", binding.textMotionClipId },
+				{ "presentationClipName", binding.presentationClipName },
 				{ "actions", EventActionsToJson(binding.actions) }
 			});
 		}
@@ -1168,13 +1183,18 @@ namespace {
 					}
 					keyframes.push_back(std::move(keyframeValue));
 				}
-				tracks.push_back({
+				json trackValue = {
 					{ "targetEntityId", track.targetEntityId },
 					{ "targetEntityName", track.targetEntityName },
 					{ "property", track.property },
 					{ "easing", track.easing },
 					{ "keyframes", std::move(keyframes) }
-				});
+				};
+				// 既定方式を省き、旧Clipの再保存で無関係なfieldを増やさない。
+				if (track.rotationInterpolation != "QuaternionSlerp") {
+					trackValue["rotationInterpolation"] = track.rotationInterpolation;
+				}
+				tracks.push_back(std::move(trackValue));
 			}
 			result.push_back({
 				{ "name", clip.name },
@@ -1957,6 +1977,9 @@ namespace {
 		action.textMotionClipId = value.value(
 			"textMotionClipId", action.textMotionClipId
 		);
+		action.presentationClipName = value.value(
+			"presentationClipName", action.presentationClipName
+		);
 		return action;
 	}
 
@@ -2003,6 +2026,9 @@ namespace {
 			);
 			binding.textMotionClipId = value.value(
 				"textMotionClipId", binding.textMotionClipId
+			);
+			binding.presentationClipName = value.value(
+				"presentationClipName", binding.presentationClipName
 			);
 			if (const auto actions = value.find("actions");
 				actions != value.end() && actions->is_array()) {
@@ -2096,6 +2122,9 @@ namespace {
 					);
 					track.property = trackValue.value("property", track.property);
 					track.easing = trackValue.value("easing", track.easing);
+					track.rotationInterpolation = trackValue.value(
+						"rotationInterpolation", track.rotationInterpolation
+					);
 					if (const auto keyframes = trackValue.find("keyframes");
 						keyframes != trackValue.end() && keyframes->is_array()) {
 						for (const json& keyframeValue : *keyframes) {
@@ -4886,7 +4915,31 @@ namespace {
 
 }
 
+SceneDocument::ContentGeneration::ContentGeneration() { Renew(); }
+SceneDocument::ContentGeneration::ContentGeneration(const ContentGeneration&) { Renew(); }
+SceneDocument::ContentGeneration::ContentGeneration(ContentGeneration&& source) noexcept {
+	Renew();
+	source.Renew();
+}
+SceneDocument::ContentGeneration& SceneDocument::ContentGeneration::operator=(const ContentGeneration& source) {
+	if (this != &source) Renew();
+	return *this;
+}
+SceneDocument::ContentGeneration& SceneDocument::ContentGeneration::operator=(ContentGeneration&& source) noexcept {
+	Renew();
+	if (this != &source) source.Renew();
+	return *this;
+}
+void SceneDocument::ContentGeneration::Renew() { value = AllocateContentGeneration(); }
+
+std::unique_ptr<SceneDocument> SceneDocument::CloneForRuntimeDetach() const {
+	auto clone = std::make_unique<SceneDocument>(*this);
+	clone->contentGeneration_.value = contentGeneration_.value;
+	return clone;
+}
+
 void SceneDocument::Clear(const std::string& sceneName) {
+	contentGeneration_.Renew();
 	sceneName_ = sceneName;
 	assetId_.clear();
 	variantBaseAssetId_.clear();
@@ -8682,6 +8735,8 @@ const SceneEntity* SceneDocument::FindEntityByName(const std::string& name) cons
 }
 
 bool SceneDocument::LoadInternal(const std::string& filePath) {
+	// 失敗/部分読込でも旧Runtimeの退避値をこの内容へ復元させない。
+	contentGeneration_.Renew();
 	std::ifstream input(StringUtility::ToPath(filePath), std::ios::binary);
 	if (!input.is_open()) {
 		lastLoadError_ = "Scene file could not be opened: " + filePath;

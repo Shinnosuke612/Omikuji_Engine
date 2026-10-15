@@ -63,5 +63,6 @@ void SceneInstance::DetachDocument() {
 	if (!document_ || document_ == ownedDocument_.get()) {
 		return;
 	}
-	OwnDocument(std::make_unique<SceneDocument>(*document_));
+	// 内容差替えではなく同じRuntimeの所有移管なので、演出の内容世代を保つ。
+	OwnDocument(document_->CloneForRuntimeDetach());
 }

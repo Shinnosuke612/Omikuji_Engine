@@ -77,6 +77,8 @@ public: //公開メンバ関数
 	void UpdateForCamera(Camera* camera);
 	//描画
 	void Draw();
+	// Editorのstatic mesh虚像専用。通常alpha/Depth test、Depthへの書込みなし。
+	void DrawEditorGhost();
 	void DrawShadow(const Matrix4x4& lightViewProjection);
 	void DrawSkeletonDebug(
 		bool drawJointNames = false,
@@ -187,6 +189,7 @@ public: //公開メンバ関数
 		Matrix4x4& worldMatrix
 	) const;
 private: //非公開メンバ関数
+	void DrawInternal(bool editorGhost);
 
 	//座標変換行列用リソース作成関数
 	void CreateTransformationMatrixResource();

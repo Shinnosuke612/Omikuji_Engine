@@ -116,6 +116,10 @@ private:
 	ScenePostProcessProfileSystem postProcessProfileSystem_;
 	ScenePhysicsSystem physicsSystem_;
 	ScenePrefabAnimationSystem prefabAnimationSystem_;
+	// Eventの開始/停止/Resetは次Frameで適用し、同期後のbase Pose表示を避ける。
+	std::vector<ScenePresentationRequest> pendingPresentationRequests_;
+	// Event要求は発行時のDocument内容だけへ適用する（0は未束縛）。
+	uint64_t pendingPresentationDocumentGeneration_ = 0;
 	SceneProjectileSystem projectileSystem_;
 	SceneRuntimeEffectSystem runtimeEffectSystem_;
 	SceneStatSystem statSystem_;

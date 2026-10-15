@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../text/SceneTextMotionSystem.h"
+#include "../animation/ScenePrefabAnimationSystem.h"
 
 class SceneDocument;
 class SceneStatSystem;
@@ -62,10 +63,20 @@ struct SceneTextMotionRequest {
 	std::string clipId;
 };
 
+enum class ScenePresentationRequestType { Play, Stop, Reset };
+
+// Event順を保持し、RuntimeSceneが次FrameのObject同期前に再解決して適用する。
+struct ScenePresentationRequest {
+	ScenePresentationRequestType type = ScenePresentationRequestType::Play;
+	uint64_t entityId = 0;
+	std::string clipName;
+};
+
 struct SceneEventRuntimeSignals {
 	uint64_t completedCameraPathEntityId = 0;
 	std::vector<uint64_t> finishedAudioEntityIds;
 	std::vector<SceneTextMotionCompletion> textMotionCompletions;
+	std::vector<ScenePresentationCompletion> presentationCompletions;
 };
 
 struct SceneEventResult {
@@ -75,6 +86,7 @@ struct SceneEventResult {
 	std::vector<SceneCameraRequest> cameraRequests;
 	std::vector<SceneAudioRequest> audioRequests;
 	std::vector<SceneTextMotionRequest> textMotionRequests;
+	std::vector<ScenePresentationRequest> presentationRequests;
 };
 
 class SceneEventSystem {

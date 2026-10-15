@@ -4,11 +4,15 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <utility>
 #include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
 #include "../Audio/Audio.h"
 #include "../math/Quaternion.h"
+#include "../math/Matrix4x4.h"
+#include "../math/Transform.h"
+#include "../math/Vector4.h"
 #include "../scene/PrefabAssetRegistry.h"
 #include "EditorLocalization.h"
 
@@ -25,6 +29,42 @@ class SceneDocument;
 class SceneManager;
 class SceneTemplateRegistry;
 struct SceneEntity;
+struct SceneComponent;
+struct SceneAnimationTrack;
+struct ScenePrefabAnimationClip;
+
+// Scene View専用の値型packet。Document/GPU pointerを描画側へ渡さない。
+struct SceneSpatialPreviewFrame {
+	struct Mesh {
+		uint32_t poseId = 0;
+		bool moving = false;
+		uint64_t entityId = 0;
+		std::string modelPath;
+		std::string meshCullMode;
+		Matrix4x4 world{};
+		Vector4 tint{};
+	};
+	struct Line { Vector3 start{}, end{}; Vector4 color{}; };
+	struct KeyPoint {
+		size_t trackIndex = 0, keyIndex = 0;
+		float keyTime = 0.0f;
+		uint64_t targetId = 0;
+		Vector3 worldPosition{};
+		Matrix4x4 world{};
+		float sourceTime = 0.0f;
+		unsigned trsMask = 0;
+		bool active = true;
+	};
+	uint64_t sourceGeneration = 0, sourceRevision = 0, ownerId = 0;
+	uint64_t serial = 0;
+	size_t staticPoseCount = 0;
+	std::string issue;
+	int clipIndex = -1;
+	std::string clipName;
+	std::vector<Mesh> meshes;
+	std::vector<Line> lines;
+	std::vector<KeyPoint> keyPoints;
+};
 enum class SceneBuildConfiguration : uint8_t;
 enum class SceneStartupMode : uint8_t;
 
@@ -224,6 +264,18 @@ public:
 
 	// 終了処理
 	void Finalize();
+	// GameのUpdateから一回、秒単位。Preview評価だけではAuthoring値を変更しない。
+	void UpdateSceneSpatialPreview(float deltaTime);
+	// 次Updateまでの借用参照。callerはFrame越しに保持しない。
+	const SceneSpatialPreviewFrame& GetSceneSpatialPreviewFrame() const { return spatialFrame_; }
+	// 次Inspector用の一時診断。Scene保存やUndoには含めない。
+	// CPU再評価/対象変更後の古い描画結果を新しいpacketへ混ぜない。
+	void SetSceneSpatialPreviewRenderIssue(const std::string& message, uint64_t serial = 0,
+		size_t prepared = 0, size_t submitted = 0) {
+		if (serial != 0 && serial != spatialFrame_.serial) return;
+		spatialRenderIssue_ = message; spatialRenderSerial_ = serial;
+		spatialPreparedCount_ = prepared; spatialSubmittedCount_ = submitted;
+	}
 
 	uint32_t GetSceneViewWidth() const { return sceneViewWidth_; }
 	uint32_t GetSceneViewHeight() const { return sceneViewHeight_; }
@@ -314,6 +366,117 @@ private:
 	bool deferredPlatformWindows_ = false, sceneViewRenderable_ = false;
 	bool presentedTransitionActive_ = false, presentedTransitionStopRequested_ = false;
 	std::string presentedTransitionStatus_;
+	struct SpatialPreviewValidation {
+		bool hasTransformKeys = false;
+		std::vector<uint64_t> targetIds, meshIds;
+		std::string structure;
+	};
+	// 候補の自動選択とcopy評価で同じ安全検証を使い、Runtimeの起動/制御権は判定しない。
+	bool ValidateSceneSpatialPreviewClip(uint64_t ownerId, int clipIndex,
+		SpatialPreviewValidation& result, std::string& issue) const;
+	// 無効Clipも列挙し、選択後の検証/描画診断へ導く。
+	std::vector<std::pair<uint64_t, int>> GetSceneSpatialPreviewCandidates() const;
+	// Editorの対象と時計を置換し、保存Documentと全体表示設定は変更しない。
+	void BindSceneSpatialPreview(uint64_t ownerId, int clipIndex);
+	void DrawSceneSpatialPreviewControls();
+	void DrawSceneSpatialPreviewPlayback(const SceneComponent& animator);
+	bool RebuildSceneSpatialPreview();
+	void RefreshSceneSpatialPreviewAfterEdit();
+	void SampleSceneSpatialPreview(float time);
+	void AppendSceneSpatialPreviewPose(SceneSpatialPreviewFrame& frame, float time,
+		uint32_t poseId, const Vector4& tint, bool moving = false, bool alreadySampled = false);
+	void DrawSceneSpatialPreviewInspector(SceneEntity& entity, SceneComponent& animator);
+	void DrawSceneSpatialPreviewOperations(bool shortcuts);
+	void DrawSceneSpatialPreviewKeyEditor(SceneEntity& entity, SceneComponent& animator);
+	bool DrawSceneSpatialPreviewOverlay(float x, float y, float width, float height);
+	void DrawSceneSpatialPreviewGizmo(float x, float y, float width, float height);
+	bool IsSceneSpatialPreviewCurrent() const;
+	bool HasSceneSpatialPreviewPointSelection() const;
+	void ResetSceneSpatialPreview();
+	// 配列番号は描画Frameの解決結果だけ。時刻変更中も正本の元キーを追跡する。
+	struct SpatialPointAddress {
+		uint64_t generation = 0, ownerId = 0, targetId = 0;
+		std::string clipName;
+		float time = 0.0f;
+	};
+	enum class SpatialDraftKind { None, Time, Value, Gizmo };
+	struct SpatialDraftKey {
+		std::string property;
+		Vector3 original{}, value{};
+	};
+	// 候補はEditor copyにだけ適用し、正本とSession Undoへ渡すのは確定時の一回。
+	struct SpatialEditDraft {
+		SpatialDraftKind kind = SpatialDraftKind::None;
+		SpatialPointAddress point;
+		uint64_t sourceRevision = 0;
+		int operation = 0;
+		float time = 0.0f, validTime = 0.0f;
+		bool valid = true, commitRequested = false;
+		std::vector<SpatialDraftKey> keys, validKeys;
+	};
+	bool ResolveSceneSpatialPoint(const SpatialPointAddress& point,
+		int& clipIndex, int& trackIndex, int& keyIndex) const;
+	void SelectSceneSpatialPoint(int trackIndex, int keyIndex);
+	void CancelSceneSpatialDraft(bool clearSelection = false);
+	bool BeginSceneSpatialDraft(SpatialDraftKind kind, int operation);
+	bool ValidateSceneSpatialDraft(std::string& issue) const;
+	// 正本へ書く前に、copy上で不足TRSキーの補完を含む確定形を作る。
+	bool ApplySceneSpatialDraft(SceneDocument& document, int clipIndex, bool lastValid) const;
+	void UpdateSceneSpatialDraftPreview();
+	void CommitSceneSpatialDraft();
+	bool CanSaveSceneSpatialDraft();
+	// 方式変更も正本へ確定するまでcopyだけに適用する。Scene/Prefab共通の候補所有。
+	struct AnimationRotationModeDraft {
+		bool active = false, prefab = false;
+		uint64_t generation = 0, revision = 0, ownerId = 0;
+		size_t trackIndex = 0;
+		std::string clipName, original, candidate;
+	};
+	AnimationRotationModeDraft rotationModeDraft_;
+	const SceneAnimationTrack* ResolveAnimationRotationModeDraft(const SceneDocument& document) const;
+	bool ApplyAnimationRotationModeDraft(SceneDocument& document, bool prefab) const;
+	void CancelAnimationRotationModeDraft();
+	void UpdateAnimationRotationModeDraft();
+	bool CanSaveAnimationRotationMode(bool prefab);
+	bool DrawAnimationRotationMode(SceneDocument& document, uint64_t ownerId,
+		ScenePrefabAnimationClip& clip, size_t trackIndex, bool prefab);
+	float SceneSpatialPreviewKeyTime(uint64_t targetId, float time) const;
+	SpatialPointAddress spatialPoint_;
+	SpatialEditDraft spatialDraft_;
+	// 正本Revisionを進めず候補のcacheだけ更新する。公開packetには渡さない。
+	uint64_t spatialDraftRevision_ = 0, spatialSampledDraftRevision_ = 0;
+	// Escape後、同じImGuizmo dragの残りを新しい編集として取り込まない。
+	bool spatialCancelledGesture_ = false;
+	// CPU copyはFinalizeで解放。各sample前にTrack対象のTransform/Activeを基準へ戻す。
+	SceneDocument* spatialBaseDocument_ = nullptr;
+	SceneDocument* spatialSampleDocument_ = nullptr;
+	std::vector<std::pair<uint64_t, QuaternionTransform>> spatialBasePoses_;
+	std::vector<std::pair<uint64_t, bool>> spatialBaseActive_;
+	std::vector<uint64_t> spatialMeshIds_;
+	SceneSpatialPreviewFrame spatialStaticFrame_, spatialFrame_;
+	uint64_t spatialFrameSerial_ = 0, spatialRenderSerial_ = 0;
+	size_t spatialPreparedCount_ = 0, spatialSubmittedCount_ = 0;
+	uint64_t spatialOwnerId_ = 0, spatialGeneration_ = 0, spatialRevision_ = 0;
+	// 未Bindingの候補再判定は内容Revisionごと。表示OFFや明示Bindingを上書きしない。
+	uint64_t spatialCandidateRevision_ = 0;
+	bool spatialCandidatesChecked_ = false;
+	int spatialClipIndex_ = -1, spatialTrackIndex_ = -1, spatialKeyIndex_ = -1;
+	std::string spatialClipName_, spatialIssue_, spatialRenderIssue_, spatialStructure_;
+	float spatialTime_ = 0.0f;
+	// 表示設定はEditor内で保持し、Documentの世代や選択のリセットとは分離する。
+	bool spatialEnabled_ = true, spatialGhosts_ = true, spatialPath_ = true;
+	bool spatialPlaying_ = false, spatialCacheDirty_ = true;
+	bool spatialOwnEdit_ = false, spatialDragging_ = false;
+	Matrix4x4 spatialDragParent_ = MakeIdentity4x4();
+	uint64_t spatialDragRevision_ = 0;
+	float spatialDragKeyTime_ = 0.0f;
+	// Entity用operationとは分離。drag中は解決したkeyの識別を固定する。
+	int spatialOperation_ = 0, spatialDragOperation_ = 0;
+	int spatialDragPositionTrack_ = -1, spatialDragPositionKey_ = -1;
+	int spatialDragTrack_ = -1, spatialDragKey_ = -1;
+	uint64_t spatialDragTarget_ = 0;
+	std::string spatialEditIssue_;
+	bool spatialToolbarHovered_ = false;
 	struct PrefabAssetValidationResult {
 		std::string filePath;
 		std::string message;

@@ -10,7 +10,9 @@
 #include <filesystem>
 #include <string>
 #include <memory>
+#include <vector>
 #include <d3d12.h>
+#include <wrl.h>
 
 class SceneRenderTarget;
 class FullscreenCopy;
@@ -25,6 +27,7 @@ class SceneTemplateRegistry;
 class PrefabPreviewRenderer;
 class Camera;
 class Object3d;
+class Model;
 class ProjectRegistry;
 class ProjectCreationService;
 class ProjectSolutionGenerationService;
@@ -93,6 +96,38 @@ private:
 	WaterPostEffectState ResolveWaterPostEffectState(const Camera* camera) const;
 	void DrawModelPreview();
 	void DrawPrefabPreview();
+	// Ghost GPU資源は前Frame Fence完了後のUpdateとFinalizeだけで作成/破棄する。
+	void PrepareSceneSpatialPreview();
+	void DrawSceneSpatialPreview();
+	void ClearSceneSpatialPreview();
+	struct SpatialPreviewModel {
+		Model* model = nullptr; // ModelManager所有。GPU geometryを姿勢ごとに複製しない。
+		D3D12_GPU_VIRTUAL_ADDRESS matrixAddress = 0;
+		size_t materialGroup = 0;
+		uint32_t poseId = 0;
+		bool moving = false;
+		uint64_t entityId = 0;
+		std::string cullMode;
+		Vector3 worldPosition{};
+	};
+	struct SpatialPreviewMaterials {
+		Model* model = nullptr;
+		Vector4 tint{};
+		bool used = false, valid = false;
+		std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> owned;
+		std::vector<ID3D12Resource*> resources;
+	};
+	// 前FrameのFence完了後だけ更新/破棄する。cameraと各poseのCB領域は256-byte境界。
+	Microsoft::WRL::ComPtr<ID3D12Resource> spatialPreviewBuffer_;
+	unsigned char* spatialPreviewMapped_ = nullptr;
+	size_t spatialPreviewCapacity_ = 0;
+	std::vector<SpatialPreviewMaterials> spatialPreviewMaterials_;
+	std::vector<SpatialPreviewModel> spatialPreviewModels_;
+	struct SpatialPreviewLine { Vector3 start{}, end{}; Vector4 color{}; };
+	std::vector<SpatialPreviewLine> spatialPreviewLines_;
+	uint64_t spatialPreviewGeneration_ = 0, spatialPreviewRevision_ = 0;
+	uint64_t spatialPreviewSerial_ = 0;
+	std::string spatialPreviewIssue_;
 	CameraSnapshot CaptureCameraSnapshot() const;
 	void RestoreCameraSnapshot(const CameraSnapshot& snapshot) const;
 	void BeginPauseDebugCamera();

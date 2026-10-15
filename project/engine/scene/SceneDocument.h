@@ -108,6 +108,8 @@ struct SceneEventAction {
 	std::string postProcessManagerEntityName;
 	std::string postProcessProfileId;
 	std::string textMotionClipId;
+	// 演出ActionはClip名を明示する。旧JSONの欠落値は空のまま扱う。
+	std::string presentationClipName;
 };
 
 struct SceneEventBinding {
@@ -123,6 +125,7 @@ struct SceneEventBinding {
 	bool triggerOnce = true;
 	float cooldown = 0.0f;
 	std::string textMotionClipId;
+	std::string presentationClipName;
 	std::vector<SceneEventAction> actions;
 };
 
@@ -246,6 +249,9 @@ struct SceneAnimationTrack {
 	std::string property = "LocalPosition";
 	std::string easing = "SmoothStep";
 	std::vector<SceneAnimationKeyframe> keyframes;
+	// LocalRotationの補間方式。valueは周回を含むEuler radianのまま保存する。
+	// 旧JSON/新Trackは従来Slerp。未知値も保存し、Validatorで通知する。
+	std::string rotationInterpolation = "QuaternionSlerp";
 };
 
 struct ScenePrefabAnimationClip {
@@ -864,6 +870,10 @@ public:
 	const std::string& GetLastLoadError() const { return lastLoadError_; }
 	const std::string& GetLastSaveError() const { return lastSaveError_; }
 	uint64_t GetRevision() const { return revision_; }
+	// 内容差替えの識別子。通常編集では維持し、0は識別不能。JSONへ保存しない。
+	uint64_t GetContentGeneration() const { return contentGeneration_.value; }
+	// 同じRuntimeのPersistent detach専用。通常コピーと異なり内容世代を引き継ぐ。
+	std::unique_ptr<SceneDocument> CloneForRuntimeDetach() const;
 	void MarkDirty() {
 		dirty_ = true;
 		++revision_;
@@ -871,10 +881,21 @@ public:
 	void MarkClean() { dirty_ = false; }
 
 private:
+	// 暗黙のDocument copy/moveでも、他のfieldより先に内容世代を更新する。
+	struct ContentGeneration {
+		ContentGeneration();
+		ContentGeneration(const ContentGeneration&);
+		ContentGeneration(ContentGeneration&& source) noexcept;
+		ContentGeneration& operator=(const ContentGeneration& source);
+		ContentGeneration& operator=(ContentGeneration&& source) noexcept;
+		void Renew();
+		uint64_t value = 0;
+	};
 	bool LoadInternal(const std::string& filePath);
 	void RebuildNextId();
 	void ValidateHierarchy();
 
+	ContentGeneration contentGeneration_;
 	std::string sceneName_;
 	std::string assetId_;
 	std::string variantBaseAssetId_;
