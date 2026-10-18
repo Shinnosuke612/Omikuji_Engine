@@ -126,6 +126,8 @@
     <ClCompile Include="$(CGProjectSourceRoot)engine\particle\ParticleManager.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\particle\ParticleManager.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\physics\PhysicsBody.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\pch\JsonPch.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\pch\JsonPch.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\physics\PhysicsWorld.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\physics\PhysicsWorld.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\project\ProjectBuildSpecification.cpp"><Filter>Engine</Filter></ClCompile>

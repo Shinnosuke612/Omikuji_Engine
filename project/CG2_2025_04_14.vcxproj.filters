@@ -659,4 +659,8 @@
 	  <UniqueIdentifier>{6C8F294D-80FD-41E7-B09E-1BC40A5076D5}</UniqueIdentifier>
 	</Filter>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="engine\pch\JsonPch.cpp" />
+    <ClInclude Include="engine\pch\JsonPch.h" />
+  </ItemGroup>
 </Project>

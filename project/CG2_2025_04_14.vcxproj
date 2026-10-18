@@ -72,6 +72,11 @@
     <IntDir>$(SolutionDir)..\generated\obj\$(ProjectName)\$(Configuration)\</IntDir>
     <IncludePath>$(SolutionDir)imgui;$(IncludePath)</IncludePath>
   </PropertyGroup>
+  <PropertyGroup>
+    <CGJsonPchEnabled Condition="'$(CGJsonPchEnabled)'==''">true</CGJsonPchEnabled>
+    <_CGJsonPchActive>false</_CGJsonPchActive>
+    <_CGJsonPchActive Condition="'$(CGJsonPchEnabled)'=='true' And '$(Platform)'=='x64' And ('$(Configuration)'=='Debug' Or '$(Configuration)'=='Development' Or '$(Configuration)'=='Release')">true</_CGJsonPchActive>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -159,7 +164,13 @@
     <ClCompile Include="application\player\Player.cpp" />
     <ClCompile Include="engine\particle\ParticleEffectEditor.cpp" />
     <ClCompile Include="engine\scene\BaseScene.cpp" />
-    <ClCompile Include="engine\transition\SceneTransitionAsset.cpp" />
+    <ClCompile Include="engine\transition\SceneTransitionAsset.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="engine\transition\SwordShatterRenderer.cpp" />
     <ClCompile Include="application\transition\SceneTransitionController.cpp" />
     <ClCompile Include="application\scene\SceneFactory.cpp" />
@@ -185,18 +196,66 @@
     <ClCompile Include="engine\utility\SystemPerformanceMonitor.cpp" />
     <ClCompile Include="engine\base\EditorLocalization.cpp" />
     <ClCompile Include="engine\base\EditorComponentCatalog.cpp" />
-	<ClCompile Include="engine\project\ProjectDescriptor.cpp" />
-	<ClCompile Include="engine\project\ProjectRegistry.cpp" />
+	<ClCompile Include="engine\project\ProjectDescriptor.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+	<ClCompile Include="engine\project\ProjectRegistry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
 	<ClCompile Include="engine\project\ProjectCompatibilityProbe.cpp" />
-	<ClCompile Include="engine\project\ProjectBuildSpecification.cpp" />
+	<ClCompile Include="engine\project\ProjectBuildSpecification.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
 	<ClCompile Include="engine\project\SolutionGenerationModel.cpp" />
-	<ClCompile Include="engine\project\SolutionGenerationEmitter.cpp" />
-	<ClCompile Include="engine\project\SolutionGenerationTransaction.cpp" />
-	<ClCompile Include="engine\project\ProjectSolutionGenerationService.cpp" />
+	<ClCompile Include="engine\project\SolutionGenerationEmitter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+	<ClCompile Include="engine\project\SolutionGenerationTransaction.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+	<ClCompile Include="engine\project\ProjectSolutionGenerationService.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
 	<ClCompile Include="engine\project\WindowsProcess.cpp" />
-	<ClCompile Include="engine\project\VisualStudioLocator.cpp" />
+	<ClCompile Include="engine\project\VisualStudioLocator.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
 	<ClCompile Include="engine\project\ProjectCreationService.cpp" />
-    <ClCompile Include="engine\base\ImGuiManager.cpp" />
+    <ClCompile Include="engine\base\ImGuiManager.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="engine\base\PostProcessSettingsEditor.cpp" />
     <ClCompile Include="engine\base\Framework.cpp" />
     <ClCompile Include="application\Game.cpp" />
@@ -231,7 +290,13 @@
     <ClCompile Include="application\scene\systems\gameplay\combat\SceneProjectileSystem.cpp" />
     <ClCompile Include="application\scene\systems\gameplay\combat\SceneStatSystem.cpp" />
     <ClCompile Include="application\scene\systems\events\SceneTransitionSystem.cpp" />
-    <ClCompile Include="engine\3d\LightManager.cpp" />
+    <ClCompile Include="engine\3d\LightManager.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="engine\3d\ShadowManager.cpp" />
     <ClCompile Include="main.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Development|x64'">MaxSpeed</Optimization>
@@ -255,9 +320,21 @@
     <ClCompile Include="engine\utility\StringUtility.cpp" />
     <ClCompile Include="engine\2d\TextureManager.cpp" />
     <ClCompile Include="engine\base\WinApp.cpp" />
-    <ClCompile Include="engine\particle\GpuParticle.cpp" />
+    <ClCompile Include="engine\particle\GpuParticle.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="engine\particle\ParticleCommon.cpp" />
-    <ClCompile Include="engine\particle\ParticleManager.cpp" />
+    <ClCompile Include="engine\particle\ParticleManager.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="engine\particle\ParticleEmitter.cpp" />
     <ClCompile Include="engine\agent\AgentSettingsResolver.cpp" />
     <ClCompile Include="engine\agent\AgentSteering.cpp" />
@@ -267,16 +344,40 @@
     <ClCompile Include="engine\scene\SceneDocumentMigrator.cpp" />
     <ClCompile Include="engine\scene\SceneValidator.cpp" />
     <ClCompile Include="engine\scene\SceneAssetService.cpp" />
-    <ClCompile Include="engine\scene\SceneCatalog.cpp" />
-    <ClCompile Include="engine\scene\PrefabAssetRegistry.cpp" />
-    <ClCompile Include="engine\scene\SceneDocument.cpp" />
+    <ClCompile Include="engine\scene\SceneCatalog.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="engine\scene\PrefabAssetRegistry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="engine\scene\SceneDocument.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="engine\scene\SceneEntityQuery.cpp" />
 	<ClCompile Include="engine\scene\ScenePrefabAnimationEvaluator.cpp" />
     <ClCompile Include="engine\scene\SceneTransformResolver.cpp" />
     <ClCompile Include="engine\scene\SceneTemplateRegistry.cpp" />
     <ClCompile Include="engine\scene\EditorSession.cpp" />
     <ClCompile Include="engine\scene\PrefabEditorSession.cpp" />
-    <ClCompile Include="engine\particle\ParticleEffectResource.cpp" />
+    <ClCompile Include="engine\particle\ParticleEffectResource.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
 	<ClCompile Include="engine\3d\Skybox.cpp" />
 	<ClCompile Include="engine\3d\StarFieldGenerator.cpp" />
   </ItemGroup>
@@ -566,6 +667,19 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </None>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="engine\pch\JsonPch.cpp">
+      <ObjectFileName>$(IntDir)cg_json_pch.obj</ObjectFileName>
+      <ExcludedFromBuild>false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(_CGJsonPchActive)'!='true'">true</ExcludedFromBuild>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Create</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(ProjectDir)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <ClInclude Include="engine\pch\JsonPch.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyRuntimeDlls" AfterTargets="Build">
     <ItemGroup>
@@ -581,7 +695,8 @@
   </Target>
   <Target Name="CopyRuntimeAssets" AfterTargets="Build">
     <ItemGroup>
-      <RuntimeResource Include="$(ProjectDir)resources\**\*" />
+      <!-- 制作用データと確認済みの不要バックアップだけを除外し、JSONの復旧用バックアップは保持する。 -->
+      <RuntimeResource Include="$(ProjectDir)resources\**\*" Exclude="$(ProjectDir)resources\**\*.blend;$(ProjectDir)resources\skyboxes\generated_space.dds.bak;$(ProjectDir)resources\scenes\title_presentation_verify.scene.json.bak" />
     </ItemGroup>
     <Copy SourceFiles="@(RuntimeResource)" DestinationFiles="@(RuntimeResource->'$(TargetDir)resources\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>

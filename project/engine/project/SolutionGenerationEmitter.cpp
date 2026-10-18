@@ -85,6 +85,66 @@ namespace {
 		return stream.str();
 	}
 
+	bool IsJsonPchPath(const std::filesystem::path& path, const wchar_t* expected) {
+		const std::wstring normalized = path.lexically_normal().generic_wstring();
+		return CompareStringOrdinal(normalized.c_str(), -1, expected, -1, TRUE) == CSTR_EQUAL;
+	}
+
+	bool HasJsonPchSources(const SolutionGenerationTarget& target) {
+		// PCH用ソースを持たない既存Engineモデルへ設定を持ち込まない。
+		if (target.kind != SolutionGenerationTargetKind::Engine) return false;
+		const bool hasCreator = std::any_of(target.sourceFiles.begin(), target.sourceFiles.end(), [](const SolutionGenerationSourceFile& file) {
+			return file.kind == SolutionGenerationFileKind::Compile && IsJsonPchPath(file.projectRelativePath, L"engine/pch/JsonPch.cpp");
+		});
+		const bool hasHeader = std::any_of(target.sourceFiles.begin(), target.sourceFiles.end(), [](const SolutionGenerationSourceFile& file) {
+			return file.kind == SolutionGenerationFileKind::Include && IsJsonPchPath(file.projectRelativePath, L"engine/pch/JsonPch.h");
+		});
+		return hasCreator && hasHeader;
+	}
+
+	bool IsJsonPchConsumer(const std::filesystem::path& path) {
+		// ソース本文から自動拡張せず、承認されたJSON利用CPPだけへ適用する。
+		for (const wchar_t* consumer : {
+			L"engine/3d/LightManager.cpp",
+			L"engine/base/ImGuiManager.cpp",
+			L"engine/particle/GpuParticle.cpp",
+			L"engine/particle/ParticleEffectResource.cpp",
+			L"engine/particle/ParticleManager.cpp",
+			L"engine/project/ProjectBuildSpecification.cpp",
+			L"engine/project/ProjectDescriptor.cpp",
+			L"engine/project/ProjectRegistry.cpp",
+			L"engine/project/ProjectSolutionGenerationService.cpp",
+			L"engine/project/SolutionGenerationEmitter.cpp",
+			L"engine/project/SolutionGenerationTransaction.cpp",
+			L"engine/project/VisualStudioLocator.cpp",
+			L"engine/scene/PrefabAssetRegistry.cpp",
+			L"engine/scene/SceneCatalog.cpp",
+			L"engine/scene/SceneDocument.cpp",
+			L"engine/transition/SceneTransitionAsset.cpp"
+		}) {
+			if (IsJsonPchPath(path, consumer)) return true;
+		}
+		return false;
+	}
+
+	void WriteJsonPchProperties(std::ostringstream& output) {
+		// 比較用スイッチはPCHだけを切り替え、最適化やJSON設定を変更しない。
+		output << "  <PropertyGroup>\r\n"
+			<< "    <CGJsonPchEnabled Condition=\"'$(CGJsonPchEnabled)'==''\">true</CGJsonPchEnabled>\r\n"
+			<< "    <_CGJsonPchActive>false</_CGJsonPchActive>\r\n"
+			<< "    <_CGJsonPchActive Condition=\"'$(CGJsonPchEnabled)'=='true' And '$(Platform)'=='x64' And ('$(Configuration)'=='Debug' Or '$(Configuration)'=='Development' Or '$(Configuration)'=='Release')\">true</_CGJsonPchActive>\r\n"
+			<< "  </PropertyGroup>\r\n";
+	}
+
+	void WriteJsonPchMetadata(std::ostringstream& output, const char* mode) {
+		// FIとYc/Yuの境界を同一にし、各CPPの既存includeが読み飛ばされることを防ぐ。
+		output << "<PrecompiledHeader>NotUsing</PrecompiledHeader>"
+			<< "<PrecompiledHeader Condition=\"'$(_CGJsonPchActive)'=='true'\">" << mode << "</PrecompiledHeader>"
+			<< "<PrecompiledHeaderFile Condition=\"'$(_CGJsonPchActive)'=='true'\">$(CGProjectSourceRoot)engine\\pch\\JsonPch.h</PrecompiledHeaderFile>"
+			<< "<PrecompiledHeaderOutputFile Condition=\"'$(_CGJsonPchActive)'=='true'\">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile>"
+			<< "<ForcedIncludeFiles Condition=\"'$(_CGJsonPchActive)'=='true'\">$(CGProjectSourceRoot)engine\\pch\\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>";
+	}
+
 	bool WriteUtf8File(const std::filesystem::path& path, const std::string& content, std::string& errorMessage) {
 		std::ofstream output(path, std::ios::binary | std::ios::trunc);
 		if (!output.is_open()) {
@@ -115,6 +175,14 @@ namespace {
 				<< "    <CGGameRoot>$(CGProjectSourceRoot)..\\</CGGameRoot>\r\n"
 				<< "  </PropertyGroup>\r\n";
 		}
+		// CPP別のOBJ名を保ったままMTTで並列化する。既定は2プロセスに抑え、false指定で逐次CLへ戻す。
+		output << "  <PropertyGroup>\r\n"
+			<< "    <CGParallelCompileEnabled Condition=\"'$(CGParallelCompileEnabled)'==''\">true</CGParallelCompileEnabled>\r\n"
+			<< "    <CGCompileProcessCount Condition=\"'$(CGCompileProcessCount)'==''\">2</CGCompileProcessCount>\r\n"
+			<< "    <MultiProcCL>$(CGParallelCompileEnabled)</MultiProcCL>\r\n"
+			<< "    <MultiProcMaxCount Condition=\"'$(CGParallelCompileEnabled)'=='true'\">$(CGCompileProcessCount)</MultiProcMaxCount>\r\n"
+			<< "    <EnforceProcessCountAcrossBuilds Condition=\"'$(CGParallelCompileEnabled)'=='true'\">true</EnforceProcessCountAcrossBuilds>\r\n"
+			<< "  </PropertyGroup>\r\n";
 		for (const std::string& configuration : model.configurations) {
 			const bool debug = configuration == "Debug";
 			const bool development = configuration == "Development";
@@ -141,12 +209,15 @@ namespace {
 	std::string BuildProject(const SolutionGenerationModel& model, const SolutionGenerationTarget& target, const SolutionGenerationTarget& engine, const SolutionGenerationTarget& game, const SolutionGenerationTarget& host) {
 		const bool isHost = target.kind == SolutionGenerationTargetKind::Host;
 		const bool isGame = target.kind == SolutionGenerationTargetKind::Game;
+		const bool hasJsonPchSources = HasJsonPchSources(target);
 		std::ostringstream output;
 		output << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n  <ItemGroup Label=\"ProjectConfigurations\">\r\n";
 		for (const std::string& configuration : model.configurations) output << "    <ProjectConfiguration Include=\"" << configuration << "|x64\"><Configuration>" << configuration << "</Configuration><Platform>x64</Platform></ProjectConfiguration>\r\n";
 		output << "  </ItemGroup>\r\n  <PropertyGroup Label=\"Globals\"><VCProjectVersion>17.0</VCProjectVersion><Keyword>Win32Proj</Keyword><ProjectGuid>" << target.stableGuid << "</ProjectGuid><RootNamespace>" << EscapeXml(target.name) << "</RootNamespace><WindowsTargetPlatformVersion>" << model.toolchain.windowsSdk << "</WindowsTargetPlatformVersion></PropertyGroup>\r\n  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.Default.props\" />\r\n";
 		for (const std::string& configuration : model.configurations) output << "  <PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='" << configuration << "|x64'\" Label=\"Configuration\"><ConfigurationType>" << (isHost ? "Application" : "StaticLibrary") << "</ConfigurationType><UseDebugLibraries>" << (configuration == "Debug" ? "true" : "false") << "</UseDebugLibraries><PlatformToolset>" << model.toolchain.platformToolset << "</PlatformToolset><CharacterSet>Unicode</CharacterSet></PropertyGroup>\r\n";
-		output << "  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.props\" />\r\n  <Import Project=\"$(MSBuildThisFileDirectory)" << EscapeXml(host.name) << ".Common.props\" />\r\n  <ItemGroup>\r\n";
+		output << "  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.props\" />\r\n  <Import Project=\"$(MSBuildThisFileDirectory)" << EscapeXml(host.name) << ".Common.props\" />\r\n";
+		if (hasJsonPchSources) WriteJsonPchProperties(output);
+		output << "  <ItemGroup>\r\n";
 		std::size_t compileOrdinal = 0;
 		if (target.kind == SolutionGenerationTargetKind::Engine) {
 			const std::initializer_list<std::filesystem::path> engineExternalSources = {
@@ -159,16 +230,32 @@ namespace {
 				"externals/imgui/imgui_tables.cpp",
 				"externals/imgui/imgui_widgets.cpp"
 			};
-			for (const std::filesystem::path& externalSource : engineExternalSources) output << "    <ClCompile Include=\"" << MsBuildSourcePath(externalSource) << "\"><ObjectFileName>" << GeneratedObjectFileName(externalSource, compileOrdinal++) << "</ObjectFileName></ClCompile>\r\n";
+			for (const std::filesystem::path& externalSource : engineExternalSources) {
+				output << "    <ClCompile Include=\"" << MsBuildSourcePath(externalSource) << "\"><ObjectFileName>" << GeneratedObjectFileName(externalSource, compileOrdinal++) << "</ObjectFileName>";
+				// 登録順を保ち、デモ除外によって後続ソースのOBJ名が変わることを防ぐ。
+				if (externalSource == "externals/imgui/imgui_demo.cpp") output << "<ExcludedFromBuild>true</ExcludedFromBuild>";
+				output << "</ClCompile>\r\n";
+			}
 		}
-		for (const SolutionGenerationSourceFile& file : target.sourceFiles) if (file.kind == SolutionGenerationFileKind::Compile) output << "    <ClCompile Include=\"" << MsBuildSourcePath(file.projectRelativePath) << "\"><ObjectFileName>" << GeneratedObjectFileName(file.projectRelativePath, compileOrdinal++) << "</ObjectFileName></ClCompile>\r\n";
+		for (const SolutionGenerationSourceFile& file : target.sourceFiles) if (file.kind == SolutionGenerationFileKind::Compile) {
+			const bool isJsonPchCreator = target.kind == SolutionGenerationTargetKind::Engine && IsJsonPchPath(file.projectRelativePath, L"engine/pch/JsonPch.cpp");
+			// 専用CPPを通常のordinalから外し、既存ソースのOBJ名を維持する。
+			const std::string objectFileName = isJsonPchCreator ? "$(IntDir)cg_json_pch.obj" : GeneratedObjectFileName(file.projectRelativePath, compileOrdinal++);
+			output << "    <ClCompile Include=\"" << MsBuildSourcePath(file.projectRelativePath) << "\"><ObjectFileName>" << objectFileName << "</ObjectFileName>";
+			if (hasJsonPchSources && (isJsonPchCreator || IsJsonPchConsumer(file.projectRelativePath))) {
+				if (isJsonPchCreator) output << "<ExcludedFromBuild>false</ExcludedFromBuild><ExcludedFromBuild Condition=\"'$(_CGJsonPchActive)'!='true'\">true</ExcludedFromBuild>";
+				WriteJsonPchMetadata(output, isJsonPchCreator ? "Create" : "Use");
+			}
+			output << "</ClCompile>\r\n";
+		}
 		output << "  </ItemGroup>\r\n  <ItemGroup>\r\n";
 		for (const SolutionGenerationSourceFile& file : target.sourceFiles) if (file.kind == SolutionGenerationFileKind::Include) output << "    <ClInclude Include=\"" << MsBuildSourcePath(file.projectRelativePath) << "\" />\r\n";
 		output << "  </ItemGroup>\r\n";
 		if (isHost) output << "  <ItemGroup><ProjectReference Include=\"" << EscapeXml(game.name) << ".vcxproj\"><Project>" << game.stableGuid << "</Project></ProjectReference><ProjectReference Include=\"" << EscapeXml(engine.name) << ".vcxproj\"><Project>" << engine.stableGuid << "</Project></ProjectReference></ItemGroup>\r\n";
 		else if (isGame) output << "  <ItemGroup><ProjectReference Include=\"" << EscapeXml(engine.name) << ".vcxproj\"><Project>" << engine.stableGuid << "</Project></ProjectReference></ItemGroup>\r\n";
 		output << "  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.targets\" />\r\n";
-		if (isHost) output << "  <Target Name=\"CopyRuntimeDlls\" AfterTargets=\"Build\"><ItemGroup><RuntimeDll Include=\"$(WindowsSdkDir)Redist\\D3D\\x64\\dxcompiler.dll\" Condition=\"!Exists('$(TargetDir)dxcompiler.dll')\" /><RuntimeDll Include=\"$(WindowsSdkDir)Redist\\D3D\\x64\\dxil.dll\" Condition=\"!Exists('$(TargetDir)dxil.dll')\" /></ItemGroup><Copy SourceFiles=\"@(RuntimeDll)\" DestinationFolder=\"$(TargetDir)\" SkipUnchangedFiles=\"true\" Condition=\"'@(RuntimeDll)' != ''\" /></Target>\r\n  <Target Name=\"CopyRuntimeAssets\" AfterTargets=\"Build\"><ItemGroup><RuntimeResource Include=\"$(CGProjectSourceRoot)resources\\**\\*\" /></ItemGroup><Copy SourceFiles=\"@(RuntimeResource)\" DestinationFiles=\"@(RuntimeResource->'$(TargetDir)resources\\%(RecursiveDir)%(Filename)%(Extension)')\" SkipUnchangedFiles=\"true\" /></Target>\r\n";
+		// JSONバックアップの復旧経路は残し、制作用データと確認済みの不要バックアップだけをコピー対象外にする。
+		if (isHost) output << "  <Target Name=\"CopyRuntimeDlls\" AfterTargets=\"Build\"><ItemGroup><RuntimeDll Include=\"$(WindowsSdkDir)Redist\\D3D\\x64\\dxcompiler.dll\" Condition=\"!Exists('$(TargetDir)dxcompiler.dll')\" /><RuntimeDll Include=\"$(WindowsSdkDir)Redist\\D3D\\x64\\dxil.dll\" Condition=\"!Exists('$(TargetDir)dxil.dll')\" /></ItemGroup><Copy SourceFiles=\"@(RuntimeDll)\" DestinationFolder=\"$(TargetDir)\" SkipUnchangedFiles=\"true\" Condition=\"'@(RuntimeDll)' != ''\" /></Target>\r\n  <Target Name=\"CopyRuntimeAssets\" AfterTargets=\"Build\"><ItemGroup><RuntimeResource Include=\"$(CGProjectSourceRoot)resources\\**\\*\" Exclude=\"$(CGProjectSourceRoot)resources\\**\\*.blend;$(CGProjectSourceRoot)resources\\skyboxes\\generated_space.dds.bak;$(CGProjectSourceRoot)resources\\scenes\\title_presentation_verify.scene.json.bak\" /></ItemGroup><Copy SourceFiles=\"@(RuntimeResource)\" DestinationFiles=\"@(RuntimeResource->'$(TargetDir)resources\\%(RecursiveDir)%(Filename)%(Extension)')\" SkipUnchangedFiles=\"true\" /></Target>\r\n";
 		return output.str() + "</Project>\r\n";
 	}
 

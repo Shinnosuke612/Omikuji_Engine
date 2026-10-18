@@ -4,6 +4,13 @@
     <CGGameRoot>$(MSBuildThisFileDirectory)..\..\</CGGameRoot>
     <CGProjectSourceRoot>$(CGGameRoot)project\</CGProjectSourceRoot>
   </PropertyGroup>
+  <PropertyGroup>
+    <CGParallelCompileEnabled Condition="'$(CGParallelCompileEnabled)'==''">true</CGParallelCompileEnabled>
+    <CGCompileProcessCount Condition="'$(CGCompileProcessCount)'==''">2</CGCompileProcessCount>
+    <MultiProcCL>$(CGParallelCompileEnabled)</MultiProcCL>
+    <MultiProcMaxCount Condition="'$(CGParallelCompileEnabled)'=='true'">$(CGCompileProcessCount)</MultiProcMaxCount>
+    <EnforceProcessCountAcrossBuilds Condition="'$(CGParallelCompileEnabled)'=='true'">true</EnforceProcessCountAcrossBuilds>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(CGGameRoot)generated\outputs\$(ProjectName)\$(Configuration)\</OutDir>
     <IntDir>$(CGGameRoot)generated\obj\$(ProjectName)\$(Configuration)\</IntDir>
