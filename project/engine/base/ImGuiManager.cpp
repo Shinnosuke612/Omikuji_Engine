@@ -10240,6 +10240,209 @@ std::string ImGuiManager::LocalizeGameFlowIssue(const std::string& issue) const 
 	return SelectEditorText(editorLanguage_, "開始の準備を完了できません。ゲーム進行の設定と参照先を確認してください。", "Game preparation could not finish. Check the game flow settings and references.");
 }
 
+bool ImGuiManager::DrawGameFlowFields(SceneDocument& document, uint64_t entityId, SceneComponent& component) {
+	bool changed = false;
+	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	auto warn = [&](const std::string& issue, const std::string& detail) {
+		spawnWarningRequested_ = true; spawnWarningRuntime_ = false; spawnWarningEntityId_ = entityId;
+		spawnWarningIssue_ = issue; spawnWarningDetail_ = detail;
+	};
+	// 各数値は編集中のbufferから確定時だけ保存する。不正値は補正せず前の有効値を維持する。
+	auto number = [&](const char* label, float& value, bool positive) {
+		auto* storage = ImGui::GetStateStorage();
+		const ImGuiID id = ImGui::GetID(label);
+		float buffer = storage->GetFloat(id, value);
+		const bool entered = ImGui::InputFloat(label, &buffer, 0.0f, 0.0f, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue);
+		if (entered || ImGui::IsItemDeactivatedAfterEdit()) {
+			if (!std::isfinite(buffer) || (positive ? buffer <= 0.0f : buffer < 0.0f)) { warn("FlowPreparation:InvalidSettings", label); buffer = value; }
+			else if (buffer != value) { value = buffer; changed = true; }
+		} else if (!ImGui::IsItemActive()) buffer = value;
+		storage->SetFloat(id, buffer);
+	};
+	auto integer = [&](const char* label, int& value, int minimum, int maximum) {
+		auto* storage = ImGui::GetStateStorage();
+		const ImGuiID id = ImGui::GetID(label);
+		int buffer = storage->GetInt(id, value);
+		const bool entered = ImGui::InputInt(label, &buffer, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+		if (entered || ImGui::IsItemDeactivatedAfterEdit()) {
+			if (buffer < minimum || buffer > maximum) { warn("FlowPreparation:InvalidSettings", label); buffer = value; }
+			else if (buffer != value) { value = buffer; changed = true; }
+		} else if (!ImGui::IsItemActive()) buffer = value;
+		storage->SetInt(id, buffer);
+	};
+	// 壊れた親参照でも候補表示を停止させない。循環は検証結果で通知する。
+	auto hierarchyLabel = [&](const SceneEntity& entity) {
+		std::vector<std::string> names;
+		const SceneEntity* current = &entity;
+		for (size_t depth = 0; current && depth <= document.GetEntities().size(); ++depth) {
+			names.push_back(current->name.empty() ? "Entity" : current->name);
+			current = document.FindEntity(current->parentId);
+		}
+		std::string label;
+		for (auto it = names.rbegin(); it != names.rend(); ++it) { if (!label.empty()) label += " / "; label += *it; }
+		return label;
+	};
+	auto activeHierarchy = [&](const SceneEntity& entity) {
+		const SceneEntity* current = &entity;
+		for (size_t depth = 0; current && depth <= document.GetEntities().size(); ++depth) {
+			if (!current->active) return false;
+			if (!current->parentId) return true;
+			current = document.FindEntity(current->parentId);
+		}
+		return false;
+	};
+	auto entityField = [&](const char* label, uint64_t& id, const char* requiredType, bool intro) {
+		ImGui::PushID(label);
+		const auto* selected = document.FindEntity(id);
+		const std::string preview = id == 0 ? (intro ? text("カウントダウンと共用", "Share Countdown Text") : text("未指定", "Not Set")) :
+			selected ? hierarchyLabel(*selected) : text("参照先が無効です", "Invalid Reference");
+		if (ImGui::BeginCombo(label, preview.c_str())) {
+			if (ImGui::IsWindowAppearing()) gameFlowReferenceSearch_.clear();
+			InputTextString(text("検索###FlowReferenceSearch", "Search###FlowReferenceSearch"), gameFlowReferenceSearch_);
+			if (ImGui::Selectable(intro ? text("カウントダウンと共用", "Share Countdown Text") : text("未指定にする", "Clear Reference"), id == 0)) { id = 0; changed = true; }
+			std::string query = gameFlowReferenceSearch_;
+			std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			for (const auto& candidate : document.GetEntities()) {
+				if (*requiredType && !FindEnabledComponent(candidate, requiredType)) continue;
+				if (intro) {
+					if (candidate.id == component.gameFlowPhaseTextEntityId || candidate.id == component.gameFlowTimerTextEntityId ||
+						candidate.id == component.gameFlowRemainingTextEntityId || candidate.id == component.gameFlowResultTimeTextEntityId) continue;
+					const auto* renderer = FindEnabledComponent(candidate, "TextRenderer");
+					if (SceneUILayout::IsUIEntity(document, candidate)) {
+						SceneUILayout::Layout layout;
+						if (!SceneUILayout::Resolve(document, candidate.id, layout) || !layout.visible || layout.renderSpace != "ScreenOverlay") continue;
+					} else if (!renderer || renderer->textRenderSpace != "ScreenOverlay" || !activeHierarchy(candidate)) continue;
+				}
+				const std::string labelText = hierarchyLabel(candidate);
+				std::string search = labelText;
+				std::transform(search.begin(), search.end(), search.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				if (!query.empty() && search.find(query) == std::string::npos) continue;
+				ImGui::PushID(static_cast<int>(candidate.id));
+				if (ImGui::Selectable(labelText.c_str(), id == candidate.id)) { id = candidate.id; changed = true; }
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		const uint64_t resolvedId = intro && id == 0 ? component.gameFlowCountdownTextEntityId : id;
+		ImGui::BeginDisabled(!document.FindEntity(resolvedId));
+		if (ImGui::SmallButton(text("Inspectorを開く", "Open Inspector"))) selectedEntityId_ = resolvedId;
+		ImGui::EndDisabled();
+		ImGui::PopID();
+	};
+	auto clipField = [&](const char* label, uint64_t id, std::string& clip, bool optional) {
+		const auto* owner = document.FindEntity(id);
+		const auto* motion = owner ? FindEnabledComponent(*owner, "TextMotion") : nullptr;
+		if (ImGui::BeginCombo(label, clip.empty() ? (optional ? text("なし", "None") : text("未指定", "Not Set")) : clip.c_str())) {
+			if (ImGui::Selectable(optional ? text("なし", "None") : text("未指定にする", "Clear Reference"), clip.empty())) { clip.clear(); changed = true; }
+			if (motion) for (const auto& candidate : motion->textMotionClips) {
+				if (ImGui::Selectable(candidate.id.c_str(), clip == candidate.id)) { clip = candidate.id; changed = true; }
+			}
+			ImGui::EndCombo();
+		}
+	};
+	changed |= ImGui::Checkbox(text("自動開始###FlowAutoStart", "Auto Start###FlowAutoStart"), &component.gameFlowAutoStart);
+	const char* mode = component.gameFlowStartSequence == "BriefingSpawnCountdown" ? text("案内 → 敵出現 → カウントダウン", "Briefing → Spawn → Countdown") :
+		component.gameFlowStartSequence == "CountdownFirst" ? text("カウントダウンから開始（従来）", "Countdown First (Legacy)") : text("設定を確認してください", "Invalid Setting");
+	if (ImGui::BeginCombo(text("開始の流れ###StartSequence", "Start Sequence###StartSequence"), mode)) {
+		if (ImGui::Selectable(text("案内 → 敵出現 → カウントダウン", "Briefing → Spawn → Countdown"), component.gameFlowStartSequence == "BriefingSpawnCountdown")) { component.gameFlowStartSequence = "BriefingSpawnCountdown"; changed = true; }
+		if (ImGui::Selectable(text("カウントダウンから開始（従来）", "Countdown First (Legacy)"), component.gameFlowStartSequence == "CountdownFirst")) { component.gameFlowStartSequence = "CountdownFirst"; changed = true; }
+		ImGui::EndCombo();
+	}
+	if (component.gameFlowStartSequence == "BriefingSpawnCountdown") {
+		entityField(text("案内の文字###IntroTarget", "Briefing Text###IntroTarget"), component.gameFlowIntroTextEntityId, "TextRenderer", true);
+		changed |= InputTextString(text("表示する文章###IntroText", "Message###IntroText"), component.gameFlowIntroText);
+		number(text("表示時間（秒）###IntroSeconds", "Display Time (s)###IntroSeconds"), component.gameFlowIntroSeconds, true);
+		clipField(text("文字の演出###IntroClip", "Text Motion###IntroClip"), component.gameFlowIntroTextEntityId ? component.gameFlowIntroTextEntityId : component.gameFlowCountdownTextEntityId, component.gameFlowIntroMotionClipId, true);
+		ImGui::TextWrapped("%s", text("文章の内容はここで、位置・フォント・色は参照先の文字表示で編集します。最初のWave全員の出現完了後にカウントダウンへ進みます。", "Edit the message here; edit position, font and color on its TextRenderer. Countdown waits for every enemy in the first wave."));
+	}
+	if (ImGui::TreeNode(text("カウントダウン###CountdownSettings", "Countdown###CountdownSettings"))) {
+		integer(text("開始数###CountdownStart", "Start Count###CountdownStart"), component.gameFlowCountdownStart, 1, 9);
+		number(text("間隔（秒）###CountdownStep", "Interval (s)###CountdownStep"), component.gameFlowCountdownStepSeconds, true);
+		ImGui::TreePop();
+	}
+	if (ImGui::TreeNode(text("開始の合図###StartCueSettings", "Start Cue###StartCueSettings"))) {
+		changed |= InputTextString(text("表示する文字###StartCueText", "Message###StartCueText"), component.gameFlowStartCueText);
+		number(text("表示時間（秒）###StartCueSeconds", "Display Time (s)###StartCueSeconds"), component.gameFlowStartCueSeconds, false);
+		ImGui::TreePop();
+	}
+	if (ImGui::TreeNode(text("参照・計測・結果###FlowReferences", "References, Timer and Result###FlowReferences"))) {
+		entityField(text("カウントダウンの文字###CountdownTarget", "Countdown Text###CountdownTarget"), component.gameFlowCountdownTextEntityId, "TextRenderer", false);
+		clipField(text("カウントダウン演出###CountdownClip", "Countdown Motion###CountdownClip"), component.gameFlowCountdownTextEntityId, component.gameFlowCountdownMotionClipId, false);
+		entityField(text("Phaseの文字###PhaseTarget", "Phase Text###PhaseTarget"), component.gameFlowPhaseTextEntityId, "TextRenderer", false);
+		clipField(text("Phaseの文字演出###PhaseClip", "Phase Motion###PhaseClip"), component.gameFlowPhaseTextEntityId, component.gameFlowPhaseMotionClipId, false);
+		entityField(text("計測の文字###TimerTarget", "Timer Text###TimerTarget"), component.gameFlowTimerTextEntityId, "TextRenderer", false);
+		entityField(text("残敵数の文字（任意）###RemainingTarget", "Remaining Text (Optional)###RemainingTarget"), component.gameFlowRemainingTextEntityId, "TextRenderer", false);
+		entityField(text("結果をまとめる親###ResultRoot", "Result Root###ResultRoot"), component.gameFlowResultRootEntityId, "", false);
+		entityField(text("結果時間の文字###ResultTarget", "Result Time Text###ResultTarget"), component.gameFlowResultTimeTextEntityId, "TextRenderer", false);
+		clipField(text("結果の文字演出###ResultClip", "Result Motion###ResultClip"), component.gameFlowResultTimeTextEntityId, component.gameFlowResultMotionClipId, false);
+		number(text("Phase間の待ち時間（秒）###PhaseDelay", "Inter-phase Delay (s)###PhaseDelay"), component.gameFlowInterPhaseDelaySeconds, false);
+		number(text("結果表示まで（秒）###ResultDelay", "Result Delay (s)###ResultDelay"), component.gameFlowResultRevealDelaySeconds, false);
+		number(text("計測表示の間隔（秒）###TimerStep", "Timer Display Step (s)###TimerStep"), component.gameFlowTimerDisplayStepSeconds, true);
+		changed |= InputTextString(text("計測の接頭辞###TimerPrefix", "Timer Prefix###TimerPrefix"), component.gameFlowTimerPrefix);
+		changed |= InputTextString(text("残敵数の接頭辞###RemainingPrefix", "Remaining Prefix###RemainingPrefix"), component.gameFlowRemainingPrefix);
+		changed |= InputTextString(text("結果の接頭辞###ResultPrefix", "Result Prefix###ResultPrefix"), component.gameFlowResultPrefix);
+		ImGui::TreePop();
+	}
+	int removePhase = -1, addWavePhase = -1, removeWavePhase = -1, removeWave = -1;
+	bool addPhase = false;
+	if (ImGui::TreeNode(text("Phaseと敵の出現設定###FlowPhases", "Phases and Waves###FlowPhases"))) {
+		for (size_t i = 0; i < component.gameFlowPhases.size(); ++i) {
+			auto& phase = component.gameFlowPhases[i];
+			ImGui::PushID(static_cast<int>(i));
+			if (ImGui::TreeNodeEx("Phase", ImGuiTreeNodeFlags_DefaultOpen, "%s %zu", text("Phase", "Phase"), i + 1)) {
+				changed |= InputTextString(text("Phase ID###PhaseId", "Phase ID###PhaseId"), phase.id);
+				changed |= InputTextString(text("表示名###PhaseLabel", "Display Label###PhaseLabel"), phase.label);
+				for (size_t j = 0; j < phase.waves.size(); ++j) {
+					auto& wave = phase.waves[j];
+					ImGui::PushID(static_cast<int>(j));
+					ImGui::Separator();
+					entityField(text("敵のSpawner###WaveSpawner", "Enemy Spawner###WaveSpawner"), wave.spawnerEntityId, "EnemySpawner", false);
+					integer(text("敵の数###WaveCount", "Enemy Count###WaveCount"), wave.count, 1, (std::numeric_limits<int>::max)());
+					if (ImGui::SmallButton(text("この出現設定を削除###RemoveWave", "Remove Wave###RemoveWave"))) { removeWavePhase = static_cast<int>(i); removeWave = static_cast<int>(j); }
+					ImGui::PopID();
+				}
+				if (ImGui::SmallButton(text("出現設定を追加###AddWave", "Add Wave###AddWave"))) addWavePhase = static_cast<int>(i);
+				if (ImGui::SmallButton(text("Phaseを削除###RemovePhase", "Remove Phase###RemovePhase"))) removePhase = static_cast<int>(i);
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+		addPhase = ImGui::SmallButton(text("Phaseを追加###AddPhase", "Add Phase###AddPhase"));
+		ImGui::TreePop();
+	}
+	// Component/Entity配列は動かさず、走査済みのPhase/Waveだけを同じEditFrameで変更する。
+	if (removePhase >= 0) { component.gameFlowPhases.erase(component.gameFlowPhases.begin() + removePhase); changed = true; }
+	else if (addPhase) {
+		SceneGameFlowPhase phase;
+		size_t suffix = component.gameFlowPhases.size() + 1;
+		do { phase.id = "phase" + std::to_string(suffix++); }
+		while (std::any_of(component.gameFlowPhases.begin(), component.gameFlowPhases.end(), [&](const auto& existing) { return existing.id == phase.id; }));
+		phase.label = "PHASE " + std::to_string(component.gameFlowPhases.size() + 1);
+		component.gameFlowPhases.push_back(std::move(phase)); changed = true;
+	} else if (removeWavePhase >= 0) {
+		auto& waves = component.gameFlowPhases[removeWavePhase].waves;
+		waves.erase(waves.begin() + removeWave); changed = true;
+	} else if (addWavePhase >= 0) { component.gameFlowPhases[addWavePhase].waves.push_back({}); changed = true; }
+	const bool check = ImGui::Button(text("開始設定を確認###CheckGameFlow", "Check Start Settings###CheckGameFlow"));
+	// 外部Prefabの読取検証を毎Frame繰り返さず、値変更/選択/内容世代/明示確認で更新する。
+	if (changed || check || gameFlowValidationGeneration_ != document.GetContentGeneration() ||
+		gameFlowValidationRevision_ != document.GetRevision() || gameFlowValidationEntity_ != entityId) {
+		std::vector<SceneValidationIssue> issues;
+		SceneValidator::ValidateDocument(document, nullptr, {}, {}, issues);
+		gameFlowValidationIssues_.clear();
+		for (const auto& issue : issues) {
+			if (issue.entityId == entityId && issue.message.starts_with("FlowPreparation:")) gameFlowValidationIssues_.push_back(issue.message);
+			if (issue.message.starts_with("SpawnPreparation:") && std::any_of(component.gameFlowPhases.begin(), component.gameFlowPhases.end(), [&](const auto& phase) {
+				return std::any_of(phase.waves.begin(), phase.waves.end(), [&](const auto& wave) { return wave.spawnerEntityId == issue.entityId; });
+			})) gameFlowValidationIssues_.push_back("FlowPreparation:SpawnFailed " + issue.message);
+		}
+		gameFlowValidationGeneration_ = document.GetContentGeneration(); gameFlowValidationRevision_ = document.GetRevision(); gameFlowValidationEntity_ = entityId;
+	}
+	for (const auto& issue : gameFlowValidationIssues_) ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", LocalizeGameFlowIssue(issue).c_str());
+	if (check && !gameFlowValidationIssues_.empty()) warn(gameFlowValidationIssues_.front(), gameFlowValidationIssues_.front());
+	return changed;
+}
+
 std::string ImGuiManager::LocalizeSpawnIssue(const std::string& issue) const {
 	struct Message { const char* code; const char* ja; const char* en; };
 	static const Message messages[] = {
@@ -10255,6 +10458,64 @@ std::string ImGuiManager::LocalizeSpawnIssue(const std::string& issue) const {
 		return SelectEditorText(editorLanguage_, message.ja, message.en);
 	return SelectEditorText(editorLanguage_, "出現の準備を完了できません。Spawnerと敵Prefabの設定を確認してください。",
 		"Spawn preparation could not finish. Check the spawner and enemy prefab settings.");
+}
+
+bool ImGuiManager::DrawEnemySpawnAppearance(SceneDocument& document, uint64_t entityId, SceneComponent& component) {
+	if (!ImGui::TreeNode(SelectEditorText(editorLanguage_, "出現演出###SpawnAppearance", "Spawn Appearance###SpawnAppearance"))) return false;
+	const SceneComponent previous = component;
+	bool changed = false;
+	const char* modeLabel = component.enemySpawnerSpawnAppearance == "Instant"
+		? SelectEditorText(editorLanguage_, "すぐに表示", "Instant")
+		: component.enemySpawnerSpawnAppearance == "ScaleUp" ? SelectEditorText(editorLanguage_, "小さい状態から拡大", "Scale Up")
+		: SelectEditorText(editorLanguage_, "設定を確認してください", "Invalid Setting");
+	if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "出現方法###SpawnMethod", "Appearance###SpawnMethod"), modeLabel)) {
+		for (const char* mode : {"Instant", "ScaleUp"}) {
+			const char* label = std::string(mode) == "Instant" ? SelectEditorText(editorLanguage_, "すぐに表示", "Instant") : SelectEditorText(editorLanguage_, "小さい状態から拡大", "Scale Up");
+			if (ImGui::Selectable(label, component.enemySpawnerSpawnAppearance == mode)) { component.enemySpawnerSpawnAppearance = mode; changed = true; }
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::BeginDisabled(component.enemySpawnerSpawnAppearance != "ScaleUp");
+	// 保存値を入力途中で書き換えず、Enterまたは編集終了時に一度だけ適用する。
+	auto editNumber = [&](const char* label, float& value, float displayFactor) {
+		const ImGuiID id = ImGui::GetID(label);
+		auto* storage = ImGui::GetStateStorage();
+		float buffer = storage->GetFloat(id, value * displayFactor);
+		const bool entered = ImGui::InputFloat(label, &buffer, 0.0f, 0.0f, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue);
+		if (entered || ImGui::IsItemDeactivatedAfterEdit()) { value = buffer / displayFactor; changed = true; }
+		else if (!ImGui::IsItemActive()) buffer = value * displayFactor;
+		storage->SetFloat(id, buffer);
+	};
+	editNumber(SelectEditorText(editorLanguage_, "最初の大きさ（％）###SpawnSize", "Initial Size (%)###SpawnSize"), component.enemySpawnerSpawnStartScale, 100.0f);
+	editNumber(SelectEditorText(editorLanguage_, "元の大きさになるまで（秒）###SpawnDuration", "Time to Full Size (s)###SpawnDuration"), component.enemySpawnerSpawnDuration, 1.0f);
+	const char* curveLabel = component.enemySpawnerSpawnCurve == "EaseOutCubic" ? SelectEditorText(editorLanguage_, "終わりでゆっくり", "Ease Out") :
+		component.enemySpawnerSpawnCurve == "Linear" ? SelectEditorText(editorLanguage_, "一定の速さ", "Linear") : SelectEditorText(editorLanguage_, "設定を確認してください", "Invalid Setting");
+	if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "拡大の変化###SpawnCurve", "Scale Curve###SpawnCurve"), curveLabel)) {
+		if (ImGui::Selectable(SelectEditorText(editorLanguage_, "終わりでゆっくり", "Ease Out"), component.enemySpawnerSpawnCurve == "EaseOutCubic")) { component.enemySpawnerSpawnCurve = "EaseOutCubic"; changed = true; }
+		if (ImGui::Selectable(SelectEditorText(editorLanguage_, "一定の速さ", "Linear"), component.enemySpawnerSpawnCurve == "Linear")) { component.enemySpawnerSpawnCurve = "Linear"; changed = true; }
+		ImGui::EndCombo();
+	}
+	ImGui::EndDisabled();
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "0％は見えない大きさからの出現です。時間は敵一体ごとに適用し、出現間隔は上の設定を使います。出現中は移動・攻撃・当たり判定を停止します。",
+		"0% starts at zero size. Duration applies to each enemy; the interval above controls spawn spacing. Movement, attacks and collisions wait until the appearance finishes."));
+	const bool inspect = ImGui::Button(SelectEditorText(editorLanguage_, "出現設定を確認###CheckSpawn", "Check Spawn Settings###CheckSpawn"));
+	if (changed || inspect) {
+		std::vector<SceneValidationIssue> issues;
+		SceneValidator::ValidateDocument(document, nullptr, {}, {}, issues);
+		for (const auto& issue : issues) {
+			if (issue.entityId != entityId || !issue.message.starts_with("SpawnPreparation:")) continue;
+			component = previous;
+			changed = false;
+			spawnWarningRequested_ = true;
+			spawnWarningRuntime_ = false;
+			spawnWarningEntityId_ = entityId;
+			spawnWarningIssue_ = issue.message;
+			spawnWarningDetail_ = component.enemySpawnerPrefabPath;
+			break;
+		}
+	}
+	ImGui::TreePop();
+	return changed;
 }
 
 void ImGuiManager::DrawSpawnPreparationWarning() {
@@ -12904,6 +13165,10 @@ void ImGuiManager::DrawInspectorWindow() {
 				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
 				if (DrawMenuAuthoringComponent(document, *entity, component, false, menuAuthoringRequest)) document.MarkDirty();
 				ImGui::EndDisabled();
+			} else if (component.type == "GameFlowDirector") {
+				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
+				if (DrawGameFlowFields(document, entity->id, component)) document.MarkDirty();
+				ImGui::EndDisabled();
 			} else if (component.type == "MeshRenderer") {
 				const bool modelEditingDisabled =
 					!editorSession_->IsEditing() || entityLocked;
@@ -15507,11 +15772,12 @@ void ImGuiManager::DrawInspectorWindow() {
 								actionIndex + 1,
 								action.type.c_str()
 							)) {
-								if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Type"), action.type.c_str())) {
+								const char* actionPreview = action.type == "RestartScene" ? SelectEditorText(editorLanguage_, "現在のSceneを再起動", "Restart Current Scene") : action.type.c_str();
+								if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Type"), actionPreview)) {
 									for (const char* actionType : {
 										"ModifyStat", "SetEntityActive", "OpenMenu", "PauseGame",
 										"InstantiatePrefab", "ChangeState",
-										"SceneTransition", "SetPostProcessProfile",
+										"SceneTransition", "RestartScene", "SetPostProcessProfile",
 										"NextPostProcessProfile",
 										"ResetPostProcessProfile", "PlayCameraPath",
 										"StopCameraPath", "SelectCamera", "PlayAudio",
@@ -15520,7 +15786,7 @@ void ImGuiManager::DrawInspectorWindow() {
 									"PlayPresentationClip", "StopPresentationClip", "ResetPresentationClip"
 									}) {
 										if (ImGui::Selectable(
-											actionType,
+											std::strcmp(actionType, "RestartScene") == 0 ? SelectEditorText(editorLanguage_, "現在のSceneを再起動", "Restart Current Scene") : actionType,
 											action.type == actionType
 										)) {
 											action.type = actionType;
@@ -15531,7 +15797,7 @@ void ImGuiManager::DrawInspectorWindow() {
 								}
 								if (
 								action.type != "OpenMenu" && action.type != "PauseGame" &&
-								action.type != "SceneTransition" &&
+								action.type != "SceneTransition" && action.type != "RestartScene" &&
 								action.type != "SetPostProcessProfile" &&
 								action.type != "NextPostProcessProfile" &&
 								action.type != "ResetPostProcessProfile" &&
@@ -15627,6 +15893,8 @@ void ImGuiManager::DrawInspectorWindow() {
 									action.type == "ResetPresentationClip") {
 									drawPresentationTargetAndClip(action.targetEntityId, action.targetEntityName,
 										action.presentationClipName, action.type == "PlayPresentationClip");
+								} else if (action.type == "RestartScene") {
+									ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "現在プレイ中のSceneを保存済みの内容から再起動します。編集・Pause・遷移中は実行しません。遷移演出は使いません。", "Restarts the current playing scene from its saved file. Disabled while editing, paused or transitioning. No transition effect is used."));
 								} else if (action.type == "SceneTransition") {
 									const auto* destination = sceneCatalog_ ? sceneCatalog_->Find(action.sceneId) : nullptr;
 									const std::string label = destination ? destination->displayName :
@@ -16534,11 +16802,13 @@ void ImGuiManager::DrawInspectorWindow() {
 				component.enemySpawnerRadius = (std::max)(
 					component.enemySpawnerRadius, 0.0f
 				);
+				spawnerChanged |= DrawEnemySpawnAppearance(document, entity->id, component);
 				if (spawnerChanged) {
 					document.MarkDirty();
 				}
 				ImGui::TextDisabled(
-					"Runtime-only instances are reset to their prefab baseline before reuse."
+					"%s", SelectEditorText(editorLanguage_, "再出現する敵は元のPrefab設定へ戻してから出現演出を開始します。",
+						"Reused enemies return to their prefab baseline before starting their spawn appearance.")
 				);
 				ImGui::EndDisabled();
 			} else if (component.type == "Projectile") {
@@ -23383,6 +23653,7 @@ void ImGuiManager::DrawPrefabInspector() {
 				component.enemySpawnerRadius = (std::max)(
 					component.enemySpawnerRadius, 0.0f
 				);
+				changed |= DrawEnemySpawnAppearance(document, entity->id, component);
 				ImGui::TextDisabled(
 					"%s", SelectEditorText(editorLanguage_, "再出現する敵は元のPrefab設定へ戻してから出現演出を開始します。", "Reused enemies return to their prefab baseline before starting their spawn appearance.")
 				);

@@ -115,6 +115,161 @@ bool SceneValidator::ValidateDocument(
 						addIssue(SceneValidationSeverity::Error, owner.id, "SceneRestart:InvalidDomain");
 				}
 			}
+			if (setting.type == "GameFlowDirector") {
+				auto flowError = [&](const char* code) {
+					addIssue(SceneValidationSeverity::Error, owner.id, std::string("FlowPreparation:") + code);
+				};
+				auto componentAt = [&](uint64_t id, const char* type) -> const SceneComponent* {
+					const auto* entity = document.FindEntity(id);
+					return entity ? SceneEntityQuery::FindEnabledComponent(*entity, type) : nullptr;
+				};
+				auto active = [&](uint64_t id) {
+					for (size_t depth = 0; id && depth <= document.GetEntities().size(); ++depth) {
+						const auto* entity = document.FindEntity(id);
+						if (!entity || !entity->active) return false;
+						id = entity->parentId;
+					}
+					return id == 0;
+				};
+				auto below = [&](uint64_t id, uint64_t rootId) {
+					for (size_t depth = 0; id && depth <= document.GetEntities().size(); ++depth) {
+						if (id == rootId) return true;
+						const auto* entity = document.FindEntity(id);
+						id = entity ? entity->parentId : 0;
+					}
+					return false;
+				};
+				auto motionAt = [&](uint64_t id, const std::string& clipId) {
+					const auto* motion = componentAt(id, "TextMotion");
+					return motion && !clipId.empty() && std::any_of(motion->textMotionClips.begin(), motion->textMotionClips.end(),
+						[&](const auto& clip) { return clip.id == clipId; });
+				};
+				const bool briefing = setting.gameFlowStartSequence == "BriefingSpawnCountdown";
+				if ((setting.gameFlowStartSequence != "CountdownFirst" && !briefing) ||
+					setting.gameFlowCountdownStart < 1 || setting.gameFlowCountdownStart > 9 ||
+					!std::isfinite(setting.gameFlowIntroSeconds) || (briefing && setting.gameFlowIntroSeconds <= 0.0f) ||
+					!std::isfinite(setting.gameFlowCountdownStepSeconds) || setting.gameFlowCountdownStepSeconds <= 0.0f ||
+					!std::isfinite(setting.gameFlowStartCueSeconds) || setting.gameFlowStartCueSeconds < 0.0f ||
+					!std::isfinite(setting.gameFlowInterPhaseDelaySeconds) || setting.gameFlowInterPhaseDelaySeconds < 0.0f ||
+					!std::isfinite(setting.gameFlowResultRevealDelaySeconds) || setting.gameFlowResultRevealDelaySeconds < 0.0f ||
+					!std::isfinite(setting.gameFlowTimerDisplayStepSeconds) || setting.gameFlowTimerDisplayStepSeconds <= 0.0f)
+					flowError("InvalidSettings");
+				if (setting.enabled) {
+					size_t directors = 0;
+					for (const auto& entity : document.GetEntities()) if (componentAt(entity.id, "GameFlowDirector")) ++directors;
+					if (directors != 1) flowError("MultipleDirectors");
+				}
+				const uint64_t textIds[] = {setting.gameFlowCountdownTextEntityId, setting.gameFlowPhaseTextEntityId,
+					setting.gameFlowTimerTextEntityId, setting.gameFlowResultTimeTextEntityId};
+				std::unordered_set<uint64_t> textTargets;
+				for (uint64_t id : textIds) {
+					if (!componentAt(id, "TextRenderer") || !textTargets.insert(id).second) flowError("InvalidReference");
+				}
+				if (setting.gameFlowRemainingTextEntityId && (!componentAt(setting.gameFlowRemainingTextEntityId, "TextRenderer") ||
+					!textTargets.insert(setting.gameFlowRemainingTextEntityId).second)) flowError("InvalidReference");
+				if (!motionAt(setting.gameFlowCountdownTextEntityId, setting.gameFlowCountdownMotionClipId) ||
+					!motionAt(setting.gameFlowPhaseTextEntityId, setting.gameFlowPhaseMotionClipId) ||
+					!motionAt(setting.gameFlowResultTimeTextEntityId, setting.gameFlowResultMotionClipId) ||
+					!document.FindEntity(setting.gameFlowResultRootEntityId) || below(owner.id, setting.gameFlowResultRootEntityId) ||
+					(setting.gameFlowRemainingTextEntityId && !active(setting.gameFlowRemainingTextEntityId))) flowError("InvalidReference");
+				if (briefing) {
+					const uint64_t introId = setting.gameFlowIntroTextEntityId ? setting.gameFlowIntroTextEntityId : setting.gameFlowCountdownTextEntityId;
+					const auto* introEntity = document.FindEntity(introId);
+					const auto* text = componentAt(introId, "TextRenderer");
+					bool visible = introEntity && text && active(introId);
+					if (visible && SceneUILayout::IsUIEntity(document, *introEntity)) {
+						SceneUILayout::Layout layout;
+						visible = SceneUILayout::Resolve(document, introId, layout) && layout.visible && layout.renderSpace == "ScreenOverlay";
+					} else visible = visible && text->textRenderSpace == "ScreenOverlay";
+					if (!visible || (!setting.gameFlowIntroMotionClipId.empty() && !motionAt(introId, setting.gameFlowIntroMotionClipId))) flowError("IntroReference");
+					for (uint64_t id : {setting.gameFlowPhaseTextEntityId, setting.gameFlowTimerTextEntityId,
+						setting.gameFlowRemainingTextEntityId, setting.gameFlowResultTimeTextEntityId})
+						if (introId && introId == id) flowError("IntroConflict");
+					for (const auto& entity : document.GetEntities()) {
+						const auto* events = componentAt(entity.id, "EventTrigger");
+						if (!events || !active(entity.id)) continue;
+						for (const auto& binding : events->eventBindings) for (const auto& action : binding.actions) {
+							const auto* target = action.targetEntityId ? document.FindEntity(action.targetEntityId) :
+								action.targetEntityName.empty() ? &entity : document.FindEntityByName(action.targetEntityName);
+							if (target && target->id == introId && (action.type == "PlayTextMotion" || action.type == "StopTextMotion" ||
+								action.type == "ResetTextMotion" || action.type == "SetEntityActive")) flowError("EventConflict");
+						}
+					}
+				}
+				std::unordered_set<std::string> phaseIds;
+				if (setting.gameFlowPhases.empty()) flowError("InvalidPhase");
+				for (size_t phaseIndex = 0; phaseIndex < setting.gameFlowPhases.size(); ++phaseIndex) {
+					const auto& phase = setting.gameFlowPhases[phaseIndex];
+					if (phase.id.empty() || !phaseIds.insert(phase.id).second || phase.waves.empty()) flowError("InvalidPhase");
+					std::unordered_set<uint64_t> spawnerIds;
+					for (const auto& wave : phase.waves) {
+						const auto* spawner = componentAt(wave.spawnerEntityId, "EnemySpawner");
+						if (!spawner || spawner->enemySpawnerAutoStart || spawner->enemySpawnerPrefabPath.empty() ||
+							wave.count <= 0 || !spawnerIds.insert(wave.spawnerEntityId).second || (briefing && !active(wave.spawnerEntityId))) flowError("WaveReference");
+						if (briefing && phaseIndex == 0 && spawner && wave.count > spawner->enemySpawnerMaxAlive) flowError("CapacityExceeded");
+					}
+				}
+			}
+			if (setting.type == "EnemySpawner") {
+				auto spawnError = [&](const char* code) {
+					addIssue(SceneValidationSeverity::Error, owner.id, std::string("SpawnPreparation:") + code);
+				};
+				const bool validSettings = (setting.enemySpawnerSpawnAppearance == "Instant" || setting.enemySpawnerSpawnAppearance == "ScaleUp") &&
+					(setting.enemySpawnerSpawnCurve == "Linear" || setting.enemySpawnerSpawnCurve == "EaseOutCubic") &&
+					std::isfinite(setting.enemySpawnerSpawnStartScale) && setting.enemySpawnerSpawnStartScale >= 0.0f && setting.enemySpawnerSpawnStartScale <= 1.0f &&
+					std::isfinite(setting.enemySpawnerSpawnDuration) && (setting.enemySpawnerSpawnAppearance != "ScaleUp" || setting.enemySpawnerSpawnDuration > 0.0f);
+				if (!validSettings) spawnError("InvalidSettings");
+				if (validSettings && setting.enabled && setting.enemySpawnerSpawnAppearance == "ScaleUp") {
+					// ID再割当て前に参照を確認する。Assetを保存/移行しない。
+					SceneDocument prefab;
+					const auto path = EditableResourcePath::ResolveResource(StringUtility::ToPath(setting.enemySpawnerPrefabPath));
+					const bool loaded = !setting.enemySpawnerPrefabPath.empty() && prefab.Load(StringUtility::ToUtf8(path));
+					uint64_t root = 0;
+					for (const auto& entity : prefab.GetEntities()) if (entity.parentId == 0) {
+						if (root) { root = 0; break; }
+						root = entity.id;
+					}
+					if (!loaded || !root) spawnError("InvalidReference");
+					else {
+						auto internal = [&](uint64_t id, const std::string& name) {
+							if (!id && name.empty()) return true;
+							const auto* target = id ? prefab.FindEntity(id) : prefab.FindEntityByName(name);
+							if (!target) return false;
+							uint64_t current = target->id;
+							for (size_t depth = 0; current && depth <= prefab.GetEntities().size(); ++depth) {
+								if (current == root) return true;
+								const auto* parent = prefab.FindEntity(current);
+								current = parent ? parent->parentId : 0;
+							}
+							return false;
+						};
+						bool supported = true, hasMesh = false;
+						for (const auto& entity : prefab.GetEntities()) {
+							if (!internal(entity.id, {})) { supported = false; continue; }
+							for (const auto& c : entity.components) {
+								if (!c.enabled) continue;
+								if (c.type == "MeshRenderer" && !c.modelPath.empty()) hasMesh = true;
+								if (c.type == "PlayerBehavior" || c.type == "Camera" || c.type == "CameraPath" || c.type == "EnemySpawner" ||
+									c.type == "GameFlowDirector" || c.type == "MenuPanel" || c.type == "Projectile") supported = false;
+								if (c.type == "PrefabAnimator") for (const auto& clip : c.prefabAnimationClips) for (const auto& track : clip.tracks)
+									supported &= internal(track.targetEntityId, track.targetEntityName);
+								if (c.type == "HitBox") supported &= internal(c.hitBoxOwnerEntityId, c.hitBoxOwnerEntityName);
+								if (c.type == "HurtBox") supported &= internal(c.hurtBoxStatsEntityId, c.hurtBoxStatsEntityName);
+								if (c.type == "BoneAttachment") supported &= internal(c.boneAttachmentTargetEntityId, c.boneAttachmentTargetEntityName);
+								if (c.type == "EnemyBehavior") supported &= internal(c.enemyAttackHitBoxEntityId, c.enemyAttackHitBoxEntityName);
+								if (c.type == "StateMachine") for (const auto& state : c.stateMachineStates) for (const auto& parameter : state.parameters)
+									if (parameter.type == "Entity") supported &= internal(parameter.entityId, parameter.entityName);
+								if (c.type == "AttackSet") for (const auto& attack : c.attackDefinitions) {
+									supported &= internal(attack.animationTargetEntityId, attack.animationTargetEntityName) && internal(attack.hitBoxEntityId, attack.hitBoxEntityName);
+									for (const auto& window : attack.hitWindows) supported &= internal(window.hitBoxEntityId, window.hitBoxEntityName);
+									for (const auto& effect : attack.effectEvents) supported &= internal(effect.spawnEntityId, effect.spawnEntityName);
+								}
+							}
+						}
+						if (!supported || !hasMesh) spawnError("UnsupportedPrefab");
+					}
+				}
+			}
 			auto menuError = [&](const std::string& message) {
 				addIssue(SceneValidationSeverity::Error, owner.id, message);
 			};

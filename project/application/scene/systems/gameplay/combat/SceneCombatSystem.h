@@ -32,11 +32,13 @@ struct SceneCombatHitEvent {
 
 class SceneCombatSystem {
 public:
+	// bindings外のowner/Stats参照もblockedならDamage/命中通知を生成しない。
 	void Update(
 		SceneDocument& document,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		SceneStatSystem& statSystem,
-		float deltaTime
+		float deltaTime,
+		const std::unordered_set<uint64_t>& blockedEntityIds = {}
 	);
 	void FlushRemovals(SceneDocument& document);
 	std::vector<SceneCombatHitEvent> ConsumeHitEvents();

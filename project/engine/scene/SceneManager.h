@@ -86,6 +86,9 @@ public:
 	// Persistent InstanceはSingleロードでも破棄しない。明示Unloadは可能。
 	bool SetScenePersistent(SceneInstanceId instanceId, bool persistent);
 	void ReloadCurrentScene();
+	// Active Instanceの保存済みDocumentも次Updateで再読込する。成功予約ID、拒否は無効ID。
+	// Edit/Pause/遷移中/別予約中は拒否。読込失敗時は現在Sceneを維持してLoadOutcomeへ返す。
+	SceneInstanceId RequestSceneRestart(SceneInstanceId sourceInstanceId);
 	// requestSerial付きUI遷移は受理した予約IDを返す。拒否時は現Scene/選択を保持する。
 	// Panelの生存は発行側、Instance/内容世代はManagerが再確認する。
 	SceneInstanceId RequestUiSceneTransition(const SceneMenuSource& source, const std::string& destination);

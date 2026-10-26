@@ -134,10 +134,12 @@ namespace {
 
 void ScenePrefabAnimationSystem::Update(
 	SceneDocument& document,
-	float deltaTime
+	float deltaTime,
+	const std::unordered_set<uint64_t>& blockedEntityIds
 ) {
 	std::unordered_set<uint64_t> requiredEntities;
 	for (SceneEntity& entity : document.GetEntities()) {
+		if (blockedEntityIds.contains(entity.id)) { requiredEntities.insert(entity.id); continue; }
 		// 演出用ownerは専用更新でsampleする。Gameplay Clipの時刻/Loop規則は変えない。
 		if (presentationRuntimes_.contains(entity.id)) {
 			// 後段のGameplay Play要求を失わず、次回の所有競合検出へ残す。
@@ -154,6 +156,19 @@ void ScenePrefabAnimationSystem::Update(
 		}
 		requiredEntities.insert(entity.id);
 		AnimationRuntime& runtime = runtimes_[entity.id];
+		// 初回PlayOnStartの選択より先に検査し、外部targetへの時刻0書込みも保留する。
+		size_t nextClipIndex = runtime.clipIndex;
+		if (!runtime.initialized) for (size_t index = 0; index < animator->prefabAnimationClips.size(); ++index) {
+			if (animator->prefabAnimationClips[index].playOnStart) { nextClipIndex = index; break; }
+		}
+		const bool blockedClip = nextClipIndex < animator->prefabAnimationClips.size() &&
+			std::any_of(animator->prefabAnimationClips[nextClipIndex].tracks.begin(), animator->prefabAnimationClips[nextClipIndex].tracks.end(), [&](const auto& track) {
+				const auto* target = ResolveTrackTarget(document, entity.id, track);
+				return target && blockedEntityIds.contains(target->id);
+			});
+		if (blockedClip || std::any_of(runtime.transitionPoses.begin(), runtime.transitionPoses.end(), [&](const auto& pose) {
+			return blockedEntityIds.contains(pose.entityId);
+		})) continue;
 		if (!runtime.initialized) {
 			runtime.initialized = true;
 			for (size_t index = 0;
@@ -356,14 +371,20 @@ bool ScenePrefabAnimationSystem::HasGameplayOwnership(const SceneDocument& docum
 }
 
 bool ScenePrefabAnimationSystem::PlayPresentation(SceneDocument& document,
-	uint64_t entityId, const std::string& clipName) {
+	uint64_t entityId, const std::string& clipName, const std::unordered_set<uint64_t>& blockedEntityIds) {
 	if (!BindPresentationDocument(document)) return false;
+	if (blockedEntityIds.contains(entityId)) return false;
+	const auto previous = presentationRuntimes_.find(entityId);
+	if (previous != presentationRuntimes_.end() && std::any_of(previous->second.originalPoses.begin(), previous->second.originalPoses.end(), [&](const auto& pose) {
+		return blockedEntityIds.contains(pose.entityId);
+	})) return false;
 	const ScenePrefabAnimationClip* clip = FindPresentationClip(document, entityId, clipName);
 	if (!clip) return false;
 	std::vector<TransitionPose> targets;
 	for (const SceneAnimationTrack& track : clip->tracks) {
 		if (track.keyframes.empty()) continue;
 		const SceneEntity* target = ResolvePresentationTarget(document, entityId, track);
+		if (blockedEntityIds.contains(target->id)) return false;
 		targets.push_back({ target->id, target->transform, TransformPropertyMask(track.property) });
 	}
 	if (HasGameplayOwnership(document, targets, entityId)) return false;
@@ -444,24 +465,38 @@ void ScenePrefabAnimationSystem::RestorePresentation(SceneDocument& document,
 	}
 }
 
-void ScenePrefabAnimationSystem::ResetPresentation(SceneDocument& document, uint64_t entityId) {
-	if (!BindPresentationDocument(document)) return;
+bool ScenePrefabAnimationSystem::ResetPresentation(SceneDocument& document, uint64_t entityId,
+	const std::unordered_set<uint64_t>& blockedEntityIds) {
+	if (!BindPresentationDocument(document) || blockedEntityIds.contains(entityId)) return false;
 	const auto found = presentationRuntimes_.find(entityId);
 	if (found != presentationRuntimes_.end()) {
+		if (std::any_of(found->second.originalPoses.begin(), found->second.originalPoses.end(), [&](const auto& pose) {
+			return blockedEntityIds.contains(pose.entityId);
+		})) return false;
 		RestorePresentation(document, found->second);
 		presentationRuntimes_.erase(found);
 	}
 	RemovePresentationCompletions(entityId);
+	return true;
 }
 
-void ScenePrefabAnimationSystem::UpdatePresentations(SceneDocument& document, float deltaTime) {
+void ScenePrefabAnimationSystem::UpdatePresentations(SceneDocument& document, float deltaTime,
+	const std::unordered_set<uint64_t>& blockedEntityIds) {
 	if (!BindPresentationDocument(document)) return;
 	const float elapsed = std::isfinite(deltaTime) ? (std::max)(deltaTime, 0.0f) : 0.0f;
 	for (auto iterator = presentationRuntimes_.begin(); iterator != presentationRuntimes_.end();) {
 		const uint64_t ownerId = iterator->first;
 		PresentationRuntime& runtime = iterator->second;
+		// invalid時の復元も書込みなので、参照検証より先に所有済みtargetの停止を確認する。
+		if (blockedEntityIds.contains(ownerId) || std::any_of(runtime.originalPoses.begin(), runtime.originalPoses.end(), [&](const auto& pose) {
+			return blockedEntityIds.contains(pose.entityId);
+		})) { ++iterator; continue; }
 		const SceneEntity* owner = document.FindEntity(ownerId);
 		const ScenePrefabAnimationClip* clip = FindPresentationClip(document, ownerId, runtime.clipName);
+		if (clip && std::any_of(clip->tracks.begin(), clip->tracks.end(), [&](const auto& track) {
+			const auto* target = ResolvePresentationTarget(document, ownerId, track);
+			return target && blockedEntityIds.contains(target->id);
+		})) { ++iterator; continue; }
 		bool valid = owner && clip && SceneEntityQuery::IsEntityActiveInHierarchy(document, *owner) &&
 			!HasGameplayOwnership(document, runtime.originalPoses);
 		// 編集/参照変更で退避していないpropertyへ書き込むことを防ぐ。
@@ -504,6 +539,19 @@ std::vector<ScenePresentationCompletion> ScenePrefabAnimationSystem::ConsumePres
 	std::vector<ScenePresentationCompletion> result;
 	result.swap(presentationCompletions_);
 	return result;
+}
+
+void ScenePrefabAnimationSystem::DiscardPresentationsForEntities(const std::unordered_set<uint64_t>& entityIds) {
+	for (auto it = presentationRuntimes_.begin(); it != presentationRuntimes_.end();) {
+		if (entityIds.contains(it->first) || std::any_of(it->second.originalPoses.begin(), it->second.originalPoses.end(), [&](const auto& pose) {
+			return entityIds.contains(pose.entityId);
+		})) {
+			RemovePresentationCompletions(it->first);
+			presentationOriginalActive_.erase(it->first);
+			it = presentationRuntimes_.erase(it);
+		} else ++it;
+	}
+	for (uint64_t id : entityIds) { RemovePresentationCompletions(id); presentationOriginalActive_.erase(id); }
 }
 
 void ScenePrefabAnimationSystem::Clear(SceneDocument* document) {

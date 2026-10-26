@@ -2,6 +2,7 @@
 #pragma once
 #include "../../engine/scene/BaseScene.h"
 #include "SceneRuntimeObjectBinding.h"
+#include "SceneSpawnPresentation.h"
 #include "systems/gameplay/ai/SceneAgentSystem.h"
 #include "systems/audio/SceneAudioSystem.h"
 #include "systems/gameplay/combat/SceneAttackRunnerSystem.h"
@@ -97,6 +98,13 @@ private:
 	void ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests);
 	void ProcessMenuPulses(const SceneDocument& document, const std::vector<SceneMenuPulse>& pulses);
 	void ReportMenuFailure(const std::string& detail);
+	// 初回/内容置換時だけ空表示を準備する。reset=trueは通常Frameのoverride再構築用。
+	// 同世代の遷移hold/Pauseでは、進行済みの文字を保持する。
+	void PrepareGameFlowTextOverrides(bool reset);
+	// 発生元のserialを独立に照合し、Editor向けにはScene内で一意のserialへ束ねる。
+	void ReportPreparationDiagnostic(const ScenePreparationDiagnostic& diagnostic, uint64_t& sourceSerial);
+	// 再読込拒否/失敗だけを既存の言語対応Popup/ログ経路へ渡す。Scene進行は停止しない。
+	void ReportSceneRestartFailure(const std::string& detail);
 	void DrawSceneView(Camera* viewCamera, uint64_t skipEntityId = 0);
 	void DrawPreparedSceneContentForView(
 		Camera* viewCamera,
@@ -110,8 +118,14 @@ private:
 	Camera* debugCamera_ = nullptr;
 	Player* player_ = nullptr;
 	std::vector<SceneRuntimeObjectBinding> runtimeObjectBindings_;
+	// Objectの所有は変えず、出現中branchだけをSimulationから除外する。
+	std::vector<SceneRuntimeObjectBinding> gameplayObjectBindings_;
+	SceneSpawnFrame spawnFrame_;
 	ScenePreparationDiagnostic preparationDiagnostic_;
+	uint64_t flowDiagnosticSerial_ = 0, spawnerDiagnosticSerial_ = 0;
 	uint64_t preparationDiagnosticSerial_ = 0;
+	uint64_t gameFlowTextDocumentGeneration_ = 0;
+	SceneInstanceId pendingRestartSceneInstanceId_ = kInvalidSceneInstanceId;
 	SceneUiControlFrame uiControl_;
 	bool uiGameplayInputBlocked_ = false;
 	std::vector<SceneUiActionRequest> pendingMenuRequests_;

@@ -283,10 +283,12 @@ void SceneAttackRunnerSystem::UpdateHitWindows(
 void SceneAttackRunnerSystem::Advance(
 	SceneDocument& document,
 	ScenePrefabAnimationSystem& prefabAnimationSystem,
-	float deltaTime
+	float deltaTime,
+	const std::unordered_set<uint64_t>& blockedEntityIds
 ) {
 	for (auto iterator = runtimes_.begin(); iterator != runtimes_.end();) {
 		const uint64_t ownerEntityId = iterator->first;
+		if (blockedEntityIds.contains(ownerEntityId)) { ++iterator; continue; }
 		Runtime& runtime = iterator->second;
 		SceneEntity* owner = document.FindEntity(ownerEntityId);
 		if (!owner || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *owner)) {

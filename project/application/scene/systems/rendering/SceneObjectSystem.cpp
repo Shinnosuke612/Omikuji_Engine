@@ -20,6 +20,7 @@
 #include <functional>
 #include <sstream>
 #include <unordered_set>
+#include <utility>
 
 namespace {
 	using AgentSettingsResolver::ResolveAgentBehaviorSettings;
@@ -92,6 +93,8 @@ void SceneObjectSystem::SyncModelsInternal(
 	}
 
 	std::unordered_set<uint64_t> requiredIds;
+	if (spawnFrame_.documentGeneration != document->GetContentGeneration()) spawnFrame_ = {};
+	modelDocument_ = spawnFrame_.documentGeneration != 0 ? document : nullptr;
 	std::unordered_set<uint64_t> initialAnimationPoseIds;
 	for (const SceneEntity& entity : document->GetEntities()) {
 		const SceneComponent* meshRenderer =
@@ -129,6 +132,19 @@ void SceneObjectSystem::SyncModelsInternal(
 		const SceneComponent* animator =
 			FindEnabledComponent(entity, "Animator");
 		ModelRuntime& runtime = found->second;
+		// Pool再有効化は新しいclip時刻0から。停止中の通常Frameでは再生設定を切り替えない。
+		for (const auto& visual : spawnFrame_.visuals) {
+			uint64_t id = entity.id;
+			for (size_t depth = 0; id && depth <= document->GetEntities().size(); ++depth) {
+				if (id == visual.rootEntityId) {
+					if (runtime.spawnActivationSerial != visual.activationSerial) runtime.animatorInitialized = false;
+					runtime.spawnActivationSerial = visual.activationSerial;
+					break;
+				}
+				const auto* parent = document->FindEntity(id);
+				id = parent ? parent->parentId : 0;
+			}
+		}
 		const bool hasAnimator = animator && runtime.object->HasAnimation();
 		const size_t clipCount = runtime.object->GetAnimationClipCount();
 		const int defaultClip = clipCount > 0
@@ -143,7 +159,7 @@ void SceneObjectSystem::SyncModelsInternal(
 			? AnimationBlendCurve::Linear
 			: AnimationBlendCurve::SmoothStep;
 		const bool initializeAnimator = !runtime.animatorInitialized;
-		if (!advanceAnimation && initializeAnimator) {
+		if (initializeAnimator) {
 			initialAnimationPoseIds.insert(entity.id);
 		}
 
@@ -388,8 +404,8 @@ void SceneObjectSystem::SyncModelsInternal(
 			updateEntity(entity->parentId);
 		}
 		if (IsEntityActiveInHierarchy(*document, *entity)) {
-			if (advanceAnimation || initialAnimationPoseIds.contains(entityId)) {
-				object->UpdateAnimation(deltaTime);
+			if ((advanceAnimation && !spawnFrame_.blockedEntityIds.contains(entityId)) || initialAnimationPoseIds.contains(entityId)) {
+				object->UpdateAnimation(spawnFrame_.blockedEntityIds.contains(entityId) ? 0.0f : deltaTime);
 			}
 			object->Update();
 		}
@@ -399,6 +415,7 @@ void SceneObjectSystem::SyncModelsInternal(
 	for (const SceneEntity& entity : document->GetEntities()) {
 		updateEntity(entity.id);
 	}
+	ApplySpawnPresentation();
 }
 
 void SceneObjectSystem::SyncSprites(const SceneDocument* document) {
@@ -490,11 +507,45 @@ void SceneObjectSystem::BuildBindings(
 }
 
 void SceneObjectSystem::ApplyRenderCamera(Camera* camera) {
+	ApplySpawnPresentation();
 	Object3dCommon::GetInstance()->SetDefaultCamera(camera);
 	for (auto& [entityId, runtime] : models_) {
 		(void)entityId;
 		if (runtime.object) {
 			runtime.object->UpdateForCamera(camera);
+		}
+	}
+}
+
+void SceneObjectSystem::SetSpawnPresentationFrame(SceneSpawnFrame frame) {
+	spawnFrame_ = std::move(frame);
+}
+
+void SceneObjectSystem::ApplySpawnPresentation() {
+	// 前Frameの対象も必ず解除する。Modelの作り直しや世代差替えへ倍率を持ち越さない。
+	for (auto& [id, runtime] : models_) {
+		(void)id;
+		if (runtime.object) runtime.object->SetRenderWorldDelta(MakeIdentity4x4());
+	}
+	if (spawnFrame_.documentGeneration == 0 || !modelDocument_ || spawnFrame_.documentGeneration != modelDocument_->GetContentGeneration()) return;
+	for (const auto& visual : spawnFrame_.visuals) {
+		const auto* root = modelDocument_->FindEntity(visual.rootEntityId);
+		const auto* rootObject = FindObject(visual.rootEntityId);
+		if (!root || !root->active || !rootObject || !std::isfinite(visual.scale) || visual.scale < 0.0f || visual.scale > 1.0f) continue;
+		const auto& world = rootObject->GetWorldMatrix();
+		const Vector3 p{world.m[3][0], world.m[3][1], world.m[3][2]};
+		const Matrix4x4 delta = Multiply(Multiply(MakeTranslateMatrix({-p.x, -p.y, -p.z}),
+			MakeScaleMatrix({visual.scale, visual.scale, visual.scale})), MakeTranslateMatrix(p));
+		for (const auto& entity : modelDocument_->GetEntities()) {
+			uint64_t id = entity.id;
+			for (size_t depth = 0; id && depth <= modelDocument_->GetEntities().size(); ++depth) {
+				if (id == root->id) {
+					if (auto* object = FindObject(entity.id)) object->SetRenderWorldDelta(delta);
+					break;
+				}
+				const auto* ancestor = modelDocument_->FindEntity(id);
+				id = ancestor ? ancestor->parentId : 0;
+			}
 		}
 	}
 }
@@ -606,6 +657,8 @@ const SceneObjectSystem::ModelRuntime* SceneObjectSystem::FindModelRuntime(
 }
 
 void SceneObjectSystem::ClearModels() {
+	spawnFrame_ = {};
+	modelDocument_ = nullptr;
 	models_.clear();
 }
 

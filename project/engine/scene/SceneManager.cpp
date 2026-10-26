@@ -254,6 +254,19 @@ void SceneManager::ReloadCurrentScene() {
 	}
 }
 
+SceneInstanceId SceneManager::RequestSceneRestart(SceneInstanceId sourceInstanceId) {
+	if (sourceInstanceId == kInvalidSceneInstanceId || sourceInstanceId != activeSceneInstanceId_ ||
+		pendingSceneInstance_ || presentedTransitionBusy_ || transitionHeld_ ||
+		(executionContext_ && !executionContext_->IsPlaying()) || !sceneCatalog_ ||
+		!sceneCatalog_->Find(currentSceneName_)) return kInvalidSceneInstanceId;
+	const SceneInstanceId id = LoadScene(currentSceneName_, SceneLoadMode::Single);
+	if (id != kInvalidSceneInstanceId) {
+		pendingRestartScene_ = true;
+		pendingReloadSceneInstanceId_ = sourceInstanceId;
+	}
+	return id;
+}
+
 bool SceneManager::IsUiTransitionSourceValid(const SceneMenuSource& source) const {
 	const auto* document = GetActiveSceneDocument();
 	return source.instanceId && source.instanceId == activeSceneInstanceId_ && document &&

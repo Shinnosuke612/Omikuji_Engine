@@ -390,6 +390,12 @@ struct SceneComponent {
 	Text2DPlacement textScene2DPlacement{};
 	std::vector<SceneTextMotionClip> textMotionClips;
 	bool gameFlowAutoStart = true;
+	// 欠落時は従来の開始順。案内はTextRenderer原本ではなくRuntime文字overrideを使う。
+	std::string gameFlowStartSequence = "CountdownFirst";
+	std::string gameFlowIntroText = "敵を全滅させよう";
+	float gameFlowIntroSeconds = 1.5f;
+	uint64_t gameFlowIntroTextEntityId = 0; // 0はカウントダウン用Textと共用。
+	std::string gameFlowIntroMotionClipId;
 	int gameFlowCountdownStart = 3;
 	float gameFlowCountdownStepSeconds = 1.0f;
 	std::string gameFlowStartCueText = "START!";
@@ -705,6 +711,11 @@ struct SceneComponent {
 	float enemySpawnerInterval = 1.0f;
 	float enemySpawnerRadius = 3.0f;
 	bool enemySpawnerAutoStart = true;
+	// Instantは旧JSON互換。ScaleUpは描画だけを0〜100%から拡大し、原本Transformを保つ。
+	std::string enemySpawnerSpawnAppearance = "Instant";
+	float enemySpawnerSpawnStartScale = 0.0f;
+	float enemySpawnerSpawnDuration = 0.5f;
+	std::string enemySpawnerSpawnCurve = "EaseOutCubic";
 	std::string enemyHealthStatId = "hp";
 	float enemyDetectionRange = 12.0f;
 	float enemyLoseRange = 18.0f;

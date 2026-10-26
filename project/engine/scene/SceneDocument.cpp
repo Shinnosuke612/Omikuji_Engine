@@ -1489,6 +1489,11 @@ namespace {
 			result["clips"] = std::move(clips);
 		} else if (component.type == "GameFlowDirector") {
 			result["autoStart"] = component.gameFlowAutoStart;
+			result["startSequence"] = component.gameFlowStartSequence;
+			result["introText"] = component.gameFlowIntroText;
+			result["introSeconds"] = component.gameFlowIntroSeconds;
+			result["introTextEntityId"] = component.gameFlowIntroTextEntityId;
+			result["introMotionClipId"] = component.gameFlowIntroMotionClipId;
 			result["countdownStart"] = component.gameFlowCountdownStart;
 			result["countdownStepSeconds"] = component.gameFlowCountdownStepSeconds;
 			result["startCueText"] = component.gameFlowStartCueText;
@@ -1926,6 +1931,10 @@ namespace {
 			result["interval"] = component.enemySpawnerInterval;
 			result["radius"] = component.enemySpawnerRadius;
 			result["autoStart"] = component.enemySpawnerAutoStart;
+			result["spawnAppearance"] = component.enemySpawnerSpawnAppearance;
+			result["spawnStartScale"] = component.enemySpawnerSpawnStartScale;
+			result["spawnDuration"] = component.enemySpawnerSpawnDuration;
+			result["spawnCurve"] = component.enemySpawnerSpawnCurve;
 		} else if (component.type == "Projectile") {
 			result["direction"] = VectorToJson(component.projectileDirection);
 			result["speed"] = component.projectileSpeed;
@@ -2453,6 +2462,16 @@ namespace {
 		component.monitorCameraEntityId = RemapEntityId(
 			component.monitorCameraEntityId, idMap, preserveUnmappedIds
 		);
+		// 共用の0は保ち、Scene複製/Prefab往復では全Flow参照を同じID規則へ追従させる。
+		component.gameFlowIntroTextEntityId = RemapEntityId(component.gameFlowIntroTextEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowCountdownTextEntityId = RemapEntityId(component.gameFlowCountdownTextEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowPhaseTextEntityId = RemapEntityId(component.gameFlowPhaseTextEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowTimerTextEntityId = RemapEntityId(component.gameFlowTimerTextEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowRemainingTextEntityId = RemapEntityId(component.gameFlowRemainingTextEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowResultRootEntityId = RemapEntityId(component.gameFlowResultRootEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowResultTimeTextEntityId = RemapEntityId(component.gameFlowResultTimeTextEntityId, idMap, preserveUnmappedIds);
+		for (auto& phase : component.gameFlowPhases) for (auto& wave : phase.waves)
+			wave.spawnerEntityId = RemapEntityId(wave.spawnerEntityId, idMap, preserveUnmappedIds);
 		component.thirdPersonTargetEntityId = RemapEntityId(
 			component.thirdPersonTargetEntityId, idMap, preserveUnmappedIds
 		);
@@ -2868,6 +2887,11 @@ namespace {
 				}
 				if (component.type == "GameFlowDirector") {
 					component.gameFlowAutoStart = value.value("autoStart", component.gameFlowAutoStart);
+					component.gameFlowStartSequence = value.value("startSequence", component.gameFlowStartSequence);
+					component.gameFlowIntroText = value.value("introText", component.gameFlowIntroText);
+					component.gameFlowIntroSeconds = value.value("introSeconds", component.gameFlowIntroSeconds);
+					component.gameFlowIntroTextEntityId = value.value("introTextEntityId", uint64_t{});
+					component.gameFlowIntroMotionClipId = value.value("introMotionClipId", std::string{});
 					component.gameFlowCountdownStart = value.value("countdownStart", component.gameFlowCountdownStart);
 					component.gameFlowCountdownStepSeconds = value.value("countdownStepSeconds", component.gameFlowCountdownStepSeconds);
 					component.gameFlowStartCueText = value.value("startCueText", component.gameFlowStartCueText);
@@ -4203,6 +4227,10 @@ namespace {
 					component.enemySpawnerAutoStart = value.value(
 						"autoStart", component.enemySpawnerAutoStart
 					);
+					component.enemySpawnerSpawnAppearance = value.value("spawnAppearance", component.enemySpawnerSpawnAppearance);
+					component.enemySpawnerSpawnStartScale = value.value("spawnStartScale", component.enemySpawnerSpawnStartScale);
+					component.enemySpawnerSpawnDuration = value.value("spawnDuration", component.enemySpawnerSpawnDuration);
+					component.enemySpawnerSpawnCurve = value.value("spawnCurve", component.enemySpawnerSpawnCurve);
 				}
 			}
 			if (!component.type.empty()) {

@@ -233,6 +233,7 @@ void RuntimeScene::Initialize()
 		Object3dCommon::GetInstance()->GetDxCommon(),
 		GetSceneAssetId() + "_" + std::to_string(GetSceneInstanceId())
 	);
+	PrepareGameFlowTextOverrides(false);
 
 }
 
@@ -386,14 +387,71 @@ void RuntimeScene::SyncMenuPresentation() {
 	if (const auto issue = menuSystem_.ConsumeDiagnostic(); !issue.empty()) ReportMenuFailure(issue);
 }
 
+void RuntimeScene::PrepareGameFlowTextOverrides(bool reset) {
+	const SceneDocument* document = GetSceneDocument();
+	const auto* context = sceneManager_ ? sceneManager_->GetExecutionContext() : nullptr;
+	if (!document || (context && context->IsEditing())) {
+		if (gameFlowTextDocumentGeneration_ != 0) textRenderSystem_.ClearTextOverrides();
+		gameFlowTextDocumentGeneration_ = 0;
+		return;
+	}
+	const uint64_t generation = document->GetContentGeneration();
+	if (!reset && gameFlowTextDocumentGeneration_ == generation) return;
+	// 保存文字や有効状態を書き換えず、旧Documentの同IDにも表示を持ち越さない。
+	if (gameFlowTextDocumentGeneration_ != generation) textRenderSystem_.ClearTextOverrides();
+	for (const SceneEntity& entity : document->GetEntities()) {
+		for (const SceneComponent& component : entity.components) {
+			if (!component.enabled || component.type != "GameFlowDirector") continue;
+			for (uint64_t id : {component.gameFlowIntroTextEntityId, component.gameFlowCountdownTextEntityId,
+				component.gameFlowPhaseTextEntityId, component.gameFlowTimerTextEntityId,
+				component.gameFlowRemainingTextEntityId, component.gameFlowResultTimeTextEntityId}) {
+				textRenderSystem_.SetTextOverride(id, {});
+			}
+		}
+	}
+	gameFlowTextDocumentGeneration_ = generation;
+}
+
+void RuntimeScene::ReportPreparationDiagnostic(const ScenePreparationDiagnostic& diagnostic, uint64_t& sourceSerial) {
+	if (diagnostic.code == ScenePreparationDiagnosticCode::None || !diagnostic.serial || diagnostic.serial == sourceSerial) return;
+	sourceSerial = diagnostic.serial;
+	preparationDiagnostic_ = diagnostic;
+	preparationDiagnostic_.serial = ++preparationDiagnosticSerial_;
+	Logger::Log("[ScenePreparation] " + diagnostic.detail + "\n");
+}
+
+void RuntimeScene::ReportSceneRestartFailure(const std::string& detail) {
+	const auto* document = GetSceneDocument();
+	preparationDiagnostic_ = {ScenePreparationDiagnosticCode::InvalidReference,
+		document ? document->GetContentGeneration() : 0, 0, ++preparationDiagnosticSerial_, detail};
+	Logger::Log("[SceneRestart] " + detail + "\n");
+}
+
 void RuntimeScene::Update(float deltaTime)
 {
+	// 成功時はこのRuntime自体が置換される。失敗時だけ生存側が結果を一回消費する。
+	if (sceneManager_ && pendingRestartSceneInstanceId_ != kInvalidSceneInstanceId) {
+		SceneLoadOutcome outcome;
+		if (sceneManager_->ConsumeLoadOutcome(pendingRestartSceneInstanceId_, outcome)) {
+			pendingRestartSceneInstanceId_ = kInvalidSceneInstanceId;
+			if (outcome.status == SceneLoadStatus::Failed)
+				ReportSceneRestartFailure("SceneRestart:LoadFailed " + outcome.diagnostic);
+		}
+	}
 	SceneExecutionContext* executionContext = sceneManager_
 		? sceneManager_->GetExecutionContext()
 		: nullptr;
 	const bool editing = executionContext && executionContext->IsEditing();
 	const bool playing = !executionContext || executionContext->IsPlaying();
 	SceneDocument* activeDocument = GetSceneDocument();
+	if (!activeDocument || (spawnFrame_.documentGeneration != 0 &&
+		spawnFrame_.documentGeneration != activeDocument->GetContentGeneration())) {
+		enemySpawnerSystem_.Clear();
+		spawnFrame_ = {};
+		preparationDiagnostic_ = {};
+		flowDiagnosticSerial_ = spawnerDiagnosticSerial_ = 0;
+		objectSystem_.SetSpawnPresentationFrame({});
+	}
 	if (activeDocument) {
 		postProcessProfileSystem_.Sync(*activeDocument);
 		// 2Dの先読みはTransform確定を待たないため、Eventより前に完了させる。
@@ -420,6 +478,7 @@ void RuntimeScene::Update(float deltaTime)
 			pendingPresentationDocumentGeneration_ = 0;
 			SyncMenuPresentation();
 			objectSystem_.SyncSprites(activeDocument);
+			PrepareGameFlowTextOverrides(false);
 			textRenderSystem_.Sync(activeDocument);
 			sceneManager_->ChangeScene(targetSceneId);
 			return;
@@ -432,6 +491,7 @@ void RuntimeScene::Update(float deltaTime)
 			enemySpawnerSystem_,
 			deltaTime
 		);
+		ReportPreparationDiagnostic(gameFlowResult.diagnostic, flowDiagnosticSerial_);
 		for (const SceneGameFlowEntityRequest& request : gameFlowResult.entityRequests) {
 			if (SceneEntity* entity = activeDocument->FindEntity(request.entityId)) {
 				entity->active = request.active;
@@ -441,11 +501,13 @@ void RuntimeScene::Update(float deltaTime)
 			enemySpawnerSystem_.BeginFiniteWave(
 				request.spawnerEntityId,
 				request.generation,
-				request.count
+				request.count,
+				request.holdUntilGameplay
 			);
 		}
 		for (const SceneGameFlowMotionRequest& request : gameFlowResult.motionRequests) {
-			textMotionSystem_.Play(*activeDocument, request.entityId, request.clipId);
+			if (request.type == SceneGameFlowMotionRequestType::Reset) textMotionSystem_.Reset(request.entityId);
+			else textMotionSystem_.Play(*activeDocument, request.entityId, request.clipId);
 		}
 	} else {
 		gameFlowSystem_.Clear();
@@ -497,41 +559,48 @@ void RuntimeScene::Update(float deltaTime)
 		projectileSystem_.FlushRemovals(*activeDocument);
 		// 保存値を実行時状態へ展開し、Transform AnimationをObject同期前に反映する。
 		statSystem_.Update(*activeDocument);
-		// 前Frame Eventの順を保ち、active化と時刻0 PoseをObject同期より前にまとめる。
-		// 内容差替え後の同IDへ古い要求を適用しない。Persistent detachは同世代を維持する。
-		if (pendingPresentationDocumentGeneration_ != 0 &&
-			pendingPresentationDocumentGeneration_ == activeDocument->GetContentGeneration()) {
-			for (const ScenePresentationRequest& request : pendingPresentationRequests_) {
-				if (request.type == ScenePresentationRequestType::Play) {
-					prefabAnimationSystem_.PlayPresentation(*activeDocument, request.entityId, request.clipName);
-				} else if (request.type == ScenePresentationRequestType::Stop) {
-					prefabAnimationSystem_.StopPresentation(request.entityId);
-				} else {
-					prefabAnimationSystem_.ResetPresentation(*activeDocument, request.entityId);
-				}
-			}
-		}
-		pendingPresentationRequests_.clear();
-		pendingPresentationDocumentGeneration_ = 0;
-		// 演出だけ通常deltaTimeで更新し、GameFlow permission/HitStopから独立させる。
-		prefabAnimationSystem_.UpdatePresentations(*activeDocument, deltaTime);
-		if (gameFlowResult.gameplayAllowed) {
-			enemySpawnerSystem_.Update(*activeDocument, gameplayDeltaTime);
-		}
+		// Statのinactive除去後にPoolを復元し、同じFrameの全consumerへ参加制限を渡す。
+		enemySpawnerSystem_.Update(*activeDocument, SceneSpawnUpdateContext{
+			gameplayDeltaTime, deltaTime, gameFlowResult.gameplayAllowed, gameFlowResult.preparationSpawnerIds
+		});
 		spawnerResetEntityIds = enemySpawnerSystem_.ConsumeResetEntityIds();
+		const std::unordered_set<uint64_t> resetIds(spawnerResetEntityIds.begin(), spawnerResetEntityIds.end());
+		prefabAnimationSystem_.DiscardPresentationsForEntities(resetIds);
 		for (uint64_t entityId : spawnerResetEntityIds) {
 			attackRunnerSystem_.ResetEntity(*activeDocument, entityId);
 			stateMachineSystem_.ResetEntity(entityId);
 			prefabAnimationSystem_.ResetEntity(entityId);
 			enemySystem_.ResetEntity(entityId);
 			hitReactionSystem_.ResetEntity(entityId);
+			eventSystem_.ResetEntity(entityId);
 		}
+		spawnFrame_ = enemySpawnerSystem_.BuildPresentationFrame(*activeDocument, gameFlowResult.gameplayAllowed);
+		ReportPreparationDiagnostic(enemySpawnerSystem_.GetPreparationDiagnostic(), spawnerDiagnosticSerial_);
+		// 前Frame Eventの順を保ち、active化と時刻0 PoseをObject同期より前にまとめる。
+		// 内容差替え後の同IDへ古い要求を適用しない。Persistent detachは同世代を維持する。
+		if (pendingPresentationDocumentGeneration_ != 0 &&
+			pendingPresentationDocumentGeneration_ == activeDocument->GetContentGeneration()) {
+			for (const ScenePresentationRequest& request : pendingPresentationRequests_) {
+				if (request.type == ScenePresentationRequestType::Play) {
+					prefabAnimationSystem_.PlayPresentation(*activeDocument, request.entityId, request.clipName, spawnFrame_.blockedEntityIds);
+				} else if (request.type == ScenePresentationRequestType::Stop) {
+					prefabAnimationSystem_.StopPresentation(request.entityId);
+				} else {
+					prefabAnimationSystem_.ResetPresentation(*activeDocument, request.entityId, spawnFrame_.blockedEntityIds);
+				}
+			}
+		}
+		pendingPresentationRequests_.clear();
+		pendingPresentationDocumentGeneration_ = 0;
+		// 演出だけ通常deltaTimeで更新し、GameFlow permission/HitStopから独立させる。
+		prefabAnimationSystem_.UpdatePresentations(*activeDocument, deltaTime, spawnFrame_.blockedEntityIds);
 		if (gameFlowResult.gameplayAllowed) {
 			hitReactionSystem_.AdvanceRecoveries(statSystem_, gameplayDeltaTime);
 			attackRunnerSystem_.Advance(
 				*activeDocument,
 				prefabAnimationSystem_,
-				gameplayDeltaTime
+				gameplayDeltaTime,
+				spawnFrame_.blockedEntityIds
 			);
 			runtimeEffectSystem_.Spawn(
 				*activeDocument,
@@ -542,7 +611,7 @@ void RuntimeScene::Update(float deltaTime)
 				runtimeEffectSystem_.ConsumeGroundCrackRequests()
 			);
 			runtimeEffectSystem_.Advance(*activeDocument, deltaTime);
-			prefabAnimationSystem_.Update(*activeDocument, gameplayDeltaTime);
+			prefabAnimationSystem_.Update(*activeDocument, gameplayDeltaTime, spawnFrame_.blockedEntityIds);
 		}
 	} else {
 		audioSystem_.Clear();
@@ -563,10 +632,14 @@ void RuntimeScene::Update(float deltaTime)
 		enemySystem_.Clear();
 		enemySpawnerSystem_.Clear();
 		projectileSystem_.Clear();
+		spawnFrame_ = {};
+		preparationDiagnostic_ = {};
+		flowDiagnosticSerial_ = spawnerDiagnosticSerial_ = 0;
 		attachmentSystem_.Clear(&objectSystem_);
 	}
 
 	// Objectが実体を所有し、以降のSystemは再構築したbindingsだけを借用する。
+	objectSystem_.SetSpawnPresentationFrame(spawnFrame_);
 	objectSystem_.SyncModels(
 		activeDocument,
 		physicsSystem_,
@@ -579,10 +652,14 @@ void RuntimeScene::Update(float deltaTime)
 			*activeDocument,
 			runtimeObjectBindings_
 		);
+		gameplayObjectBindings_.clear();
+		for (const auto& binding : runtimeObjectBindings_) {
+			if (!spawnFrame_.blockedEntityIds.contains(binding.entityId)) gameplayObjectBindings_.push_back(binding);
+		}
 		physicsSystem_.SyncSceneSettings(
 			*activeDocument,
 			player_,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			editing
 		);
 		physicsSystem_.ResetBodies(
@@ -592,7 +669,7 @@ void RuntimeScene::Update(float deltaTime)
 		if (playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
 			enemySystem_.Update(
 				*activeDocument,
-				runtimeObjectBindings_,
+				gameplayObjectBindings_,
 				statSystem_,
 				prefabAnimationSystem_,
 				hitReactionSystem_,
@@ -602,19 +679,20 @@ void RuntimeScene::Update(float deltaTime)
 			// GroundXZ Agentは敵AIが決めた速度へ離隔補正だけを加える。
 			agentSystem_.Update(
 				*activeDocument,
-				runtimeObjectBindings_,
+				gameplayObjectBindings_,
 				gameplayDeltaTime
 			);
-			enemySystem_.ApplyMovementStops(runtimeObjectBindings_);
+			enemySystem_.ApplyMovementStops(gameplayObjectBindings_);
 			projectileSystem_.Update(
 				*activeDocument,
-				runtimeObjectBindings_,
+				gameplayObjectBindings_,
 				gameplayDeltaTime
 			);
 		}
 	} else {
 		audioSystem_.Clear();
 		runtimeObjectBindings_.clear();
+		gameplayObjectBindings_.clear();
 		agentSystem_.Clear();
 		attachmentSystem_.Clear(&objectSystem_);
 		combatSystem_.Clear();
@@ -661,17 +739,17 @@ void RuntimeScene::Update(float deltaTime)
 		// State行動は入力取得後、Physics確定前に速度・攻撃判定を更新する。
 		stateMachineSystem_.Update(
 			*activeDocument,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			player_,
 			attackRunnerSystem_,
 			prefabAnimationSystem_,
 			gameplayDeltaTime,
-			{},
+			spawnFrame_.blockedEntityIds,
 			!uiGameplayInputBlocked_
 		);
 		attackRunnerSystem_.ApplyMotion(
 			*activeDocument,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			player_,
 			playerAttackInputDirection,
 			gameplayDeltaTime
@@ -679,14 +757,14 @@ void RuntimeScene::Update(float deltaTime)
 		// Combat後に予約した被弾速度を、AI/Agent/Stateの書込み後に上書きする。
 		hitReactionSystem_.ApplyMotionOverrides(
 			*activeDocument,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			gameplayDeltaTime
 		);
 	}
 	if (activeDocument && (!playing || gameplayDeltaTime > 0.0f)) {
 		physicsSystem_.Step(
 			player_,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			gameplayDeltaTime,
 			playing
 		);
@@ -703,18 +781,21 @@ void RuntimeScene::Update(float deltaTime)
 			);
 		}
 	}
-	if (activeDocument && playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
-		// Bone追従はAnimation/Physics後、当たり判定とEventは最終Transform後に評価する。
+	if (activeDocument && playing) {
+		// 初期準備でも時刻0の骨へ追従する。参加制限はCombat側に残す。
 		attachmentSystem_.Update(
 			*activeDocument,
 			objectSystem_,
 			runtimeObjectBindings_
 		);
+	}
+	if (activeDocument && playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
 		combatSystem_.Update(
 			*activeDocument,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			statSystem_,
-			gameplayDeltaTime
+			gameplayDeltaTime,
+			spawnFrame_.blockedEntityIds
 		);
 		std::vector<SceneCombatHitEvent> hitEvents = combatSystem_.ConsumeHitEvents();
 		for (const SceneCombatHitEvent& hitEvent : hitEvents) {
@@ -723,7 +804,7 @@ void RuntimeScene::Update(float deltaTime)
 		runtimeEffectSystem_.SpawnHitEffects(hitEvents);
 		hitReactionSystem_.Update(
 			*activeDocument,
-			runtimeObjectBindings_,
+			gameplayObjectBindings_,
 			statSystem_,
 			stateMachineSystem_,
 			hitEvents,
@@ -791,9 +872,14 @@ void RuntimeScene::Update(float deltaTime)
 			stateMachineSystem_,
 			gameplayDeltaTime,
 			eventSignals,
-			{},
+			spawnFrame_.blockedEntityIds,
 			!uiGameplayInputBlocked_
 		);
+		if (eventResult.restartSceneRequested) {
+			pendingRestartSceneInstanceId_ = sceneManager_->RequestSceneRestart(GetSceneInstanceId());
+			if (pendingRestartSceneInstanceId_ != kInvalidSceneInstanceId) return;
+			ReportSceneRestartFailure("SceneRestart:Rejected");
+		}
 		if (!eventResult.sceneTransitionId.empty()) {
 			// Capture前は現在のPose/Profileを保持する。拒否でも即時遷移へ落とさない。
 			if (!eventResult.transitionAssetPath.empty()) {
@@ -806,6 +892,7 @@ void RuntimeScene::Update(float deltaTime)
 			postProcessProfileSystem_.Reset(activeDocument);
 			SyncMenuPresentation();
 			objectSystem_.SyncSprites(activeDocument);
+			PrepareGameFlowTextOverrides(false);
 			textRenderSystem_.Sync(activeDocument);
 			sceneManager_->ChangeScene(eventResult.sceneTransitionId);
 			return;
@@ -851,6 +938,8 @@ void RuntimeScene::Update(float deltaTime)
 	postProcessProfileSystem_.Update(playing ? gameplayDeltaTime : 0.0f);
 	textRenderSystem_.ClearTextOverrides();
 	textRenderSystem_.ClearPresentationOverrides();
+	// Flowがまだ内容を要求しない文字も空表示にし、この後の要求だけを表示する。
+	PrepareGameFlowTextOverrides(true);
 	if (activeDocument) {
 		for (const SceneGameFlowTextRequest& request : gameFlowResult.textRequests) {
 			textRenderSystem_.SetTextOverride(request.entityId, request.text);
@@ -887,6 +976,9 @@ void RuntimeScene::Update(float deltaTime)
 	SyncMenuPresentation();
 	objectSystem_.SyncSprites(resourceDocument);
 	textRenderSystem_.Sync(resourceDocument);
+	// Eventによる消失/階層変更をIDで再確認。Simulation中のsnapshotは変えない。
+	if (activeDocument && playing) objectSystem_.SetSpawnPresentationFrame(
+		enemySpawnerSystem_.BuildPresentationFrame(*activeDocument, gameFlowResult.gameplayAllowed));
 }
 
 void RuntimeScene::UpdateTransitionHold()
@@ -903,7 +995,8 @@ void RuntimeScene::UpdateTransitionHold()
 	cameraSystem_.UpdateTransitionHold(*document, camera_, player_, runtimeObjectBindings_);
 	lightingSystem_.Sync(document);
 	environmentSystem_.Sync(document, runtimeObjectBindings_);
-	// TextMotion/GameFlowの既存overrideは消さず、新Sceneだけauthoring表示を準備する。
+	// 新Sceneの管理文字は初回から隠し、旧Sceneの進行済み表示/演出時計は保持する。
+	PrepareGameFlowTextOverrides(false);
 	SyncMenuPresentation();
 	textRenderSystem_.Sync(document);
 }
@@ -911,9 +1004,17 @@ void RuntimeScene::UpdateTransitionHold()
 void RuntimeScene::UpdatePaused()
 {
 	const auto* source = GetSceneDocument();
+	if (!source || (spawnFrame_.documentGeneration != 0 && spawnFrame_.documentGeneration != source->GetContentGeneration())) {
+		enemySpawnerSystem_.Clear();
+		spawnFrame_ = {};
+		preparationDiagnostic_ = {};
+		flowDiagnosticSerial_ = spawnerDiagnosticSerial_ = 0;
+		objectSystem_.SetSpawnPresentationFrame({});
+	}
 	cameraSystem_.UpdatePaused(camera_, debugCamera_);
 	// UI時計はprepassで凍結済み。参照と文字cacheだけ同期し、内容置換後の旧色を残さない。
 	SyncMenuPresentation();
+	PrepareGameFlowTextOverrides(false);
 	textRenderSystem_.Sync(GetSceneDocument());
 	SceneDocument* document = GetSceneDocument();
 	lightingSystem_.Sync(document);
@@ -1075,6 +1176,8 @@ void RuntimeScene::DrawShadow()
 void RuntimeScene::CollectShadowCasters(
 	std::vector<Object3d*>& shadowCasters
 ) {
+	// 最初の描画がShadowでも、Attachment後の出現倍率を定数へ反映する。
+	ApplyRenderCamera(GetSceneViewCamera());
 	const bool hidePlayerModel = ShouldHidePlayerModelForCamera(camera_);
 	SceneDocument* document = GetSceneDocument();
 	if (document) {
@@ -1094,6 +1197,14 @@ void RuntimeScene::RenderShadowCasters(
 
 void RuntimeScene::Finalize()
 {
+	pendingRestartSceneInstanceId_ = kInvalidSceneInstanceId;
+	gameFlowTextDocumentGeneration_ = 0;
+	spawnFrame_ = {};
+	preparationDiagnostic_ = {};
+	flowDiagnosticSerial_ = spawnerDiagnosticSerial_ = 0;
+	gameplayObjectBindings_.clear();
+	objectSystem_.SetSpawnPresentationFrame({});
+	enemySpawnerSystem_.Clear();
 	// 非所有参照を持つSystemから解除し、最後にObjectとCameraを破棄する。
 	monitorSystem_.Finalize(&runtimeObjectBindings_);
 	agentSystem_.Clear();

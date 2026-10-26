@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../../../../engine/math/Transform.h"
@@ -20,7 +21,8 @@ struct ScenePresentationCompletion {
 
 class ScenePrefabAnimationSystem {
 public:
-	void Update(SceneDocument& document, float deltaTime);
+	// owner/解決targetがblockedならsampleと時計を保留し、Runtimeを保持する。
+	void Update(SceneDocument& document, float deltaTime, const std::unordered_set<uint64_t>& blockedEntityIds = {});
 	bool Play(
 		const SceneDocument& document,
 		uint64_t entityId,
@@ -32,13 +34,16 @@ public:
 	// 演出入口は非LoopのTransform Clip専用。失敗時はPose/activeを変更しない。
 	// 成功時はownerをactive化し、親座標系の時刻0 Poseを直ちに適用する。
 	bool PlayPresentation(SceneDocument& document, uint64_t entityId,
-		const std::string& clipName);
+		const std::string& clipName, const std::unordered_set<uint64_t>& blockedEntityIds = {});
 	// Stopは現在Poseを保持し、Resetは初回Play前の所有propertyだけを復元する。
 	// 両操作はactiveを変えず、完了通知を破棄する。
 	void StopPresentation(uint64_t entityId);
-	void ResetPresentation(SceneDocument& document, uint64_t entityId);
+	// blocked targetへの復元は拒否しfalseを返す。
+	bool ResetPresentation(SceneDocument& document, uint64_t entityId, const std::unordered_set<uint64_t>& blockedEntityIds = {});
 	// Object同期前に通常deltaTime（秒）で一回呼ぶ。開始Frameは時刻0を保持する。
-	void UpdatePresentations(SceneDocument& document, float deltaTime);
+	void UpdatePresentations(SceneDocument& document, float deltaTime, const std::unordered_set<uint64_t>& blockedEntityIds = {});
+	// Pool baseline復元後だけ使う。古いPose/activeを復元せず、対象を持つ演出と通知を破棄する。
+	void DiscardPresentationsForEntities(const std::unordered_set<uint64_t>& entityIds);
 	// 未消費pulseを取り出して空にする。Event gateが開くまでUpdateをまたいで保持する。
 	std::vector<ScenePresentationCompletion> ConsumePresentationCompletions();
 	// 同じ内容世代のdocumentだけPose/activeを復元する。差替え済みなら無適用破棄。

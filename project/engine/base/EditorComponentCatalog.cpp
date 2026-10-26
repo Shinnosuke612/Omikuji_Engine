@@ -28,7 +28,15 @@ namespace {
 		EditorComponentTag::Prefab
 	}};
 
-	constexpr std::array<EditorComponentDefinition, 43> kDefinitions = {{
+	constexpr std::array<EditorComponentDefinition, 44> kDefinitions = {{
+		{
+			"GameFlowDirector", "ゲーム進行", "Game Flow Director",
+			"開始案内、敵出現待ち、カウントダウン、Phaseとクリア時間を設定します。",
+			"Configures briefing, enemy preparation, countdown, phases and clear time.",
+			EditorComponentCategory::EventAndFlow,
+			SceneContext, 43, -1, "",
+			EditorComponentTagBit(EditorComponentTag::Event) | EditorComponentTagBit(EditorComponentTag::Spawn)
+		},
 
 		{
 			"UICanvas", "UI画面", "UI Canvas",

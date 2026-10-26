@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../../SceneRuntimeObjectBinding.h"
+#include "../../SceneSpawnPresentation.h"
 #include "../../../../engine/collision/OBBCollider.h"
 #include "../../../../engine/collision/SphereCollider.h"
 #include "../../../../engine/math/Vector4.h"
@@ -49,6 +50,7 @@ public:
 		uint32_t colliderDebugSegments = 16;
 		PhysicsBody physicsBody;
 		bool hasPhysicsBody = false;
+		uint64_t spawnActivationSerial = 0;
 	};
 
 	SceneObjectSystem();
@@ -71,6 +73,8 @@ public:
 	);
 
 	void ApplyRenderCamera(Camera* camera);
+	// 値を保持し、各viewの描画定数を作る直前にID/世代から再解決する。
+	void SetSpawnPresentationFrame(SceneSpawnFrame frame);
 	void PrepareModelDraw() const;
 	void DrawModels(
 		const SceneDocument& document,
@@ -115,8 +119,12 @@ private:
 	};
 
 	void ClearModels();
+	void ApplySpawnPresentation();
 	void ClearSprites();
 
 	std::unordered_map<uint64_t, ModelRuntime> models_;
 	std::unordered_map<uint64_t, SpriteRuntime> sprites_;
+	SceneSpawnFrame spawnFrame_;
+	// SyncModelsから次の同期/Finalizeまで借用。Frame自体にはpointerを格納しない。
+	const SceneDocument* modelDocument_ = nullptr;
 };

@@ -101,6 +101,8 @@ struct SceneEventResult {
 	std::vector<SceneAudioRequest> audioRequests;
 	std::vector<SceneTextMotionRequest> textMotionRequests;
 	std::vector<ScenePresentationRequest> presentationRequests;
+	// Scene破棄は行わず、callerが現在Instanceの再読込を予約する。
+	bool restartSceneRequested = false;
 	std::vector<SceneUiActionRequest> menuRequests;
 };
 

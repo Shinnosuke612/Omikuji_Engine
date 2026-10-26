@@ -387,9 +387,12 @@ SceneEventResult SceneEventSystem::Update(
 			if (target) {
 				stateMachineSystem.RequestState(target->id, action.stateName);
 			}
+		} else if (action.type == "RestartScene" && result.sceneTransitionId.empty()) {
+			// 遷移と再起動のうち先に並んだ要求だけを採用し、Scene操作を二重予約しない。
+			result.restartSceneRequested = true;
 		} else if (
 			action.type == "SceneTransition" &&
-			result.sceneTransitionId.empty()
+			!result.restartSceneRequested && result.sceneTransitionId.empty()
 		) {
 			result.sceneTransitionId = action.sceneId;
 			result.transitionAssetPath = action.transitionAssetPath;
@@ -485,7 +488,7 @@ SceneEventResult SceneEventSystem::Update(
 			});
 		}
 	}
-	if (!result.sceneTransitionId.empty()) {
+	if (result.restartSceneRequested || !result.sceneTransitionId.empty()) {
 		result.menuRequests.clear();
 		result.postProcessRequest.type = ScenePostProcessRequestType::None;
 		result.cameraRequests.clear();

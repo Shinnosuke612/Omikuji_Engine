@@ -100,6 +100,8 @@ public: //公開メンバ関数
 	void SetModel(const std::string& filePath);
 	void SetCamera(Camera* camera){ this->camera = camera; }
 	void SetParent(const Object3d* parent) { parent_ = parent; }
+	// ワールド空間の描画補正。論理World/骨参照/親子Transformには適用しない。
+	void SetRenderWorldDelta(const Matrix4x4& matrix) { renderWorldDelta_ = matrix; }
 	void SetParentMatrixOverride(const Matrix4x4& matrix) {
 		parentMatrixOverride_ = matrix;
 		hasParentMatrixOverride_ = true;
@@ -204,6 +206,7 @@ private: //非公開メンバ関数
 private://メンバ変数
 	Transform transform;
 	Matrix4x4 objectWorldMatrix_ = MakeIdentity4x4();
+	Matrix4x4 renderWorldDelta_ = MakeIdentity4x4();
 	const Object3d* parent_ = nullptr;
 	Matrix4x4 parentMatrixOverride_ = MakeIdentity4x4();
 	bool hasParentMatrixOverride_ = false;

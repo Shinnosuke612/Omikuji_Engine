@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../../../../../engine/math/Vector3.h"
@@ -39,10 +40,12 @@ public:
 		uint64_t attackSetEntityId,
 		const std::string& attackName
 	);
+	// 出現中ownerの時刻/HitWindow/演出開始を保留する。状態は破棄しない。
 	void Advance(
 		SceneDocument& document,
 		ScenePrefabAnimationSystem& prefabAnimationSystem,
-		float deltaTime
+		float deltaTime,
+		const std::unordered_set<uint64_t>& blockedEntityIds = {}
 	);
 	void ApplyMotion(
 		SceneDocument& document,

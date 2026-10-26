@@ -76,7 +76,8 @@ void SceneCombatSystem::Update(
 	SceneDocument& document,
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	SceneStatSystem& statSystem,
-	float deltaTime
+	float deltaTime,
+	const std::unordered_set<uint64_t>& blockedEntityIds
 ) {
 	elapsedTime_ += (std::max)(deltaTime, 0.0f);
 	struct CombatBinding {
@@ -89,6 +90,7 @@ void SceneCombatSystem::Update(
 	for (const SceneRuntimeObjectBinding& binding : bindings) {
 		if (
 			!binding.entity ||
+			blockedEntityIds.contains(binding.entityId) ||
 			!binding.collider ||
 			!binding.collider->IsTrigger() ||
 			!SceneEntityQuery::IsEntityActiveInHierarchy(document, *binding.entity)
@@ -124,6 +126,7 @@ void SceneCombatSystem::Update(
 				FindInAncestors(document, *hit.entity, "Faction");
 			hitOwner = factionOwner.entity ? factionOwner.entity : hit.entity;
 		}
+		if (blockedEntityIds.contains(hitOwner->id)) continue;
 		const std::string hitFaction = ResolveFaction(document, *hitOwner);
 
 		for (const CombatBinding& hurt : hurtBoxes) {
@@ -142,7 +145,7 @@ void SceneCombatSystem::Update(
 					"StatSet"
 				).entity;
 			}
-			if (!statsEntity || statsEntity == hitOwner) {
+			if (!statsEntity || statsEntity == hitOwner || blockedEntityIds.contains(statsEntity->id)) {
 				continue;
 			}
 			if (hit.component->hitBoxIgnoreSameFaction) {
