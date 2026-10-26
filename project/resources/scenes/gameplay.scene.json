@@ -4687,6 +4687,10 @@
           "maxAlive": 20,
           "prefabPath": "resources/prefabs/SimpleEnemy.prefab.json",
           "radius": 8.0,
+          "spawnAppearance": "ScaleUp",
+          "spawnStartScale": 0.0,
+          "spawnDuration": 0.5,
+          "spawnCurve": "EaseOutCubic",
           "type": "EnemySpawner"
         }
       ],
@@ -4748,6 +4752,10 @@
           "maxAlive": 3,
           "prefabPath": "resources/prefabs/HeavyEnemy.prefab.json",
           "radius": 20.0,
+          "spawnAppearance": "ScaleUp",
+          "spawnStartScale": 0.0,
+          "spawnDuration": 0.5,
+          "spawnCurve": "EaseOutCubic",
           "type": "EnemySpawner"
         }
       ],
@@ -7286,6 +7294,11 @@
         {
           "autoStart": true,
           "countdownMotionClipId": "countdown",
+          "startSequence": "BriefingSpawnCountdown",
+          "introText": "敵を全滅させよう",
+          "introSeconds": 1.5,
+          "introTextEntityId": 0,
+          "introMotionClipId": "",
           "countdownStart": 3,
           "countdownStepSeconds": 1.0,
           "countdownTextEntityId": 39,

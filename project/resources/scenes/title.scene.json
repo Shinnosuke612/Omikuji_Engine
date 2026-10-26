@@ -73,7 +73,7 @@
       }
     },
     {
-      "active": false,
+      "active": true,
       "components": [
         {
           "characterSpacing": 0.0,
@@ -328,355 +328,6 @@
       "active": true,
       "components": [
         {
-          "characterSpacing": 0.0,
-          "clipEnabled": false,
-          "color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "enabled": true,
-          "fontFamily": "Yu Gothic UI",
-          "fontSize": 28.0,
-          "fontStyle": "Normal",
-          "fontWeight": "Regular",
-          "horizontalAlignment": "Center",
-          "layoutSize": [
-            0.0,
-            0.0
-          ],
-          "lineSpacing": 1.0,
-          "localId": 1,
-          "opacity": 1.0,
-          "outlineColor": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "outlineEnabled": true,
-          "outlineWidth": 2.0,
-          "overflowMode": "Overflow",
-          "overlayPlacement": {
-            "clipEnabled": false,
-            "pivot": [
-              0.5,
-              0.5
-            ],
-            "position": [
-              0.0,
-              80.0
-            ],
-            "rotation": 0.0,
-            "scale": [
-              1.0,
-              1.0
-            ],
-            "sortingOrder": 10,
-            "viewportAnchor": [
-              0.5,
-              0.5799999833106995
-            ]
-          },
-          "pivot": [
-            0.5,
-            0.5
-          ],
-          "renderSpace": "ScreenOverlay",
-          "scene2DPlacement": {
-            "clipEnabled": false,
-            "pivot": [
-              0.0,
-              0.0
-            ],
-            "position": [
-              0.0,
-              0.0
-            ],
-            "rotation": 0.0,
-            "scale": [
-              1.0,
-              1.0
-            ],
-            "sortingOrder": 0,
-            "viewportAnchor": [
-              0.0,
-              0.0
-            ]
-          },
-          "shadowColor": [
-            0.0,
-            0.0,
-            0.0,
-            0.5
-          ],
-          "shadowEnabled": false,
-          "shadowOffset": [
-            2.0,
-            2.0
-          ],
-          "sortingOrder": 10,
-          "text": "PRESS ENTER",
-          "type": "TextRenderer",
-          "verticalAlignment": "Center",
-          "viewportAnchor": [
-            0.5,
-            0.5799999833106995
-          ],
-          "wrapMode": "NoWrap"
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 3,
-      "locked": false,
-      "modelPath": "",
-      "name": "Start Prompt",
-      "parentId": 0,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100.0,
-          100.0
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "translate": [
-          0.0,
-          0.0,
-          0.0
-        ]
-      }
-    },
-    {
-      "active": true,
-      "components": [
-        {
-          "bindings": [
-            {
-              "actions": [
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "presentationClipName": "",
-                  "sceneId": "",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 2,
-                  "targetEntityName": "",
-                  "textMotionClipId": "",
-                  "transitionAssetPath": "",
-                  "type": "SetEntityActive",
-                  "value": 0.0
-                },
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "presentationClipName": "",
-                  "sceneId": "",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 2,
-                  "targetEntityName": "",
-                  "textMotionClipId": "intro",
-                  "transitionAssetPath": "",
-                  "type": "PlayTextMotion",
-                  "value": 0.0
-                }
-              ],
-              "cooldown": 0.0,
-              "presentationClipName": "",
-              "radius": 1.0,
-              "statComparison": "LessOrEqual",
-              "statId": "hp",
-              "statValue": 0.0,
-              "targetEntityId": 0,
-              "targetEntityName": "",
-              "targetPosition": [
-                0.0,
-                0.0,
-                0.0
-              ],
-              "textMotionClipId": "",
-              "triggerKey": "",
-              "triggerOnce": true,
-              "triggerType": "OnStart"
-            },
-            {
-              "actions": [
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "presentationClipName": "",
-                  "sceneId": "",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 2,
-                  "targetEntityName": "",
-                  "textMotionClipId": "exit",
-                  "transitionAssetPath": "",
-                  "type": "PlayTextMotion",
-                  "value": 0.0
-                }
-              ],
-              "cooldown": 0.0,
-              "presentationClipName": "",
-              "radius": 1.0,
-              "statComparison": "LessOrEqual",
-              "statId": "hp",
-              "statValue": 0.0,
-              "targetEntityId": 0,
-              "targetEntityName": "",
-              "targetPosition": [
-                0.0,
-                0.0,
-                0.0
-              ],
-              "textMotionClipId": "",
-              "triggerKey": "ENTER",
-              "triggerOnce": true,
-              "triggerType": "OnKeyPressed"
-            },
-            {
-              "actions": [
-                {
-                  "active": true,
-                  "postProcessManagerEntityId": 0,
-                  "postProcessManagerEntityName": "",
-                  "postProcessProfileId": "",
-                  "prefabParentToTarget": false,
-                  "prefabPath": "",
-                  "prefabUseTargetTransform": true,
-                  "presentationClipName": "",
-                  "sceneId": "gameplay",
-                  "statId": "",
-                  "statOperation": "Add",
-                  "stateName": "",
-                  "targetEntityId": 0,
-                  "targetEntityName": "",
-                  "textMotionClipId": "",
-                  "transitionAssetPath": "resources/transitions/sword_shatter.transition.json",
-                  "type": "SceneTransition",
-                  "value": 0.0
-                }
-              ],
-              "cooldown": 0.0,
-              "presentationClipName": "",
-              "radius": 1.0,
-              "statComparison": "LessOrEqual",
-              "statId": "hp",
-              "statValue": 0.0,
-              "targetEntityId": 2,
-              "targetEntityName": "",
-              "targetPosition": [
-                0.0,
-                0.0,
-                0.0
-              ],
-              "textMotionClipId": "exit",
-              "triggerKey": "",
-              "triggerOnce": true,
-              "triggerType": "OnTextMotionCompleted"
-            }
-          ],
-          "enabled": true,
-          "localId": 1,
-          "type": "EventTrigger"
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 4,
-      "locked": false,
-      "modelPath": "",
-      "name": "Title Flow Events",
-      "parentId": 0,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100.0,
-          100.0
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "translate": [
-          0.0,
-          0.0,
-          0.0
-        ]
-      }
-    },
-    {
-      "active": true,
-      "components": [
-        {
           "enabled": true,
           "localId": 1,
           "reflectionIntensity": 0.30000001192092896,
@@ -765,7 +416,7 @@
                       ]
                     },
                     {
-                      "time": 1.0,
+                      "time": 0.30000001192092896,
                       "value": [
                         -1.2000000476837158,
                         2.5999999046325684,
@@ -773,7 +424,7 @@
                       ]
                     },
                     {
-                      "time": 2.0,
+                      "time": 0.6000000238418579,
                       "value": [
                         0.0,
                         1.2000000476837158,
@@ -781,7 +432,7 @@
                       ]
                     },
                     {
-                      "time": 4.0,
+                      "time": 2.0,
                       "value": [
                         0.0,
                         1.2000000476837158,
@@ -805,26 +456,26 @@
                       ]
                     },
                     {
-                      "time": 1.0,
+                      "time": 0.30000001192092896,
                       "value": [
                         -1.5239067077636719,
-                        12.863289833068848,
+                        0.296919047832489,
                         -1.5661619901657104
+                      ]
+                    },
+                    {
+                      "time": 0.6000000238418579,
+                      "value": [
+                        -1.5708041191101074,
+                        6.136001110076904,
+                        -1.570802092552185
                       ]
                     },
                     {
                       "time": 2.0,
                       "value": [
                         -1.5708041191101074,
-                        24.985557556152344,
-                        -1.570802092552185
-                      ]
-                    },
-                    {
-                      "time": 4.0,
-                      "value": [
-                        -1.5708041191101074,
-                        24.985557556152344,
+                        6.136001110076904,
                         -1.570802092552185
                       ]
                     }
@@ -846,7 +497,15 @@
                       ]
                     },
                     {
-                      "time": 1.0,
+                      "time": 0.30000001192092896,
+                      "value": [
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    {
+                      "time": 0.6000000238418579,
                       "value": [
                         1.0,
                         1.0,
@@ -855,14 +514,6 @@
                     },
                     {
                       "time": 2.0,
-                      "value": [
-                        1.0,
-                        1.0,
-                        1.0
-                      ]
-                    },
-                    {
-                      "time": 4.0,
                       "value": [
                         1.0,
                         1.0,
@@ -1063,6 +714,447 @@
           0.0,
           7.341411113739014,
           -8.751643463256187e-07
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cancelItemEntityId": 0,
+          "cancelMode": "Close",
+          "enabled": true,
+          "initialItemEntityId": 18,
+          "initiallyOpen": true,
+          "inputMode": "Standard",
+          "itemEntityIds": [
+            18,
+            19
+          ],
+          "layoutMode": "CanvasItems",
+          "localId": 1,
+          "navigationAxis": "Vertical",
+          "type": "MenuPanel"
+        },
+        {
+          "enabled": true,
+          "localId": 2,
+          "referenceSize": [
+            1280,
+            720
+          ],
+          "renderSpace": "ScreenOverlay",
+          "sortingOrder": 0,
+          "type": "UICanvas"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 17,
+      "locked": false,
+      "modelPath": "",
+      "name": "MenuPanel",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 0,
+          "localId": 1,
+          "selectedTextColor": [
+            0.9661017060279846,
+            0.8922077417373657,
+            0.0941540002822876,
+            1.0
+          ],
+          "selectedTextColorEnabled": true,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0.0,
+            0.0
+          ],
+          "textPadding": [
+            0.0,
+            0.0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 2,
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            640.0,
+            360.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            163.0,
+            45.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 3,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "ゲームスタート",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "NoWrap"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "gameplay",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 0,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "resources/transitions/sword_shatter.transition.json",
+                  "type": "SceneTransition",
+                  "value": 0.0
+                }
+              ],
+              "cooldown": 0.0,
+              "executionDomain": "UI",
+              "presentationClipName": "",
+              "radius": 1.0,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0.0,
+              "targetEntityId": 18,
+              "targetEntityName": "",
+              "targetPosition": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 18,
+      "locked": false,
+      "modelPath": "",
+      "name": "ゲームスタート",
+      "parentId": 17,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 0,
+          "localId": 1,
+          "selectedTextColor": [
+            0.9647058844566345,
+            0.8941176533699036,
+            0.0941176488995552,
+            1.0
+          ],
+          "selectedTextColorEnabled": true,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0.0,
+            0.0
+          ],
+          "textPadding": [
+            0.0,
+            0.0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 2,
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            640.0,
+            405.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            136.0,
+            45.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 3,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "ゲーム終了",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 19,
+      "locked": false,
+      "modelPath": "",
+      "name": "ゲーム終了",
+      "parentId": 17,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
         ]
       }
     }
