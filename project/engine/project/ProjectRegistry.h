@@ -83,7 +83,10 @@ public:
 
 	bool Load(std::string& errorMessage);
 	bool Load(const std::filesystem::path& registryPath, std::string& errorMessage);
+	// 最新Registryへ差分だけを反映する。同一項目の競合は拒否し、他Projectの更新を保持する。
 	bool Save(std::string& errorMessage) const;
+	// 未保存のローカル変更も保持して最新情報を読む。競合時は何も置換しない。
+	bool Refresh(std::string& errorMessage);
 	bool Validate(std::string& errorMessage) const;
 
 	bool RegisterProject(const ProjectRegistryEntry& entry, std::string& errorMessage);
@@ -114,6 +117,10 @@ public:
 	static bool TryGetDefaultRegistryPath(std::filesystem::path& path, std::string& errorMessage);
 
 private:
+	bool LoadSnapshot(const std::string& text, std::string& errorMessage);
+	std::string Serialize() const;
+	// このinstanceが観測した項目値。保存schemaへは追加しない。
+	mutable std::string baseline_;
 	static bool AreSamePath(const std::filesystem::path& left, const std::filesystem::path& right);
 	static std::filesystem::path NormalizeAbsolutePath(const std::filesystem::path& value);
 	static const char* CreationOperationStateToString(ProjectCreationOperationState value);

@@ -4,6 +4,8 @@
 #include "SceneCatalog.h"
 #include "SceneDocument.h"
 #include "SceneEntityQuery.h"
+#include "SceneUILayout.h"
+#include "SceneMenuLayout.h"
 #include "SceneInputKey.h"
 #include "ScenePrefabAnimationEvaluator.h"
 #include "../Audio/Audio.h"
@@ -83,6 +85,236 @@ bool SceneValidator::ValidateDocument(
 	};
 
 	std::unordered_map<uint64_t, const SceneEntity*> entitiesById;
+	// Menu参照は同一DocumentのIDだけで検証し、名前fallbackで接続先を補わない。
+	auto isWithinMenu = [&document](uint64_t childId, uint64_t rootId) {
+		const SceneEntity* current = document.FindEntity(childId);
+		for (size_t depth = 0; current && depth <= document.GetEntities().size(); ++depth) {
+			if (current->id == rootId) return true;
+			current = document.FindEntity(current->parentId);
+		}
+		return false;
+	};
+	std::unordered_set<uint64_t> assignedMenuItems;
+	// 新UIの可視性はCanvas/配置の無効化も含む。循環するUI祖先を旧active走査へ渡さない。
+	auto isMenuEntityActive = [&document](const SceneEntity& entity) {
+		if (SceneUILayout::IsUIEntity(document, entity)) {
+			SceneUILayout::Layout layout;
+			return SceneUILayout::Resolve(document, entity.id, layout) && layout.visible;
+		}
+		return SceneEntityQuery::IsEntityActiveInHierarchy(document, entity);
+	};
+	std::unordered_set<uint64_t> assignedMenuMarkers;
+	std::unordered_set<std::string> uiKeyBindings;
+	size_t initiallyOpenMenus = 0;
+	size_t gamePauseCount = 0;
+	for (const SceneEntity& owner : document.GetEntities()) {
+		for (const SceneComponent& setting : owner.components) {
+			if (setting.type == "EventTrigger") {
+				for (const auto& binding : setting.eventBindings) for (const auto& action : binding.actions) {
+					if (action.type == "RestartScene" && binding.executionDomain != "Gameplay")
+						addIssue(SceneValidationSeverity::Error, owner.id, "SceneRestart:InvalidDomain");
+				}
+			}
+			auto menuError = [&](const std::string& message) {
+				addIssue(SceneValidationSeverity::Error, owner.id, message);
+			};
+			auto requireMenuTarget = [&](uint64_t id, const char* type, const std::string& label) {
+				const SceneEntity* target = document.FindEntity(id);
+				const SceneComponent* targetComponent = target
+					? SceneEntityQuery::FindEnabledComponent(*target, type) : nullptr;
+				if (!id || !targetComponent) menuError(label + " requires an explicit enabled " + type + " Entity ID");
+				return targetComponent;
+			};
+			if (setting.type == "MenuPanel") {
+				// 非表示で保管するメニューも構造は検証するが、子の表示状態は要求しない。
+				const bool panelVisible = setting.enabled && isMenuEntityActive(owner);
+				if ((setting.menuLayoutMode != "Hierarchical" && setting.menuLayoutMode != "CanvasItems") ||
+					(setting.menuInputMode != "Events" && setting.menuInputMode != "Standard")) menuError("MenuRuntime:StandardMode");
+				std::vector<SceneMenuLayout::ItemPosition> positions;
+				std::string layoutError;
+				if (!SceneMenuLayout::EvaluatePositions(document, owner, setting, positions, layoutError)) {
+					menuError(layoutError);
+				} else {
+					for (size_t i = 1; i < positions.size(); ++i) {
+						if (SceneMenuLayout::Coordinate(positions[i - 1], setting) > SceneMenuLayout::Coordinate(positions[i], setting)) {
+							menuError("Menu selection order is out of date. Save the document in the Editor.");
+							break;
+						}
+					}
+				}
+				if (panelVisible && setting.menuInitiallyOpen) {
+					if (++initiallyOpenMenus > 1) menuError("Only one active MenuPanel may be initially open");
+				}
+				if (setting.menuNavigationAxis != "Vertical" && setting.menuNavigationAxis != "Horizontal") menuError("MenuPanel navigationAxis must be Vertical or Horizontal");
+				if (setting.menuCancelMode != "Close" && setting.menuCancelMode != "InvokeItem" && setting.menuCancelMode != "None") menuError("MenuPanel has an invalid cancelMode");
+				std::unordered_set<uint64_t> localItems;
+				bool hasSelectableItem = false;
+				for (uint64_t id : setting.menuItemEntityIds) {
+					const SceneComponent* item = requireMenuTarget(id, "MenuItem", "MenuPanel item");
+					if (!localItems.insert(id).second) menuError("MenuPanel contains a duplicate item Entity ID");
+					if (!assignedMenuItems.insert(id).second) menuError("MenuItem is listed more than once or shared between panels");
+					if (id == owner.id || !isWithinMenu(id, owner.id)) menuError("MenuPanel items must be descendants of their panel");
+					const SceneEntity* itemEntity = document.FindEntity(id);
+					hasSelectableItem |= item && item->menuInteractable && itemEntity && isMenuEntityActive(*itemEntity);
+				}
+				auto validateChoice = [&](uint64_t id, const char* label) {
+					const SceneComponent* item = requireMenuTarget(id, "MenuItem", label);
+					const SceneEntity* itemEntity = document.FindEntity(id);
+					if (!localItems.contains(id) || !item || !item->menuInteractable || !itemEntity ||
+						(panelVisible && !isMenuEntityActive(*itemEntity))) {
+						menuError(std::string(label) + " must be a selectable item in this panel");
+					}
+				};
+				if (setting.menuInitialItemEntityId) validateChoice(setting.menuInitialItemEntityId, "MenuPanel initial selection");
+				if (setting.menuCancelMode == "InvokeItem") validateChoice(setting.menuCancelItemEntityId, "MenuPanel cancel item");
+				if (!hasSelectableItem) addIssue(SceneValidationSeverity::Warning, owner.id, "Menu runtime: no selectable item");
+				if (panelVisible && !hasSelectableItem && setting.menuCancelMode != "Close") menuError("MenuPanel has no selectable item or usable cancel operation");
+				const SceneEntity* parent = document.FindEntity(owner.parentId);
+				for (size_t depth = 0; parent && depth <= document.GetEntities().size(); ++depth) {
+					if (SceneEntityQuery::HasComponent(*parent, "MenuPanel")) { menuError("MenuPanel roots must not be nested in the hierarchy"); break; }
+					parent = document.FindEntity(parent->parentId);
+				}
+			} else if (setting.type == "MenuItem") {
+				if (!std::isfinite(setting.menuTextPadding.x) || !std::isfinite(setting.menuTextPadding.y) ||
+					!std::isfinite(setting.menuTextOffset.x) || !std::isfinite(setting.menuTextOffset.y) ||
+					setting.menuTextPadding.x < 0 || setting.menuTextPadding.y < 0) menuError("MenuRuntime:TextPlacement");
+				const uint64_t labelId = setting.menuLabelEntityId ? setting.menuLabelEntityId : owner.id;
+				const SceneEntity* label = document.FindEntity(labelId);
+				const SceneComponent* text = label ? SceneEntityQuery::FindEnabledComponent(*label, "TextRenderer") : nullptr;
+				if (!isWithinMenu(labelId, owner.id)) menuError("MenuItem label must be the item itself or a descendant");
+				if (text && label) {
+					if (SceneUILayout::IsUIEntity(document, *label)) {
+						SceneUILayout::Layout layout;
+						if (!SceneUILayout::Resolve(document, label->id, layout) || layout.renderSpace != "ScreenOverlay") {
+							menuError("MenuItem label requires a valid ScreenOverlay UICanvas");
+						}
+					} else if (text->textRenderSpace != "ScreenOverlay") {
+						menuError("MenuItem label TextRenderer must use ScreenOverlay");
+					}
+				}
+				if (!text) addIssue(SceneValidationSeverity::Warning, owner.id, "MenuItem label has no enabled TextRenderer; configure a visual label or marker");
+				if (setting.menuSelectionMarkerEntityId) {
+					const SceneEntity* marker = document.FindEntity(setting.menuSelectionMarkerEntityId);
+					if (!marker || marker->id == owner.id || !isWithinMenu(marker->id, owner.id) ||
+						(!SceneEntityQuery::FindEnabledComponent(*marker, "SpriteRenderer") && !SceneEntityQuery::FindEnabledComponent(*marker, "TextRenderer"))) addIssue(SceneValidationSeverity::Warning, owner.id, "MenuItem marker must be a descendant SpriteRenderer or TextRenderer");
+					bool invalidBranch = isWithinMenu(labelId, setting.menuSelectionMarkerEntityId);
+					for (const auto& descendant : document.GetEntities()) {
+						if (!isWithinMenu(descendant.id, setting.menuSelectionMarkerEntityId)) continue;
+						invalidBranch |= SceneEntityQuery::FindComponent(descendant, "MenuItem") || SceneEntityQuery::FindComponent(descendant, "MenuPanel");
+					}
+					for (const auto& other : document.GetEntities()) {
+						const auto* otherItem = SceneEntityQuery::FindComponent(other, "MenuItem");
+						if (otherItem && (isWithinMenu(otherItem->menuLabelEntityId ? otherItem->menuLabelEntityId : other.id, setting.menuSelectionMarkerEntityId) ||
+							(other.id != owner.id && otherItem->menuSelectionMarkerEntityId == setting.menuSelectionMarkerEntityId))) invalidBranch = true;
+					}
+					if (invalidBranch) addIssue(SceneValidationSeverity::Warning, owner.id, "Menu runtime: marker branch");
+					// 不正な装飾だけを無視するため、Marker診断でScene全体の読込を拒否しない。
+					if (!assignedMenuMarkers.insert(setting.menuSelectionMarkerEntityId).second) addIssue(SceneValidationSeverity::Warning, owner.id, "MenuItem selection marker must not be shared");
+				}
+				const Vector4& color = setting.menuSelectedTextColor;
+				if (!std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) || !std::isfinite(color.w) ||
+					color.x < 0 || color.x > 1 || color.y < 0 || color.y > 1 || color.z < 0 || color.z > 1 || color.w < 0 || color.w > 1) menuError("MenuItem selectedTextColor must contain finite values in [0, 1]");
+			} else if (setting.type == "GamePause") {
+				if (setting.enabled && isMenuEntityActive(owner) && ++gamePauseCount > 1) menuError("Only one active GamePause is allowed per scene");
+				const SceneComponent* panel = requireMenuTarget(setting.gamePausePanelEntityId, "MenuPanel", "GamePause panel");
+				if (panel && panel->menuInitiallyOpen) menuError("GamePause panel must start closed");
+			} else if (setting.type == "EventTrigger") {
+				for (const SceneEventBinding& binding : setting.eventBindings) {
+					if (binding.executionDomain != "Gameplay" && binding.executionDomain != "UI") menuError("Event executionDomain must be Gameplay or UI");
+					const bool ui = binding.executionDomain == "UI";
+					if (ui) {
+						const bool keyBinding = binding.triggerType == "OnKeyPressed";
+						if (keyBinding) for (const auto& other : document.GetEntities()) {
+							const auto* events = SceneEntityQuery::FindEnabledComponent(other, "EventTrigger");
+							if (!events) continue;
+							for (const auto& gameplay : events->eventBindings) if (gameplay.executionDomain == "Gameplay" && gameplay.triggerType == "OnKeyPressed" &&
+								ResolveSceneInputKey(gameplay.triggerKey) == ResolveSceneInputKey(binding.triggerKey))
+								addIssue(SceneValidationSeverity::Warning, owner.id, "Menu runtime: key conflict");
+						}
+						if (!std::isfinite(binding.cooldown) || binding.cooldown < 0) menuError("UI event cooldown must be finite and non-negative");
+						if (binding.triggerType != "OnKeyPressed" && binding.triggerType != "OnMenuItemConfirmed" && binding.triggerType != "OnMenuCancelled") menuError("Unsupported UI event condition: " + binding.triggerType);
+						if (binding.uiInputScope != "WhenNoMenu" && binding.uiInputScope != "FocusedMenu") menuError("Invalid UI input scope");
+						if (binding.triggerType == "OnMenuItemConfirmed") requireMenuTarget(binding.targetEntityId, "MenuItem", "UI confirmation");
+						if (binding.triggerType == "OnMenuCancelled" || (binding.triggerType == "OnKeyPressed" && binding.uiInputScope == "FocusedMenu")) requireMenuTarget(binding.targetEntityId, "MenuPanel", "UI event target");
+						if (binding.triggerType == "OnKeyPressed" && setting.enabled && SceneEntityQuery::IsEntityActiveInHierarchy(document, owner)) {
+							const auto key = ResolveSceneInputKey(binding.triggerKey);
+							const auto* target = document.FindEntity(binding.targetEntityId);
+							const auto* panel = target ? SceneEntityQuery::FindEnabledComponent(*target, "MenuPanel") : nullptr;
+							if (binding.uiInputScope == "FocusedMenu" && panel && panel->menuInputMode == "Standard") {
+								const bool horizontal = panel->menuNavigationAxis == "Horizontal";
+								if (key && (key == ResolveSceneInputKey("ENTER") || key == ResolveSceneInputKey("ESCAPE") ||
+									key == ResolveSceneInputKey(horizontal ? "LEFT" : "UP") || key == ResolveSceneInputKey(horizontal ? "RIGHT" : "DOWN")))
+									addIssue(SceneValidationSeverity::Warning, owner.id, "MenuRuntime:ReservedKey");
+							}
+							const std::string identity = binding.uiInputScope + ":" + std::to_string(binding.uiInputScope == "FocusedMenu" ? binding.targetEntityId : 0) + ":" + std::to_string(key);
+							if (key && !uiKeyBindings.insert(identity).second) addIssue(SceneValidationSeverity::Warning, owner.id, "Duplicate UI key binding in the same input scope");
+						}
+					} else if (binding.triggerType == "OnMenuItemConfirmed" || binding.triggerType == "OnMenuCancelled") menuError("Menu notifications require the UI execution domain");
+					for (const SceneEventAction& action : binding.actions) {
+						if (action.type == "PauseGame" || action.type == "ResumeGame" || action.type == "RequestApplicationExit")
+							addIssue(SceneValidationSeverity::Warning, owner.id, "MenuRuntime:UnsupportedAction " + action.type);
+						const bool panelAction = action.type == "OpenMenu" || action.type == "CloseMenu" || action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" || action.type == "ConfirmMenuItem" || action.type == "CancelMenu";
+						const bool pauseAction = action.type == "PauseGame" || action.type == "ResumeGame";
+						const bool newAction = panelAction || pauseAction || action.type == "RequestApplicationExit";
+						if (panelAction) requireMenuTarget(action.targetEntityId, "MenuPanel", action.type);
+						if (pauseAction) requireMenuTarget(action.targetEntityId, "GamePause", action.type);
+						if (!ui && newAction && action.type != "OpenMenu" && action.type != "PauseGame") menuError("This menu action requires the UI domain: " + action.type);
+						if (ui) {
+							const bool audioAction = action.type == "PlayAudio" || action.type == "StopAudio" || action.type == "PauseAudio" || action.type == "ResumeAudio";
+							const bool textAction = action.type == "PlayTextMotion" || action.type == "StopTextMotion" || action.type == "ResetTextMotion";
+							if (!newAction && !audioAction && !textAction && action.type != "SceneTransition") menuError("Unsupported UI action: " + action.type);
+							if (audioAction) requireMenuTarget(action.targetEntityId, "AudioSource", action.type);
+							if (textAction) requireMenuTarget(action.targetEntityId, "TextMotion", action.type);
+							if (binding.triggerType == "OnMenuCancelled" && (action.type == "CloseMenu" || action.type == "ResumeGame" || action.type == "SceneTransition" || action.type == "RequestApplicationExit")) {
+								const SceneEntity* panelEntity = document.FindEntity(binding.targetEntityId);
+								const SceneComponent* panel = panelEntity ? SceneEntityQuery::FindEnabledComponent(*panelEntity, "MenuPanel") : nullptr;
+								if (panel && panel->menuCancelMode != "None") addIssue(SceneValidationSeverity::Warning, owner.id, "OnMenuCancelled duplicates the panel's configured cancel behavior");
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	// UI構造はdisabledでも検証する。描画時と同じResolverで旧方式への漏れも防ぐ。
+	for (const SceneEntity& entity : document.GetEntities()) {
+		for (const char* type : { "UICanvas", "UITransform" }) {
+			const size_t count = std::count_if(entity.components.begin(), entity.components.end(),
+				[type](const SceneComponent& component) { return component.type == type; });
+			if (count > 1) addIssue(SceneValidationSeverity::Error, entity.id, std::string(type) + " must be unique on an Entity");
+		}
+		for (const SceneComponent& component : entity.components) {
+			std::string reason;
+			if ((component.type == "UICanvas" && !SceneUILayout::ValidateCanvas(component, reason)) ||
+				(component.type == "UITransform" && !SceneUILayout::ValidateTransform(component, reason))) {
+				addIssue(SceneValidationSeverity::Error, entity.id, reason);
+			}
+		}
+		if (SceneUILayout::IsUIEntity(document, entity) &&
+			(SceneEntityQuery::FindComponent(entity, "UICanvas") || SceneEntityQuery::FindComponent(entity, "UITransform") ||
+				SceneEntityQuery::FindComponent(entity, "TextRenderer") || SceneEntityQuery::FindComponent(entity, "SpriteRenderer"))) {
+			SceneUILayout::Layout layout;
+			std::string reason;
+			if (!SceneUILayout::Resolve(document, entity.id, layout, &reason)) {
+				const bool detachedPrefab = filePath.ends_with(".prefab.json") &&
+					reason == "UITransform requires a UICanvas ancestor";
+				addIssue(detachedPrefab ? SceneValidationSeverity::Warning : SceneValidationSeverity::Error, entity.id, reason);
+			}
+			if (reason.empty() && layout.renderSpace != "ScreenOverlay" &&
+				(SceneEntityQuery::FindComponent(entity, "MenuPanel") || SceneEntityQuery::FindComponent(entity, "MenuItem"))) {
+				addIssue(SceneValidationSeverity::Error, entity.id, "Menu UI requires ScreenOverlay UICanvas");
+			}
+			if (SceneEntityQuery::FindComponent(entity, "UICanvas") &&
+				(SceneEntityQuery::FindComponent(entity, "SpriteRenderer") || SceneEntityQuery::FindComponent(entity, "TextRenderer"))) {
+				addIssue(SceneValidationSeverity::Error, entity.id, "Canvas visuals require a child Entity with UITransform");
+			}
+			if (const auto* placement = SceneEntityQuery::FindComponent(entity, "UITransform");
+				placement && SceneEntityQuery::FindComponent(entity, "TextRenderer") &&
+				(placement->uiSize.x > 4096.0f || placement->uiSize.y > 4096.0f)) {
+				addIssue(SceneValidationSeverity::Error, entity.id, "UI text layout exceeds the existing rasterizer limit of 4096");
+			}
+		}
+	}
 	for (const SceneEntity& entity : document.GetEntities()) {
 		if (entity.id == 0) {
 			addIssue(
@@ -475,7 +707,7 @@ bool SceneValidator::ValidateDocument(
 				}
 			} else if (component.type == "TextRenderer") {
 				if (
-					component.textRenderSpace != "ScreenOverlay" &&
+					!SceneUILayout::IsUIEntity(document, entity) && component.textRenderSpace != "ScreenOverlay" &&
 					component.textRenderSpace != "Scene2D"
 				) {
 					addIssue(
@@ -561,7 +793,7 @@ bool SceneValidator::ValidateDocument(
 					addIssue(SceneValidationSeverity::Error, entity.id,
 					"TextRenderer contains an invalid layout or opacity value");
 				}
-				if (component.textHasPlacementProfiles) {
+				if (component.textHasPlacementProfiles && !SceneUILayout::IsUIEntity(document, entity)) {
 					const auto validPlacement = [](const Text2DPlacement& placement, bool overlay) {
 						return placement.scale.x > 0.0f && placement.scale.y > 0.0f &&
 							(!overlay || (placement.viewportAnchor.x >= 0.0f && placement.viewportAnchor.x <= 1.0f &&

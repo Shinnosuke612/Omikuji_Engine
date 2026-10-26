@@ -21,6 +21,8 @@ struct SolutionGenerationPreview {
 
 class SolutionGenerationEmitter {
 public:
+	// XMLの出力意味を変える改修時に更新する。ゲームソース本文の変更では更新しない。
+	static constexpr const char* kPolicyRevision = "automatic-generation-1";
 	std::string ComputeInputIdentity(const SolutionGenerationModel& model) const;
 	bool EmitPreview(const SolutionGenerationModel& model, const std::filesystem::path& stagingRoot,
 		SolutionGenerationPreview& output, std::string& errorMessage) const;

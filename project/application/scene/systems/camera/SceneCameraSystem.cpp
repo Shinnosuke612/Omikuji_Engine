@@ -97,7 +97,8 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	float deltaTime,
 	bool runtimeActive,
-	bool playing
+	bool playing,
+	bool acceptGameplayInput
 ) {
 	if (!playing) {
 		if (wasPlaying_) {
@@ -129,7 +130,7 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 			HandlePathFinished(document, camera, player);
 		}
 	} else {
-		UpdateCameraSwitch(document, playing);
+		if (acceptGameplayInput) UpdateCameraSwitch(document, playing);
 		ApplyActiveCamera(document, camera);
 		UpdateThirdPersonCamera(
 			document,
@@ -138,9 +139,9 @@ void SceneCameraSystem::UpdateBeforeSimulation(
 			bindings,
 			deltaTime * 0.5f,
 			playing,
-			true
+			acceptGameplayInput
 		);
-		TryStartCameraPath(document, camera);
+		if (acceptGameplayInput) TryStartCameraPath(document, camera);
 		if (cameraPathRuntime_.IsPlaying()) {
 			cameraPathRuntime_.Update(deltaTime, *camera);
 			if (cameraPathRuntime_.ConsumeFinishedThisFrame()) {
@@ -158,8 +159,10 @@ void SceneCameraSystem::UpdateAfterSimulation(
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
 	float deltaTime,
 	bool runtimeActive,
-	bool playing
+	bool playing,
+	bool acceptGameplayInput
 ) {
+	(void)acceptGameplayInput; // この段階は追従だけで、既存どおり生入力を読まない。
 	if (!camera) {
 		return;
 	}

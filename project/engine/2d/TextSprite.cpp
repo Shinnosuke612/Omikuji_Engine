@@ -1,5 +1,6 @@
 // 役割: Text用のDepthなし2D Pipelineとquad描画を実装する。
 #include "TextSprite.h"
+#include <cstring>
 
 #include <algorithm>
 #include <cassert>
@@ -217,16 +218,40 @@ void TextSprite::Update(
 	transformationData_->World = MakeIdentity4x4();
 }
 
-void TextSprite::Draw(OutputTarget target) const {
+void TextSprite::UpdateUI(const Matrix4x4& unitQuadToClip, const Vector4& color) {
+	Update({ 0.0f, 0.0f }, 0.0f, { 1.0f, 1.0f }, { 0.0f, 0.0f }, color, 1, 1);
+	transformationData_->WVP = unitQuadToClip;
+}
+
+void TextSprite::Draw(OutputTarget target, bool editorView) const {
 	if (!TextureManager::GetInstance()->HasTexture(textureKey_)) {
 		return;
 	}
+	// 描画済みのViewが参照するupload領域へ、後のViewのUpdateを書き込まない。
+	auto& buffers = viewDrawBuffers_[editorView ? 1 : 0];
+	if (!buffers.vertices) {
+		buffers.vertices = dxCommon_->CreateBufferResource(sizeof(VertexData) * 4);
+		buffers.material = dxCommon_->CreateBufferResource(sizeof(Material));
+		buffers.transform = dxCommon_->CreateBufferResource(sizeof(TransformationMatrix));
+	}
+	auto snapshot = [](ID3D12Resource* resource, const void* data, size_t bytes) {
+		void* mapped = nullptr;
+		if (FAILED(resource->Map(0, nullptr, &mapped))) return false;
+		std::memcpy(mapped, data, bytes);
+		resource->Unmap(0, nullptr);
+		return true;
+	};
+	if (!snapshot(buffers.vertices.Get(), vertexData_, sizeof(VertexData) * 4) ||
+		!snapshot(buffers.material.Get(), materialData_, sizeof(Material)) ||
+		!snapshot(buffers.transform.Get(), transformationData_, sizeof(TransformationMatrix))) return;
+	auto viewVertices = vertexBufferView_;
+	viewVertices.BufferLocation = buffers.vertices->GetGPUVirtualAddress();
 	GetPipeline().SetCommonRenderState(target);
 	ID3D12GraphicsCommandList* commandList = dxCommon_->GetCommandList();
-	commandList->IASetVertexBuffers(0, 1, &vertexBufferView_);
+	commandList->IASetVertexBuffers(0, 1, &viewVertices);
 	commandList->IASetIndexBuffer(&indexBufferView_);
-	commandList->SetGraphicsRootConstantBufferView(0, materialResource_->GetGPUVirtualAddress());
-	commandList->SetGraphicsRootConstantBufferView(1, transformationResource_->GetGPUVirtualAddress());
+	commandList->SetGraphicsRootConstantBufferView(0, buffers.material->GetGPUVirtualAddress());
+	commandList->SetGraphicsRootConstantBufferView(1, buffers.transform->GetGPUVirtualAddress());
 	commandList->SetGraphicsRootDescriptorTable(
 		2,
 		TextureManager::GetInstance()->GetSrvHandleGPU(textureKey_)

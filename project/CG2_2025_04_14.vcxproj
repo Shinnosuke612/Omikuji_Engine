@@ -269,6 +269,8 @@
 	<ClCompile Include="application\scene\systems\gameplay\combat\SceneHitStopSystem.cpp" />
 	<ClCompile Include="application\scene\systems\effects\SceneRuntimeEffectSystem.cpp" />
 	<ClCompile Include="application\scene\systems\text\SceneTextRenderSystem.cpp" />
+	<ClCompile Include="application\scene\systems\rendering\SceneUIRenderSystem.cpp" />
+	<ClCompile Include="engine\scene\SceneUILayout.cpp" />
 	<ClCompile Include="application\scene\systems\text\SceneTextMotionSystem.cpp" />
 	<ClCompile Include="application\scene\systems\gameplay\flow\SceneGameFlowSystem.cpp" />
 	<ClCompile Include="application\scene\systems\audio\SceneAudioSystem.cpp" />
@@ -573,6 +575,8 @@
 	<ClInclude Include="application\scene\systems\gameplay\combat\SceneHitStopSystem.h" />
 	<ClInclude Include="application\scene\systems\effects\SceneRuntimeEffectSystem.h" />
 	<ClInclude Include="application\scene\systems\text\SceneTextRenderSystem.h" />
+	<ClInclude Include="application\scene\systems\rendering\SceneUIRenderSystem.h" />
+	<ClInclude Include="engine\scene\SceneUILayout.h" />
 	<ClInclude Include="application\scene\systems\text\SceneTextMotionSystem.h" />
 	<ClInclude Include="application\scene\systems\gameplay\flow\SceneGameFlowSystem.h" />
 	<ClInclude Include="application\scene\systems\audio\SceneAudioSystem.h" />

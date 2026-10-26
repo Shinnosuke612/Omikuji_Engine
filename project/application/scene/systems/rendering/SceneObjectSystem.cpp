@@ -13,6 +13,7 @@
 #include "../../../../engine/scene/SceneDocument.h"
 #include "../../../../engine/scene/SceneEntityQuery.h"
 #include "../../../../engine/scene/SceneTransformResolver.h"
+#include "../../../../engine/scene/SceneUILayout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -450,7 +451,7 @@ void SceneObjectSystem::SyncSprites(const SceneDocument* document) {
 		sprite->SetColor(spriteRenderer->spriteColor);
 		sprite->SetIsFlipX(spriteRenderer->spriteFlipX);
 		sprite->SetIsFlipY(spriteRenderer->spriteFlipY);
-		if (IsEntityActiveInHierarchy(*document, entity)) {
+		if (!SceneUILayout::IsUIEntity(*document, entity) && IsEntityActiveInHierarchy(*document, entity)) {
 			sprite->Update();
 		}
 	}
@@ -535,6 +536,7 @@ void SceneObjectSystem::DrawSprites(
 		const auto found = sprites_.find(entity.id);
 		if (
 			entity.id != skipEntityId &&
+			!SceneUILayout::IsUIEntity(document, entity) &&
 			found != sprites_.end() &&
 			IsEntityActiveInHierarchy(document, entity) &&
 			found->second.sprite
@@ -542,6 +544,15 @@ void SceneObjectSystem::DrawSprites(
 			found->second.sprite->Draw();
 		}
 	}
+}
+
+void SceneObjectSystem::DrawUISprite(uint64_t entityId, const Matrix4x4& unitQuadToClip,
+	const Vector4& color, SpriteCommon::OutputTarget target, bool editorView) const {
+	const auto found = sprites_.find(entityId);
+	if (found == sprites_.end() || !found->second.sprite) return;
+	SpriteCommon::GetInstance()->SetCommonRenderState(target, true);
+	found->second.sprite->UpdateUI(unitQuadToClip, color);
+	found->second.sprite->Draw(editorView);
 }
 
 void SceneObjectSystem::CollectShadowCasters(

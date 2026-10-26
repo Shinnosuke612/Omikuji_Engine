@@ -28,7 +28,24 @@ namespace {
 		EditorComponentTag::Prefab
 	}};
 
-	constexpr std::array<EditorComponentDefinition, 38> kDefinitions = {{
+	constexpr std::array<EditorComponentDefinition, 43> kDefinitions = {{
+
+		{
+			"UICanvas", "UI画面", "UI Canvas",
+			"制作画面の文字・画像・位置を表示領域いっぱいに拡縮します。",
+			"Stretches the authored text, images and positions to fill the view.",
+			EditorComponentCategory::Rendering,
+			SceneAndPrefabContext, 41, 41, "",
+			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::TwoD)
+		},
+		{
+			"UITransform", "UI配置", "UI Layout",
+			"親の枠を基準に位置・表示枠・基点を編集します。",
+			"Edits position, bounds and pivot relative to the parent UI bounds.",
+			EditorComponentCategory::Rendering,
+			SceneAndPrefabContext, 42, 42, "",
+			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::TwoD)
+		},
 		{
 			"MeshRenderer", "3Dモデル表示", "Mesh Renderer",
 			"3DモデルとMaterialをSceneへ表示します。",
@@ -51,7 +68,7 @@ namespace {
 			"画像を2D空間または画面上へ表示します。",
 			"Displays an image in 2D space or on screen.",
 			EditorComponentCategory::Rendering,
-			SceneContext, 2, -1, "",
+			SceneAndPrefabContext, 2, 38, "",
 			EditorComponentTagBit(EditorComponentTag::TwoD) |
 			EditorComponentTagBit(EditorComponentTag::UI)
 		},
@@ -60,7 +77,7 @@ namespace {
 			"日本語を含む文字を画面またはScene内へ表示します。",
 			"Displays text, including Japanese, on screen or in the scene.",
 			EditorComponentCategory::Rendering,
-			SceneContext, 3, -1, "",
+			SceneAndPrefabContext, 3, 39, "",
 			EditorComponentTagBit(EditorComponentTag::TwoD) |
 			EditorComponentTagBit(EditorComponentTag::UI)
 		},
@@ -69,7 +86,7 @@ namespace {
 			"TextRendererに対する再利用可能な2D文字演出clipを設定します。",
 			"Configures reusable 2D text motion clips for a TextRenderer.",
 			EditorComponentCategory::Animation,
-			SceneContext, 37, -1, "TextRenderer",
+			SceneAndPrefabContext, 37, 40, "TextRenderer",
 			EditorComponentTagBit(EditorComponentTag::TwoD) |
 			EditorComponentTagBit(EditorComponentTag::UI) |
 			EditorComponentTagBit(EditorComponentTag::Animation) |
@@ -235,8 +252,32 @@ namespace {
 			"開始、入力、状態条件からActionを要求します。",
 			"Requests actions from start, input, or state conditions.",
 			EditorComponentCategory::EventAndFlow,
-			SceneContext, 22, -1, "",
+			SceneAndPrefabContext, 22, 12, "",
 			EditorComponentTagBit(EditorComponentTag::Event)
+		},
+		{
+			"MenuPanel", "メニュー画面", "Menu Panel",
+			"標準構成では同じEntityにUICanvasを用意し、制作サイズ・選択肢・標準キー操作をまとめて設定します。",
+			"Standard menus add UICanvas on the same entity and combine reference size, items, and keyboard controls.",
+			EditorComponentCategory::EventAndFlow,
+			SceneAndPrefabContext, 38, 13, "",
+			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::Event)
+		},
+		{
+			"MenuItem", "メニュー項目", "Menu Item",
+			"標準メニューでは配置・文字・画像背景・選択表示・決定処理を一か所で編集します。必要な補助Componentを同じEntityに用意します。",
+			"Edit placement, text, image background, selection visuals and confirmation together, using helper components on the same entity.",
+			EditorComponentCategory::EventAndFlow,
+			SceneAndPrefabContext, 39, 14, "",
+			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::Event)
+		},
+		{
+			"GamePause", "ゲーム内ポーズ", "Game Pause",
+			"ゲーム内ポーズ画面とポーズ中のBGM方針を設定します。",
+			"Configures the in-game pause panel and BGM pause policy.",
+			EditorComponentCategory::EventAndFlow,
+			SceneContext, 40, -1, "",
+			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::Event)
 		},
 		{
 			"AudioSource", "Audio Source", "Audio Source",

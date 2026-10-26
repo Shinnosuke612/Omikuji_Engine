@@ -6,7 +6,8 @@
 #include "../math/Transform.h"
 #include "../math/Matrix4x4.h"
 #include <stdint.h>
-#include <d3d12.h> 
+#include <d3d12.h>
+#include <wrl.h>
 #include <dxgi1_6.h>
 #include <string>
 class SpriteCommon;
@@ -36,7 +37,10 @@ public://公開メンバ関数
 	//更新処理
 	void Update();
 	//描画処理
-	void Draw();
+	// View別snapshotをBindし、UI編集描画による通常Sceneの定数上書きを防ぐ。
+	void Draw(bool editorView = false);
+	// [0,1] quad→clipの行列を使用する。反転は枠外へ移動せずUVへ適用する。
+	void UpdateUI(const Matrix4x4& unitQuadToClip, const Vector4& color);
 
 	//getter
 	const Vector2& GetPosition() const{return position;}//座標
@@ -62,6 +66,12 @@ public://公開メンバ関数
 
 
 private://非公開メンバ関数
+
+	struct ViewDrawBuffers {
+		Microsoft::WRL::ComPtr<ID3D12Resource> vertices, material, transform;
+	};
+	// texture所有は共有。Draw時の頂点/定数だけを通常ViewとUI編集Viewで分ける。
+	mutable ViewDrawBuffers viewDrawBuffers_[2];
 	void MakeVertexData();
 
 	void MakeMaterialData();

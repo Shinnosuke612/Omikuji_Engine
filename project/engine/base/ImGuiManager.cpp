@@ -1,5 +1,6 @@
 // 役割: ImGuiエディタ各ウィンドウの描画、入力、シーン編集操作を実装する。
 #include "ImGuiManager.h"
+#include "../project/ProjectAccessLock.h"
 #include "EditorComponentCatalog.h"
 #include "PostProcessSettingsEditor.h"
 
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -34,6 +36,7 @@
 #include "../particle/ParticleEffectResource.h"
 #include "../particle/ParticleManager.h"
 #include "../scene/EditorSession.h"
+#include "../scene/BaseScene.h"
 #include "../scene/PrefabAssetRegistry.h"
 #include "../scene/PrefabEditorSession.h"
 #include "../scene/SceneCatalog.h"
@@ -45,6 +48,9 @@
 #include "../scene/SceneTemplateRegistry.h"
 #include "../scene/SceneTransformResolver.h"
 #include "../scene/SceneValidator.h"
+#include "../scene/SceneUILayout.h"
+#include "../scene/SceneMenuLayout.h"
+#include "../text/TextRasterizer.h"
 #include "../utility/EditableResourcePath.h"
 #include "../utility/Logger.h"
 #include "../utility/StringUtility.h"
@@ -68,6 +74,9 @@ namespace {
 	using SceneEntityQuery::HasComponent;
 	using SceneEntityQuery::IsEntityActiveInHierarchy;
 	using SceneTransformResolver::ResolveSceneWorldMatrix;
+	Vector2 UIEditorPoint(const Vector2& point, const Matrix4x4& matrix);
+	bool UIEditorInverse(const Matrix4x4& matrix, Matrix4x4& inverse);
+	bool BuildUIEditorDocument(const SceneDocument& source, SceneDocument& preview, const Vector2& reference);
 
 	bool IsSameRotation(const Quaternion& left, const Quaternion& right) {
 		const Quaternion normalizedLeft = Normalize(left);
@@ -162,14 +171,14 @@ namespace {
 		return {};
 	}
 
-	bool InputTextMultilineString(const char* label, std::string& value) {
+	bool InputTextMultilineString(const char* label, std::string& value, float width = -1.0f) {
 		char buffer[2048]{};
 		CopyTextBuffer(buffer, sizeof(buffer), value);
 		if (!ImGui::InputTextMultiline(
 			label,
 			buffer,
 			sizeof(buffer),
-			ImVec2(-1.0f, ImGui::GetTextLineHeight() * 5.0f)
+			ImVec2(width, ImGui::GetTextLineHeight() * 5.0f)
 		)) {
 			return false;
 		}
@@ -1730,7 +1739,10 @@ void ImGuiManager::DrawEditorWorkspace(
 		ImGuiWindowFlags_NoScrollWithMouse
 	);
 
+	sceneDockId_ = ImGui::GetWindowDockID();
+	if (sceneVisible) {
 	const ImVec2 availableSize = ImGui::GetContentRegionAvail();
+	uiSourceTextureWidth_=textureWidth; uiSourceTextureHeight_=textureHeight;
 	sceneViewRenderable_ = sceneVisible && std::isfinite(availableSize.x) && std::isfinite(availableSize.y) &&
 		availableSize.x > 0 && availableSize.y > 0;
 	sceneViewWidth_ = static_cast<uint32_t>(
@@ -1797,8 +1809,8 @@ void ImGuiManager::DrawEditorWorkspace(
 				const float normalizedY = (mouse.y - sceneMin.y) /
 					(std::max)(sceneMax.y - sceneMin.y, 1.0f);
 				entity.transform.translate = {
-					normalizedX * static_cast<float>((std::max)(textureWidth, uint32_t{ 1 })),
-					normalizedY * static_cast<float>((std::max)(textureHeight, uint32_t{ 1 })),
+					normalizedX * static_cast<float>(WinApp::kClientWidth),
+					normalizedY * static_cast<float>(WinApp::kClientHeight),
 					0.0f
 				};
 				if (TextureManager::GetInstance()) {
@@ -1812,7 +1824,20 @@ void ImGuiManager::DrawEditorWorkspace(
 					};
 					entity.components.front().spriteSize = entity.spriteSize;
 				}
-				selectedEntityId_ = entity.id;
+				const uint64_t imageId = entity.id;
+				SceneEntity* parent = document.FindEntity(selectedEntityId_);
+				SceneUILayout::Layout parentLayout; Matrix4x4 inverse;
+				if (parent && !parent->locked && SceneUILayout::Resolve(document, parent->id, parentLayout) && parentLayout.visible &&
+					UIEditorInverse(parentLayout.localToCanvas, inverse)) {
+					const uint64_t parentId = parent->id;
+					const Vector2 nativeSize = entity.spriteSize;
+					document.FindEntity(imageId)->parentId=parentId; document.AddComponent(imageId, "UITransform");
+					auto* placement = FindComponent(*document.FindEntity(imageId), "UITransform");
+					placement->uiSize = nativeSize;
+					placement->uiPivot = {0.5f,0.5f};
+					placement->uiPosition = UIEditorPoint({normalizedX*parentLayout.referenceSize.x, normalizedY*parentLayout.referenceSize.y}, inverse);
+				}
+				selectedEntityId_ = imageId;
 				selectedProjectFile_.clear();
 			}
 		}
@@ -1903,11 +1928,24 @@ void ImGuiManager::DrawEditorWorkspace(
 					);
 					rootTranslate = &dropPosition;
 				}
-				InstantiatePrefabInEditScene(
-					droppedPath,
-					0,
-					rootTranslate
-				);
+				const uint64_t uiParentId=selectedEntityId_;
+				const uint64_t instanceId=InstantiatePrefabInEditScene(droppedPath,0,rootTranslate);
+				SceneDocument& document=editorSession_->GetEditDocument();
+				SceneEntity* instance=document.FindEntity(instanceId);
+				if(instance && FindComponent(*instance,"UITransform") && !FindComponent(*instance,"UICanvas")) {
+					SceneUILayout::Layout parent;Matrix4x4 inverse;
+					const auto* target=document.FindEntity(uiParentId);
+					if(target && !target->locked && SceneUILayout::Resolve(document,uiParentId,parent) && parent.visible && UIEditorInverse(parent.localToCanvas,inverse)) {
+						const ImVec2 mouse=ImGui::GetMousePos();
+						instance->parentId=uiParentId;
+						auto* placement=FindComponent(*instance,"UITransform");
+						const auto point=UIEditorPoint({(mouse.x-sceneMin.x)*parent.referenceSize.x/(sceneMax.x-sceneMin.x),
+							(mouse.y-sceneMin.y)*parent.referenceSize.y/(sceneMax.y-sceneMin.y)},inverse);
+						placement->uiPosition={point.x-placement->uiAnchor.x*parent.size.x,point.y-placement->uiAnchor.y*parent.size.y};
+						document.MarkDirty();
+					}
+				}
+
 			}
 		}
 		ImGui::EndDragDropTarget();
@@ -1977,8 +2015,10 @@ void ImGuiManager::DrawEditorWorkspace(
 		!ImGuizmo::IsUsing() &&
 		!ImGuizmo::IsOver();
 
+	} else { sceneViewRenderable_ = false; sceneViewInputActive_ = false; }
 	ImGui::End();
 	ImGui::PopStyleVar();
+	DrawSceneUIEditorWindow();
 
 	if (showHierarchy_) {
 		DrawHierarchyWindow(sceneName);
@@ -1998,6 +2038,10 @@ void ImGuiManager::DrawEditorWorkspace(
 	if (showPrefab_) {
 		DrawPrefabWindow();
 	}
+	DrawUIReparentConfirmation();
+	DrawMenuAuthoringWarning();
+	DrawSpawnPreparationWarning();
+	DrawProjectAccessWarning();
 	DrawSceneSpatialPreviewControls();
 	if (prefabKeyboardFocusThisFrame_ && spatialDraft_.kind != SpatialDraftKind::None)
 		CancelSceneSpatialDraft(true);
@@ -2700,6 +2744,38 @@ void ImGuiManager::RebuildPrefabHitBoxGhostDocument() {
 }
 
 bool ImGuiManager::GetPrefabPreviewRequest(PrefabPreviewRequest& request) {
+	if(uiMigrationOpen_) {
+		const SceneDocument* current=uiMigrationPrefab_ ? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument():nullptr)
+			: (editorSession_ && editorSession_->IsEditing()?&editorSession_->GetEditDocument():nullptr);
+		const std::string key=uiMigrationPrefab_ ? (prefabEditorSession_?prefabEditorSession_->GetFilePath():"") : (editorSession_?editorSession_->GetSceneFilePath():"");
+		if(!current || key!=uiMigrationDocumentKey_ || current->GetRevision()!=uiMigrationRevision_) uiMigrationOpen_=false;
+	}
+	if(uiMigrationOpen_ && uiMigrationCandidate_ && uiMigrationPreview_ && (!editorSession_ || editorSession_->IsEditing())) {
+		request.document=uiMigrationPreview_;
+		if(uiMigrationShowAfter_) {
+			if(!prefabUILayoutPreviewDocument_) prefabUILayoutPreviewDocument_=new SceneDocument();
+			*prefabUILayoutPreviewDocument_=*uiMigrationCandidate_;
+			const auto* selected=prefabUILayoutPreviewDocument_->FindEntity(uiMigrationRoot_);
+			if(!selected) return false;
+			const uint64_t canvasId=selected->parentId;
+			const auto* originalCanvas=uiMigrationCandidate_->FindEntity(canvasId);
+			const bool canvasActive=originalCanvas && IsEntityActiveInHierarchy(*uiMigrationCandidate_,*originalCanvas);
+			std::unordered_set<uint64_t> visible{canvasId,uiMigrationRoot_};
+			for(const auto& e:prefabUILayoutPreviewDocument_->GetEntities())
+				if(prefabUILayoutPreviewDocument_->IsDescendantOf(e.id,uiMigrationRoot_)) visible.insert(e.id);
+			auto& entities=prefabUILayoutPreviewDocument_->GetEntities();
+			entities.erase(std::remove_if(entities.begin(),entities.end(),[&](const auto& e){return !visible.contains(e.id);}),entities.end());
+			prefabUILayoutPreviewDocument_->FindEntity(canvasId)->parentId=0;
+			prefabUILayoutPreviewDocument_->FindEntity(canvasId)->active=canvasActive;
+			request.document=prefabUILayoutPreviewDocument_;
+		}
+		request.assetPath="UI Migration:"+uiMigrationDocumentKey_+"#"+std::to_string(uiMigrationPreviewSerial_)+(uiMigrationShowAfter_?"#After":"#Before");
+		request.revision=uiMigrationRevision_; request.width=640;request.height=360;
+		request.showGrid=false;request.showSkeleton=false;request.showColliders=false;request.showCombatVolumes=false;
+		prefabPreviewRequestedPath_=request.assetPath;prefabPreviewRequestedRevision_=request.revision;
+		return true;
+	}
+
 	if (
 		!showPrefab_ ||
 		!prefabEditorSession_ ||
@@ -2724,6 +2800,12 @@ bool ImGuiManager::GetPrefabPreviewRequest(PrefabPreviewRequest& request) {
 	request.document = useCombatRigPreview
 		? playerCombatPreviewDocument_
 		: &GetPrefabStageDocument();
+	if (!useCombatRigPreview && std::any_of(sourceDocument.GetEntities().begin(), sourceDocument.GetEntities().end(),
+		[](const SceneEntity& e){ return e.parentId==0 && FindComponent(e,"UITransform"); })) {
+		if (!prefabUILayoutPreviewDocument_) prefabUILayoutPreviewDocument_ = new SceneDocument();
+		BuildUIEditorDocument(GetPrefabStageDocument(), *prefabUILayoutPreviewDocument_, prefabUIReferenceSize_);
+		request.document = prefabUILayoutPreviewDocument_;
+	}
 	request.ghostDocument = (!useCombatRigPreview &&
 		prefabHitBoxSetupMode_ &&
 		prefabHitBoxGhostVisible_ &&
@@ -2773,6 +2855,53 @@ void ImGuiManager::SetProjectLauncherView(const ProjectLauncherView& value) {
 	}
 }
 
+
+std::string ImGuiManager::NotifyProjectAccessFailure(ProjectAccessIssue issue, const std::string& detail) {
+	projectAccessIssue_ = issue;
+	projectAccessDetail_ = detail;
+	projectAccessWarningRequested_ = true;
+	return DescribeProjectAccessIssue();
+}
+
+std::string ImGuiManager::DescribeProjectAccessIssue() const {
+	switch (projectAccessIssue_) {
+	case ProjectAccessIssue::Busy:
+		return SelectEditorText(editorLanguage_, "別の生成操作・登録情報の更新・管理されたビルドが実行中です。その操作が完了してから再操作してください。",
+			"Another generation, registry update or managed build is active. Retry after it completes.");
+	case ProjectAccessIssue::RegistryConflict:
+		return SelectEditorText(editorLanguage_, "同じ登録情報が別の操作で変更されたため保存できませんでした。Project ManagerのRefreshで現在の内容を読み直し、再操作してください。",
+			"The same registry entry changed in another operation. Use Refresh in Project Manager, review the current values, then retry.");
+	case ProjectAccessIssue::InvalidRegistry:
+		return SelectEditorText(editorLanguage_, "登録情報を検証できないため保存・読込を中止しました。診断にある登録ファイルの内容を確認してください。",
+			"Registry validation failed. Review the registry file identified in the diagnostics.");
+	case ProjectAccessIssue::PendingRecovery:
+		return SelectEditorText(editorLanguage_, "未完了の生成処理があるため新しい操作を開始できません。Project Managerで保留中の操作と復旧状態を確認してください。",
+			"A generation operation is pending. Review its pending action and recovery state in Project Manager.");
+	case ProjectAccessIssue::UnsafePath:
+		return SelectEditorText(editorLanguage_, "対象パスの安全性を確認できないため処理できません。登録先の絶対パスとリンク・同期状態を確認してください。",
+			"The target path could not be validated. Check its absolute registered path, links and synchronization state.");
+	default:
+		return SelectEditorText(editorLanguage_, "同時操作を防ぐための排他制御を取得できません。対象パスとアクセス権を確認して再操作してください。",
+			"Exclusive access could not be acquired. Check the target path and access permissions, then retry.");
+	}
+}
+
+void ImGuiManager::DrawProjectAccessWarning() {
+	const char* title = SelectEditorText(editorLanguage_, "プロジェクト操作を完了できません###ProjectAccessWarning",
+		"Project Operation Failed###ProjectAccessWarning");
+	if (projectAccessWarningRequested_) { ImGui::OpenPopup(title); projectAccessWarningRequested_ = false; }
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 520.0f);
+	ImGui::TextWrapped("%s", DescribeProjectAccessIssue().c_str());
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) {
+		ImGui::TextWrapped("%s", projectAccessDetail_.c_str());
+		ImGui::TreePop();
+	}
+	ImGui::PopTextWrapPos();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
+}
+
 bool ImGuiManager::ConsumeProjectLauncherRequest(ProjectLauncherRequest& request) {
 	if (!projectLauncherRequestPending_) {
 		return false;
@@ -2802,6 +2931,8 @@ bool ImGuiManager::PickSceneEntity(
 		return false;
 	}
 
+	if (PickUILayoutEntity(editorSession_->GetEditDocument(), false, x,y,width,height)) return true;
+	if (drawingUIEditorView_ && GetSceneUIEditorView().Isolated()) return false;
 	Camera* camera = Object3dCommon::GetInstance()
 		? Object3dCommon::GetInstance()->GetDefaultCamera()
 		: nullptr;
@@ -4413,6 +4544,8 @@ void ImGuiManager::DrawSceneGizmo(
 	}
 	SceneDocument& document = editorSession_->GetEditDocument();
 	SceneEntity* entity = document.FindEntity(selectedEntityId_);
+	if (DrawUILayoutGizmo(document, selectedEntityId_, false, x, y, width, height)) return;
+	if (drawingUIEditorView_ && GetSceneUIEditorView().Isolated()) return;
 	Camera* camera = Object3dCommon::GetInstance()
 		? Object3dCommon::GetInstance()->GetDefaultCamera()
 		: nullptr;
@@ -4460,8 +4593,8 @@ void ImGuiManager::DrawSceneGizmo(
 		projectionMatrix = MakeOrthographicMatrix(
 			0.0f,
 			0.0f,
-			static_cast<float>((std::max)(textureWidth, uint32_t{ 1 })),
-			static_cast<float>((std::max)(textureHeight, uint32_t{ 1 })),
+			static_cast<float>(WinApp::kClientWidth),
+			static_cast<float>(WinApp::kClientHeight),
 			0.0f,
 			100.0f
 		);
@@ -4559,6 +4692,8 @@ void ImGuiManager::DrawSceneGizmo(
 }
 
 void ImGuiManager::Finalize(){
+	ClearUIMigrationSnapshots();
+	delete prefabUILayoutPreviewDocument_; prefabUILayoutPreviewDocument_ = nullptr;
 	delete spatialBaseDocument_; spatialBaseDocument_ = nullptr;
 	delete spatialSampleDocument_; spatialSampleDocument_ = nullptr;
 	StopAudioPreview();
@@ -6776,7 +6911,8 @@ void ImGuiManager::DrawHierarchyWindow(const char* sceneName) {
 			if (
 				targetEntity &&
 				!targetEntity->locked &&
-				rootsCanBeEdited(hierarchyDroppedIds)
+				rootsCanBeEdited(hierarchyDroppedIds) &&
+				!QueueUIReparent(document,hierarchyDroppedIds,targetEntity->parentId,reorderTargetId,reorderAfter)
 			) {
 				if (reorderAfter) {
 					uint64_t insertAfterId = reorderTargetId;
@@ -6805,8 +6941,8 @@ void ImGuiManager::DrawHierarchyWindow(const char* sceneName) {
 				) &&
 				rootsCanBeEdited(hierarchyDroppedIds)
 			) {
-				for (uint64_t entityId : hierarchyDroppedIds) {
-					document.MoveEntityToParent(entityId, reparentTargetId);
+				if (!QueueUIReparent(document,hierarchyDroppedIds,reparentTargetId)) {
+					for (uint64_t entityId : hierarchyDroppedIds) document.MoveEntityToParent(entityId, reparentTargetId);
 				}
 			}
 		}
@@ -6934,6 +7070,7 @@ void ImGuiManager::DrawHierarchyWindow(const char* sceneName) {
 }
 
 void ImGuiManager::ResetComponentPicker(ComponentPickerState& state) {
+	legacyMenuPanelAddition_ = false;
 	state.document = nullptr;
 	state.documentKey.clear();
 	state.entityId = 0;
@@ -8231,9 +8368,13 @@ void ImGuiManager::DrawComponentPicker(
 		: "Add " + std::to_string(state.items.size()) +
 			" Components##ConfirmComponents";
 	const bool canConfirm = targetEntity &&
-		(!sceneTarget || !targetEntity->locked) &&
+		!targetEntity->locked &&
 		!targetEntity->folder && contextAvailable && !state.items.empty();
 	ImGui::BeginDisabled(!canConfirm);
+	if (IsComponentPickerItemQueued(state, "MenuPanel")) {
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "標準構成は同じEntityにMenuPanelとUICanvasを用意します。", "Standard menus add MenuPanel and UICanvas on the same entity."));
+		ImGui::Checkbox(SelectEditorText(editorLanguage_, "旧構成として追加（既存配置を維持）", "Add Legacy Panel (keep existing layout)"), &legacyMenuPanelAddition_);
+	}
 	if (ImGui::Button(confirmLabel.c_str())) {
 		std::vector<std::string> orderedTypes;
 		std::unordered_set<std::string> orderedTypeSet;
@@ -8253,7 +8394,13 @@ void ImGuiManager::DrawComponentPicker(
 				orderedTypes.push_back(definition->type);
 			}
 		}
+		// 構成追加を一つの候補にまとめ、失敗時にCanvasだけ残さない。
+		const bool menuComposition = orderedTypeSet.contains("MenuPanel") || orderedTypeSet.contains("MenuItem");
+		auto candidate = menuComposition ? std::make_unique<SceneDocument>(*document) : nullptr;
+		SceneDocument& addition = candidate ? *candidate : *document;
+		const uint64_t targetId = targetEntity->id;
 		int addedCount = 0;
+		std::string setupIssue;
 		for (const std::string& type : orderedTypes) {
 			const EditorComponentDefinition* definition =
 				FindEditorComponentDefinition(type);
@@ -8264,11 +8411,31 @@ void ImGuiManager::DrawComponentPicker(
 			) {
 				continue;
 			}
-			if (document->AddComponent(targetEntity->id, type)) {
+			if (addition.AddComponent(targetId, type)) {
 				++addedCount;
+				if (type == "MenuPanel" && !legacyMenuPanelAddition_ && !PrepareStandardMenuPanel(addition, targetId, setupIssue)) break;
+				const auto* itemOwner = addition.FindEntity(targetId);
+				const auto* parent = itemOwner ? addition.FindEntity(itemOwner->parentId) : nullptr;
+				const auto* panel = parent ? FindComponent(*parent, "MenuPanel") : nullptr;
+				if (type == "MenuItem" && panel && panel->menuLayoutMode == "CanvasItems" &&
+					!PrepareStandardMenuItem(addition, targetId, true, !FindComponent(*itemOwner, "UITransform"), setupIssue)) break;
 			}
 		}
-		if (addedCount > 0) {
+		const auto* prepared = addition.FindEntity(targetId);
+		const auto* standard = prepared ? FindComponent(*prepared, "MenuPanel") : nullptr;
+		SceneUILayout::Layout checkedLayout;
+		if (menuComposition && setupIssue.empty() && standard && standard->menuLayoutMode == "CanvasItems")
+			SceneUILayout::Resolve(addition, targetId, checkedLayout, &setupIssue);
+		if (!setupIssue.empty()) {
+			state.error = LocalizeMenuIssue(setupIssue);
+			ImGui::OpenPopup(SelectEditorText(editorLanguage_, "メニュー構成を追加できません###MenuComponentSetupFailed", "Menu Setup Failed###MenuComponentSetupFailed"));
+		} else if (addedCount > 0) {
+			if (candidate) *document = std::move(*candidate);
+			if (menuComposition) {
+				const std::string summaryType = orderedTypeSet.contains("MenuPanel") ? "MenuPanel" : "MenuItem";
+				if (sceneTarget) sceneSummarySelectedComponentType_ = summaryType;
+				else prefabSummarySelectedComponentType_ = summaryType;
+			}
 			if (sceneTarget) {
 				editorSession_->RequestSceneReload();
 			}
@@ -8282,6 +8449,15 @@ void ImGuiManager::DrawComponentPicker(
 		}
 	}
 	ImGui::EndDisabled();
+	// Component picker自身がModalなので、拒否通知もその内側のModalとして開く。
+	if (ImGui::BeginPopupModal(SelectEditorText(editorLanguage_, "メニュー構成を追加できません###MenuComponentSetupFailed", "Menu Setup Failed###MenuComponentSetupFailed"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "メニュー構成を追加できませんでした。", "Could not add the menu configuration."));
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 500.0f);
+		ImGui::TextWrapped("%s", state.error.c_str());
+		ImGui::PopTextWrapPos();
+		if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
 
 	if (closePicker || !keepOpen) {
 		ImGui::CloseCurrentPopup();
@@ -8304,6 +8480,2660 @@ void ImGuiManager::DrawPrefabComponentPicker() {
 		prefabComponentPicker_,
 		ComponentPickerTarget::Prefab
 	);
+}
+
+namespace {
+	// 同じWindow/ID階層のまま背景を後描きする。Popupと再帰Item編集を別Windowへ移さない。
+	// 各scopeが独立したsplitterを持ち、内側の背景を外側の前景へ順序どおり統合する。
+	class MenuInspectorSection {
+	public:
+		~MenuInspectorSection() { End(); }
+		MenuInspectorSection() = default;
+		MenuInspectorSection(const MenuInspectorSection&) = delete;
+		MenuInspectorSection& operator=(const MenuInspectorSection&) = delete;
+
+		// Popupは別DrawListなので、親Inspectorの幅制約を持ち込まない。
+		static bool IsActive() { return activeDrawList_ == ImGui::GetWindowDrawList(); }
+		static float ContentWidth() {
+			const float available = ImGui::GetContentRegionAvail().x;
+			return (std::max)(1.0f, IsActive() ? (std::min)(available, rightEdge_ - ImGui::GetCursorScreenPos().x) : available);
+		}
+
+		bool Begin(const char* title, bool collapsible = false) {
+			End();
+			if (hasPrevious_) ImGui::Dummy(ImVec2(0.0f, ImGui::GetFontSize() * 0.55f));
+			hasPrevious_ = true;
+			origin_ = ImGui::GetCursorScreenPos();
+			width_ = ContentWidth();
+			padding_ = ImGui::GetFontSize() * 0.6f;
+			padding_ = (std::min)(padding_, width_ * 0.1f);
+			headerHeight_ = title ? ImGui::GetFontSize() * 1.2f + padding_ * 2.0f : padding_;
+			if (title && !collapsible)
+				headerHeight_ = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize() * 1.1f, (std::numeric_limits<float>::max)(),
+					(std::max)(1.0f, width_ - padding_ * 2.0f), title).y + padding_ * 2.0f;
+			drawList_ = ImGui::GetWindowDrawList();
+			previousRight_ = rightEdge_;
+			previousDrawList_ = activeDrawList_;
+			rightEdge_ = origin_.x + width_ - padding_;
+			activeDrawList_ = drawList_;
+			splitter_.Split(drawList_, 2);
+			splitter_.SetCurrentChannel(drawList_, 1);
+			ImGui::BeginGroup();
+			bool expanded = true;
+			if (title && collapsible) {
+				ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+				ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.06f));
+				ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(1, 1, 1, 0.1f));
+				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padding_, padding_));
+				ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.1f);
+				expanded = ImGui::CollapsingHeader(title);
+				ImGui::PopFont();
+				ImGui::PopStyleVar();
+				ImGui::PopStyleColor(3);
+				headerHeight_ = ImGui::GetItemRectSize().y;
+			} else {
+				ImGui::Dummy(ImVec2(width_, headerHeight_));
+				if (title) {
+					drawList_->PushClipRect(origin_, ImVec2(origin_.x + width_, origin_.y + headerHeight_), true);
+					drawList_->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.1f,
+						ImVec2(origin_.x + padding_, origin_.y + padding_), ImGui::GetColorU32(ImGuiCol_Text), title, nullptr,
+						(std::max)(1.0f, width_ - padding_ * 2.0f));
+					drawList_->PopClipRect();
+				}
+			}
+			ImGui::Indent(padding_);
+			// 負の幅は現在の字下げから都度計算される。右側の余白も親から継承する。
+			const float rightInset = ImGui::GetContentRegionAvail().x - ContentWidth();
+			ImGui::PushItemWidth(-(std::max)(1.0f, rightInset));
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ContentWidth());
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.26f, 0.30f, 0.35f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.31f, 0.37f, 0.44f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.35f, 0.43f, 0.51f, 1.0f));
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.92f, 0.95f, 1.0f));
+			open_ = true;
+			return expanded;
+		}
+
+		void End() {
+			if (!open_) return;
+			ImGui::PopStyleColor(4);
+			ImGui::PopTextWrapPos();
+			ImGui::PopItemWidth();
+			rightEdge_ = previousRight_;
+			activeDrawList_ = previousDrawList_;
+			ImGui::Unindent(padding_);
+			ImGui::Dummy(ImVec2(width_, padding_));
+			ImGui::EndGroup();
+			const ImVec2 bottom = ImGui::GetItemRectMax();
+			splitter_.SetCurrentChannel(drawList_, 0);
+			const bool itemRow = headerHeight_ == padding_;
+			drawList_->AddRectFilled(origin_, ImVec2(origin_.x + width_, bottom.y), ImGui::GetColorU32(itemRow
+				? ImVec4(0.20f, 0.235f, 0.28f, 1) : ImVec4(0.17f, 0.19f, 0.22f, 1)));
+			if (headerHeight_ > padding_) {
+				drawList_->AddRectFilled(origin_, ImVec2(origin_.x + width_, origin_.y + headerHeight_), ImGui::GetColorU32(ImVec4(0.22f, 0.25f, 0.29f, 1)));
+				drawList_->AddRectFilled(origin_, ImVec2(origin_.x + 2.0f, origin_.y + headerHeight_), ImGui::GetColorU32(ImVec4(0.47f, 0.58f, 0.68f, 1)));
+			}
+			splitter_.Merge(drawList_);
+			open_ = false;
+		}
+
+	private:
+		ImDrawListSplitter splitter_;
+		ImDrawList* drawList_ = nullptr;
+		ImDrawList* previousDrawList_ = nullptr;
+		inline static ImDrawList* activeDrawList_ = nullptr;
+		inline static float rightEdge_ = 0;
+		float previousRight_ = 0;
+		ImVec2 origin_{};
+		float width_ = 0, padding_ = 0, headerHeight_ = 0;
+		bool open_ = false, hasPrevious_ = false;
+	};
+
+	// 幅が足りないときはラベルを上へ逃がし、英語や狭いInspectorでも入力欄を残す。
+	template<class DrawField>
+	bool DrawMenuInspectorField(const char* label, DrawField draw) {
+		ImGui::PushID(label);
+		const float width = MenuInspectorSection::ContentWidth();
+		const float labelWidth = (std::max)(ImGui::CalcTextSize(label).x, width * 0.35f);
+		const float start = ImGui::GetCursorScreenPos().x;
+		ImGui::AlignTextToFramePadding();
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+		ImGui::TextUnformatted(label);
+		ImGui::PopTextWrapPos();
+		const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+		if (width - labelWidth - gap > ImGui::GetFontSize() * 8.0f) {
+			// SameLineの明示offsetはGroupOffsetを再加算するため使わない。
+			ImGui::SameLine();
+			ImGui::SetCursorScreenPos(ImVec2(start + labelWidth + gap, ImGui::GetCursorScreenPos().y));
+			ImGui::SetNextItemWidth((std::max)(1.0f, width - labelWidth - gap));
+		} else ImGui::SetNextItemWidth(width);
+		const bool changed = draw();
+		ImGui::PopID();
+		return changed;
+	}
+
+	// 共通の文字/画像/配置編集でも、メニュー区画内だけラベルを入力欄の外へ分離する。
+	template<class DrawField>
+	bool DrawMenuAdaptiveField(const char* label, DrawField draw) {
+		if (!MenuInspectorSection::IsActive() || label[0] == '#') return draw(label);
+		return DrawMenuInspectorField(label, [&]() { return draw("##Value"); });
+	}
+
+	bool BeginMenuInspectorCombo(const char* label, const char* preview) {
+		if (!MenuInspectorSection::IsActive() || label[0] == '#') return ImGui::BeginCombo(label, preview);
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + MenuInspectorSection::ContentWidth());
+		ImGui::TextUnformatted(label);
+		ImGui::PopTextWrapPos();
+		ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+		return ImGui::BeginCombo((std::string("##") + label).c_str(), preview);
+	}
+
+	bool MenuInspectorButton(const char* label, const ImVec2& size = ImVec2(0, 0)) {
+		if (!MenuInspectorSection::IsActive()) return ImGui::Button(label, size);
+		const float width = MenuInspectorSection::ContentWidth();
+		const char* end = std::strstr(label, "##");
+		if (!end) end = label + std::strlen(label);
+		std::string wrapped;
+		for (const char* line = label; line < end;) {
+			const char* next = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), line, end,
+				(std::max)(1.0f, width - ImGui::GetStyle().FramePadding.x * 2));
+			// 極端に狭い幅でもUTF-8文字の途中を改行せず、必ず先へ進める。
+			if (next <= line) { next = line + 1; while (next < end && (static_cast<unsigned char>(*next) & 0xC0) == 0x80) ++next; }
+			if (!wrapped.empty()) wrapped += '\n';
+			wrapped.append(line, next);
+			line = next;
+			while (line < end && (*line == ' ' || *line == '\n')) ++line;
+		}
+		wrapped += "###";
+		wrapped += label;
+		return ImGui::Button(wrapped.c_str(), ImVec2((std::min)(width, size.x > 0 ? size.x : ImGui::CalcTextSize(label, end).x + ImGui::GetStyle().FramePadding.x * 2), size.y));
+	}
+
+	bool MenuInspectorSmallButton(const char* label) {
+		if (!MenuInspectorSection::IsActive()) return ImGui::SmallButton(label);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 0));
+		const bool pressed = MenuInspectorButton(label);
+		ImGui::PopStyleVar();
+		return pressed;
+	}
+
+	bool IsMenuDescendant(const SceneDocument& document, uint64_t id, uint64_t rootId, bool includeRoot = true) {
+		if (!rootId) return true;
+		if (!includeRoot && id == rootId) return false;
+		const SceneEntity* entity = document.FindEntity(id);
+		for (size_t depth = 0; entity && depth <= document.GetEntities().size(); ++depth) {
+			if (entity->id == rootId) return true;
+			entity = document.FindEntity(entity->parentId);
+		}
+		return false;
+	}
+
+	const char* MenuAuthoringLabel(EditorLanguage language, const char* id) {
+		struct Label { const char* id; const char* ja; const char* en; };
+		static constexpr Label labels[] = {
+			{ "Gameplay", "ゲーム", "Gameplay" }, { "UI", "UI（メニュー）", "UI (Menus)" },
+			{ "Vertical", "縦", "Vertical" }, { "Horizontal", "横", "Horizontal" },
+			{ "Close", "閉じる", "Close" }, { "InvokeItem", "指定項目を実行", "Invoke Item" }, { "None", "何もしない", "None" },
+			{ "WhenNoMenu", "メニューを表示していないとき", "When No Menu Is Open" },
+			{ "FocusedMenu", "指定メニューを操作中", "While This Menu Is Focused" },
+			{ "OnKeyPressed", "キーを押したとき", "Key Pressed" },
+			{ "OnMenuItemConfirmed", "項目を決定したとき", "Menu Item Confirmed" },
+			{ "OnMenuCancelled", "キャンセルしたとき", "Menu Cancelled" },
+			{ "OpenMenu", "メニューを開く", "Open Menu" }, { "CloseMenu", "メニューを閉じる", "Close Menu" },
+			{ "SelectPreviousMenuItem", "前の項目を選ぶ", "Select Previous Item" },
+			{ "SelectNextMenuItem", "次の項目を選ぶ", "Select Next Item" },
+			{ "ConfirmMenuItem", "選択項目を決定", "Confirm Selected Item" }, { "CancelMenu", "キャンセル", "Cancel Menu" },
+			{ "PauseGame", "ゲームをポーズ", "Pause Game" }, { "ResumeGame", "ゲームを再開", "Resume Game" },
+			{ "RequestApplicationExit", "ゲーム終了を要求", "Request Application Exit" },
+			{ "SceneTransition", "Sceneを切り替える", "Change Scene" },
+			{ "PlayAudio", "音を再生", "Play Audio" }, { "StopAudio", "音を停止", "Stop Audio" },
+			{ "PauseAudio", "音を一時停止", "Pause Audio" }, { "ResumeAudio", "音を再開", "Resume Audio" },
+			{ "PlayTextMotion", "文字演出を再生", "Play Text Motion" }, { "StopTextMotion", "文字演出を停止", "Stop Text Motion" },
+			{ "ResetTextMotion", "文字演出をリセット", "Reset Text Motion" },
+			{ "ESCAPE", "Esc", "Esc" }, { "ENTER", "Enter", "Enter" },
+			{ "UP", "↑", "Up" }, { "DOWN", "↓", "Down" }, { "LEFT", "←", "Left" }, { "RIGHT", "→", "Right" }
+		};
+		for (const Label& label : labels) if (std::strcmp(label.id, id) == 0) return SelectEditorText(language, label.ja, label.en);
+		return id;
+	}
+
+	bool DrawMenuChoice(EditorLanguage language, const char* label, std::string& value, std::initializer_list<const char*> choices) {
+		if (MenuInspectorSection::IsActive() && label[0] != '#')
+			return DrawMenuInspectorField(label, [&]() { return DrawMenuChoice(language, "##Value", value, choices); });
+		bool changed = false;
+		if (ImGui::BeginCombo(label, MenuAuthoringLabel(language, value.c_str()))) {
+			for (const char* choice : choices) {
+				if (ImGui::Selectable(MenuAuthoringLabel(language, choice), value == choice)) { value = choice; changed = true; }
+			}
+			ImGui::EndCombo();
+		}
+		return changed;
+	}
+
+	// 値だけのDrag payload。Documentの内容差替え後や別Scene/Prefabへの誤接続を拒否する。
+	struct MenuEntityPayload { uint64_t generation; uint64_t entityId; };
+}
+
+bool ImGuiManager::DrawMenuEntityField(const char* label, SceneDocument& document, uint64_t& entityId,
+	const char* requiredType, uint64_t rootId, bool includeRoot, const std::vector<uint64_t>* allowedIds, const char* unsetLabel) {
+	if (MenuInspectorSection::IsActive() && label[0] != '#')
+		return DrawMenuInspectorField(label, [&]() { return DrawMenuEntityField("##Reference", document, entityId, requiredType, rootId, includeRoot, allowedIds, unsetLabel); });
+	bool changed = false;
+	auto permitted = [&](const SceneEntity& candidate) {
+		const auto* root = document.FindEntity(rootId);
+		const auto* panel = root ? FindComponent(*root, "MenuPanel") : nullptr;
+		if (std::strcmp(requiredType, "MenuItem") == 0 && panel && panel->menuLayoutMode == "CanvasItems") {
+			SceneUILayout::Layout layout;
+			if (candidate.parentId != rootId || !SceneUILayout::Resolve(document, candidate.id, layout) || layout.canvasEntityId != rootId) return false;
+		}
+		const bool hasType = std::strcmp(requiredType, "Visual") == 0
+			? FindEnabledComponent(candidate, "SpriteRenderer") || FindEnabledComponent(candidate, "TextRenderer")
+			: FindEnabledComponent(candidate, requiredType) != nullptr;
+		if (allowedIds && std::strcmp(requiredType, "MenuItem") == 0) {
+			const SceneComponent* item = FindEnabledComponent(candidate, "MenuItem");
+			if (!item || !item->menuInteractable) return false;
+		}
+		return !candidate.folder && hasType && IsMenuDescendant(document, candidate.id, rootId, includeRoot) &&
+			(!allowedIds || std::find(allowedIds->begin(), allowedIds->end(), candidate.id) != allowedIds->end());
+	};
+	const SceneEntity* selected = document.FindEntity(entityId);
+	const bool valid = selected && permitted(*selected);
+	const std::string preview = valid ? BuildEntityHierarchyLabel(document, *selected)
+		: entityId ? SelectEditorText(editorLanguage_, "参照先が無効です", "Invalid Reference")
+		: unsetLabel ? unsetLabel : SelectEditorText(editorLanguage_, "未指定", "Not Set");
+	ImGui::PushID(label);
+	const bool open = ImGui::BeginCombo(label, preview.c_str());
+	if (open) {
+		if (ImGui::IsWindowAppearing()) menuReferenceSearch_.clear();
+		InputTextString(SelectEditorText(editorLanguage_, "検索###MenuReferenceSearch", "Search###MenuReferenceSearch"), menuReferenceSearch_);
+		if (ImGui::Selectable(unsetLabel ? unsetLabel : SelectEditorText(editorLanguage_, "未指定にする", "Clear Reference"), entityId == 0)) { entityId = 0; changed = true; }
+		std::string query = menuReferenceSearch_;
+		std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		for (const SceneEntity& candidate : document.GetEntities()) {
+			if (!permitted(candidate)) continue;
+			const std::string name = BuildEntityHierarchyLabel(document, candidate);
+			std::string search = name;
+			std::transform(search.begin(), search.end(), search.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			if (!query.empty() && search.find(query) == std::string::npos) continue;
+			ImGui::PushID(static_cast<int>(candidate.id));
+			if (ImGui::Selectable(name.c_str(), entityId == candidate.id)) { entityId = candidate.id; changed = true; }
+			ImGui::PopID();
+		}
+		ImGui::EndCombo();
+	}
+	// Combo本体にだけDropを受け付けるため、Popup中は別Itemをtargetにしない。
+	if (!open && ImGui::BeginDragDropTarget()) {
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("MENU_ENTITY_REFERENCE")) {
+			if (payload->DataSize == static_cast<int>(sizeof(MenuEntityPayload))) {
+				MenuEntityPayload value{};
+				std::memcpy(&value, payload->Data, sizeof(value));
+				const SceneEntity* candidate = document.FindEntity(value.entityId);
+				if (value.generation != 0 && value.generation == document.GetContentGeneration() && candidate && permitted(*candidate)) {
+					entityId = candidate->id;
+					changed = true;
+				}
+			}
+		}
+		ImGui::EndDragDropTarget();
+	}
+	if (valid && !open && ImGui::IsItemHovered()) {
+		ImGui::SetTooltip("%s", SelectEditorText(editorLanguage_, "クリックで参照先を選択します。右クリックで参照のコピー操作を開きます。", "Click to select a reference. Right-click for reference copy operations."));
+	}
+	if (valid && !open && ImGui::BeginPopupContextItem("MenuReferenceOperations")) {
+		// 参照複製は右Clickの補助操作へ置き、通常の参照選択を占有しない。
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "同じEntityの参照を別のメニュー参照欄へコピーします。Entityの移動や複製は行いません。", "Copies this entity reference to another menu field. It does not move or duplicate the entity."));
+		ImGui::SmallButton(SelectEditorText(editorLanguage_, "この参照をドラッグ###DragReference", "Drag This Reference###DragReference"));
+		if (ImGui::BeginDragDropSource()) {
+			const MenuEntityPayload payload{ document.GetContentGeneration(), selected->id };
+			ImGui::SetDragDropPayload("MENU_ENTITY_REFERENCE", &payload, sizeof(payload));
+			ImGui::TextUnformatted(selected->name.c_str());
+			ImGui::EndDragDropSource();
+		}
+		ImGui::EndPopup();
+	}
+	if (entityId && !valid && !changed) ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "型・親子関係・参照先を確認してください", "Check the component type, hierarchy, and reference"));
+	ImGui::PopID();
+	return changed;
+}
+
+bool ImGuiManager::DrawUiEventActions(SceneDocument& document, SceneEventBinding& binding) {
+	bool changed = false;
+	int removeIndex = -1;
+	for (size_t i = 0; i < binding.actions.size(); ++i) {
+		SceneEventAction& action = binding.actions[i];
+		ImGui::PushID(static_cast<int>(i));
+		ImGui::Separator();
+		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "処理", "Action"), action.type,
+			{ "OpenMenu", "CloseMenu", "SelectPreviousMenuItem", "SelectNextMenuItem", "ConfirmMenuItem", "CancelMenu",
+			  "SceneTransition", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio",
+			  "PlayTextMotion", "StopTextMotion", "ResetTextMotion" });
+		if (action.type == "PauseGame" || action.type == "ResumeGame" || action.type == "RequestApplicationExit")
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "ゲーム内Pause・再開・アプリ終了は後続実装です。この設定は保持しますが、現在は実行しません。", "In-game pause, resume and application exit are pending implementation. This setting is preserved but will not execute yet."));
+		const char* targetType = nullptr;
+		if (action.type == "OpenMenu" || action.type == "CloseMenu" || action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" || action.type == "ConfirmMenuItem" || action.type == "CancelMenu") targetType = "MenuPanel";
+		else if (action.type == "PauseGame" || action.type == "ResumeGame") targetType = "GamePause";
+		else if (action.type == "PlayAudio" || action.type == "StopAudio" || action.type == "PauseAudio" || action.type == "ResumeAudio") targetType = "AudioSource";
+		else if (action.type == "PlayTextMotion" || action.type == "StopTextMotion" || action.type == "ResetTextMotion") targetType = "TextMotion";
+		if (targetType) {
+			if (DrawMenuEntityField(SelectEditorText(editorLanguage_, "対象", "Target"), document, action.targetEntityId, targetType)) {
+				action.targetEntityName.clear(); changed = true;
+			}
+			if (!action.targetEntityId) ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "対象を指定してください", "Choose a target"));
+		}
+		if (targetType && std::strcmp(targetType, "TextMotion") == 0) {
+			const SceneEntity* target = document.FindEntity(action.targetEntityId);
+			const SceneComponent* motion = target ? FindEnabledComponent(*target, "TextMotion") : nullptr;
+			if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "Clip", "Clip"), action.textMotionClipId.empty() ? "---" : action.textMotionClipId.c_str())) {
+				if (action.type != "PlayTextMotion" && ImGui::Selectable(SelectEditorText(editorLanguage_, "現在の演出", "Current Motion"), action.textMotionClipId.empty())) { action.textMotionClipId.clear(); changed = true; }
+				if (motion) for (const SceneTextMotionClip& clip : motion->textMotionClips) {
+					if (ImGui::Selectable(clip.id.c_str(), action.textMotionClipId == clip.id)) { action.textMotionClipId = clip.id; changed = true; }
+				}
+				ImGui::EndCombo();
+			}
+		}
+		if (action.type == "SceneTransition") {
+			if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "遷移先Scene", "Destination Scene"), action.sceneId.empty() ? "---" : action.sceneId.c_str())) {
+				if (sceneCatalog_) for (const SceneDescriptor& scene : sceneCatalog_->GetScenes()) {
+					const std::string name = scene.displayName + " (" + scene.id + ")";
+					if (ImGui::Selectable(name.c_str(), action.sceneId == scene.id)) { action.sceneId = scene.id; changed = true; }
+				}
+				ImGui::EndCombo();
+			}
+			changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "演出Asset", "Transition Asset"), [&](const char* fieldLabel) { return InputTransitionAssetPath(fieldLabel, action.transitionAssetPath); });
+			const auto issue = TransitionReferenceIssue(action.transitionAssetPath);
+			if (!issue.empty()) {
+				ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "遷移演出を参照できません。Project内の有効な演出Assetを選び直してください。", "Cannot resolve the transition. Select a valid transition asset in this project."));
+				if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) { ImGui::TextWrapped("%s", issue.c_str()); ImGui::TreePop(); }
+			}
+		}
+		if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "処理を削除", "Remove Action"))) removeIndex = static_cast<int>(i);
+		ImGui::PopID();
+	}
+	if (removeIndex >= 0) { binding.actions.erase(binding.actions.begin() + removeIndex); changed = true; }
+	if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "＋処理", "+ Action"))) {
+		SceneEventAction action{}; action.type = "OpenMenu";
+		binding.actions.push_back(std::move(action)); changed = true;
+	}
+	return changed;
+}
+
+bool ImGuiManager::DrawUiEventBinding(SceneDocument& document, SceneEventBinding& binding) {
+	bool changed = false;
+	ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "UIイベント：メニュー操作の実行接続は後続工程です", "UI event: menu runtime integration is pending"));
+	changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "条件", "Condition"), binding.triggerType,
+		{ "OnKeyPressed", "OnMenuItemConfirmed", "OnMenuCancelled" });
+	if (binding.triggerType == "OnKeyPressed") {
+		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "入力を受けるとき", "Input Scope"), binding.uiInputScope, { "WhenNoMenu", "FocusedMenu" });
+		if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "キー", "Key"), MenuAuthoringLabel(editorLanguage_, binding.triggerKey.c_str()))) {
+			for (const SceneInputKeyDefinition& key : kSceneInputKeyDefinitions) {
+				if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, key.name), binding.triggerKey == key.name)) { binding.triggerKey = key.name; changed = true; }
+			}
+			ImGui::EndCombo();
+		}
+	}
+	const char* targetType = binding.triggerType == "OnMenuItemConfirmed" ? "MenuItem" : "MenuPanel";
+	if (binding.triggerType != "OnKeyPressed" || binding.uiInputScope == "FocusedMenu") {
+		if (DrawMenuEntityField(SelectEditorText(editorLanguage_, "通知・入力の対象", "Event Target"), document, binding.targetEntityId, targetType)) { binding.targetEntityName.clear(); changed = true; }
+	}
+	changed |= ImGui::Checkbox(SelectEditorText(editorLanguage_, "一度だけ", "Trigger Once"), &binding.triggerOnce);
+	changed |= ImGui::DragFloat(SelectEditorText(editorLanguage_, "再受付までの秒数", "Cooldown (Seconds)"), &binding.cooldown, 0.01f, 0.0f, 10000.0f);
+	changed |= DrawUiEventActions(document, binding);
+	return changed;
+}
+
+bool ImGuiManager::DrawPrefabUiEvents(SceneDocument& document, SceneComponent& component) {
+	bool changed = false;
+	int removeIndex = -1;
+	for (size_t i = 0; i < component.eventBindings.size(); ++i) {
+		SceneEventBinding& binding = component.eventBindings[i];
+		ImGui::PushID(static_cast<int>(i));
+		if (binding.executionDomain == "UI") {
+			if (ImGui::TreeNodeEx("UiEvent", ImGuiTreeNodeFlags_DefaultOpen, "UI Event %zu", i + 1)) {
+				changed |= DrawUiEventBinding(document, binding);
+				if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Eventを削除", "Remove Event"))) removeIndex = static_cast<int>(i);
+				ImGui::TreePop();
+			}
+		} else {
+			ImGui::TextDisabled("%s: %s", binding.executionDomain.c_str(), binding.triggerType.c_str());
+			ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "既存ゲームEventの内容は保持します", "Existing gameplay event data is preserved"));
+		}
+		ImGui::PopID();
+	}
+	if (removeIndex >= 0) { component.eventBindings.erase(component.eventBindings.begin() + removeIndex); changed = true; }
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "UI Eventを追加", "Add UI Event"))) {
+		SceneEventBinding binding{}; binding.executionDomain = "UI"; binding.triggerType = "OnKeyPressed";
+		binding.triggerKey = "ENTER"; binding.triggerOnce = false;
+		component.eventBindings.push_back(std::move(binding)); changed = true;
+	}
+	return changed;
+}
+
+namespace {
+	struct MenuKeySetup {
+		const char* key;
+		const char* action;
+		const char* scope;
+		uint64_t target;
+	};
+
+	std::vector<MenuKeySetup> MenuSetupKeys(const SceneEntity& owner, const std::string& operation) {
+		if (operation == "PauseKey") return { { "ESCAPE", "PauseGame", "WhenNoMenu", owner.id } };
+		const SceneComponent* panel = FindEnabledComponent(owner, "MenuPanel");
+		if (!panel || (operation != "MenuKeys" && operation != "NavigationKeys")) return {};
+		std::vector<MenuKeySetup> keys = {
+			{ panel->menuNavigationAxis == "Horizontal" ? "LEFT" : "UP", "SelectPreviousMenuItem", "FocusedMenu", owner.id },
+			{ panel->menuNavigationAxis == "Horizontal" ? "RIGHT" : "DOWN", "SelectNextMenuItem", "FocusedMenu", owner.id },
+			{ "ENTER", "ConfirmMenuItem", "FocusedMenu", owner.id },
+			{ "ESCAPE", "CancelMenu", "FocusedMenu", owner.id }
+		};
+		if (operation == "NavigationKeys") keys.resize(2);
+		return keys;
+	}
+
+	// 同scope/同keyに異なる処理がある場合は上書きせず、ユーザーに解決を委ねる。
+	int MenuSetupKeyState(const SceneDocument& document, const MenuKeySetup& setup) {
+		int matching = 0;
+		bool conflict = false;
+		for (const SceneEntity& entity : document.GetEntities()) {
+			const SceneComponent* events = FindComponent(entity, "EventTrigger");
+			if (!events) continue;
+			for (const SceneEventBinding& binding : events->eventBindings) {
+				if (binding.executionDomain == "Gameplay" && binding.triggerType == "OnKeyPressed" &&
+					ResolveSceneInputKey(binding.triggerKey) == ResolveSceneInputKey(setup.key) &&
+					(setup.action == std::string("SelectPreviousMenuItem") || setup.action == std::string("SelectNextMenuItem") ||
+					 setup.action == std::string("ConfirmMenuItem") || setup.action == std::string("CancelMenu"))) conflict = true;
+				if (binding.executionDomain != "UI" || binding.triggerType != "OnKeyPressed" ||
+					binding.uiInputScope != setup.scope || ResolveSceneInputKey(binding.triggerKey) != ResolveSceneInputKey(setup.key) ||
+					(binding.uiInputScope == "FocusedMenu" && binding.targetEntityId != setup.target)) continue;
+				++matching;
+				const bool expected = binding.actions.size() == 1 && binding.actions[0].type == setup.action && binding.actions[0].targetEntityId == setup.target;
+				conflict |= !expected || !events->enabled || binding.triggerOnce || binding.cooldown != 0.0f;
+			}
+		}
+		return conflict || matching > 1 ? -1 : matching;
+	}
+}
+
+
+namespace {
+	// PreviewにだけCanvasを補う。無効/壊れたCanvasを外側へfallbackさせない。
+	bool BuildUIEditorDocument(const SceneDocument& source, SceneDocument& preview, const Vector2& reference) {
+		preview = source;
+		std::vector<uint64_t> roots;
+		for (const SceneEntity& entity : source.GetEntities()) {
+			if (entity.parentId == 0 && FindComponent(entity, "UITransform")) roots.push_back(entity.id);
+		}
+		if (roots.empty()) return false;
+		const uint64_t id = preview.CreateEntity("Preview Canvas").id;
+		preview.AddComponent(id, "UICanvas");
+		auto* canvas = FindComponent(*preview.FindEntity(id), "UICanvas");
+		canvas->uiReferenceSize = { static_cast<uint32_t>(reference.x), static_cast<uint32_t>(reference.y) };
+		for (uint64_t root : roots) preview.SetParent(root, id);
+		return true;
+	}
+
+	TextRasterizer::Settings UIEditorTextSettings(const SceneComponent& text, const Vector2& size) {
+		TextRasterizer::Settings s;
+		s.text = text.textValue; s.fontFamily = text.textFontFamily; s.fontSize = text.textFontSize;
+		s.bold = text.textFontWeight == "Bold"; s.italic = text.textFontStyle == "Italic";
+		s.color = text.textColor; s.opacity = text.textOpacity;
+		s.horizontalAlignment = text.textHorizontalAlignment; s.verticalAlignment = text.textVerticalAlignment;
+		s.wordWrap = text.textWrapMode == "Word"; s.overflowMode = text.textOverflowMode; s.layoutSize = size;
+		s.characterSpacing = text.textCharacterSpacing; s.lineSpacing = text.textLineSpacing;
+		s.outlineEnabled = text.textOutlineEnabled; s.outlineWidth = text.textOutlineWidth; s.outlineColor = text.textOutlineColor;
+		s.shadowEnabled = text.textShadowEnabled; s.shadowOffset = text.textShadowOffset; s.shadowColor = text.textShadowColor;
+		return s;
+	}
+
+	Vector2 UIEditorPoint(const Vector2& point, const Matrix4x4& matrix) {
+		return { point.x * matrix.m[0][0] + point.y * matrix.m[1][0] + matrix.m[3][0],
+			point.x * matrix.m[0][1] + point.y * matrix.m[1][1] + matrix.m[3][1] };
+	}
+	bool UIEditorInverse(const Matrix4x4& matrix, Matrix4x4& inverse) {
+		const float determinant = matrix.m[0][0] * matrix.m[1][1] - matrix.m[0][1] * matrix.m[1][0];
+		if (!std::isfinite(determinant) || std::abs(determinant) < 0.000001f) return false;
+		inverse = Inverse(matrix);
+		for (const auto& row : inverse.m) for (float value : row) if (!std::isfinite(value)) return false;
+		return true;
+	}
+	bool DrawUIReferencePoints(const char* label, Vector2& value) {
+		bool changed = false;
+		ImGui::PushID(label);
+		ImGui::TextUnformatted(label);
+		const float cellWidth = MenuInspectorSection::IsActive()
+			? (std::min)(30.0f, (std::max)(1.0f, (MenuInspectorSection::ContentWidth() - ImGui::GetStyle().ItemSpacing.x * 2) / 3)) : 30.0f;
+		for (int y = 0; y < 3; ++y) {
+			for (int x = 0; x < 3; ++x) {
+				if (x) ImGui::SameLine();
+				const bool selected = value.x == x * 0.5f && value.y == y * 0.5f;
+				ImGui::PushID(y * 3 + x);
+				if (ImGui::Selectable(selected ? "[*]" : "[ ]", selected, 0, ImVec2(cellWidth, 20))) {
+					value = { x * 0.5f, y * 0.5f }; changed = true;
+				}
+				ImGui::PopID();
+			}
+		}
+		if (ImGui::TreeNode("XY")) {
+			changed |= ImGui::DragFloat2("##XY", &value.x, 0.01f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+		return changed;
+	}
+}
+
+bool ImGuiManager::DrawUILayoutFields(SceneDocument& document, SceneEntity& entity,
+	SceneComponent& component, bool prefab, UIAuthoringRequest& request) {
+	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	const SceneComponent before = component;
+	bool changed = false;
+	if (component.type == "UICanvas") {
+		changed |= DrawMenuAdaptiveField(text("制作時の画面サイズ", "Authoring Size"), [&](const char* fieldLabel) {
+			return ImGui::InputScalarN(fieldLabel, ImGuiDataType_U32, component.uiReferenceSize.data(), 2);
+		});
+		ImGui::TextDisabled("%s", text("表示方法: 画面いっぱいに伸縮", "Scaling: Stretch to fill"));
+		const char* labels[] = { text("画面に重ねる", "Screen Overlay"), text("ゲーム描画に含める", "Scene 2D") };
+		int space = component.uiRenderSpace == "Scene2D" ? 1 : 0;
+		if (DrawMenuAdaptiveField(text("表示先", "Render Space"), [&](const char* fieldLabel) { return ImGui::Combo(fieldLabel, &space, labels, 2); })) {
+			component.uiRenderSpace = space == 1 ? "Scene2D" : "ScreenOverlay"; changed = true;
+		}
+		ImGui::TextWrapped("%s", text("文字・画像・位置をまとめて縦横別に拡縮します。Scene2DはポストエフェクトとMonitorに含まれます。",
+			"Text, images and positions stretch together. Scene 2D is included in post effects and monitors."));
+		if (ImGui::TreeNode(text("詳細", "Details"))) {
+			changed |= DrawMenuAdaptiveField(text("画面の重なり順", "Canvas Order"), [&](const char* fieldLabel) { return ImGui::DragInt(fieldLabel, &component.uiCanvasSortingOrder); });
+			ImGui::TreePop();
+		}
+	} else {
+		SceneDocument preview;
+		const SceneDocument* resolved = &document;
+		if (prefab && BuildUIEditorDocument(document, preview, prefabUIReferenceSize_)) resolved = &preview;
+		SceneUILayout::Layout layout;
+		std::string reason;
+		const bool valid = SceneUILayout::Resolve(*resolved, entity.id, layout, &reason);
+		if (valid) {
+			const SceneEntity* canvas = document.FindEntity(layout.canvasEntityId);
+			ImGui::Text("%s: %s", text("所属UI画面", "UI Canvas"), canvas ? canvas->name.c_str() : text("Preview用の仮画面", "Temporary Preview Canvas"));
+			if (canvas && MenuInspectorSmallButton(text("Inspectorを開く", "Open Inspector"))) {
+				if (prefab) prefabSelectedEntityId_ = canvas->id; else {selectedEntityId_ = canvas->id;selectedEntityIds_={canvas->id};}
+			}
+		} else ImGui::TextWrapped("%s", LocalizeMenuIssue(reason).c_str());
+		changed |= DrawUIReferencePoints(text("親の基準位置 (Anchor)", "Parent Reference (Anchor)"), component.uiAnchor);
+		changed |= DrawMenuAdaptiveField(text("位置", "Position"), [&](const char* fieldLabel) { return ImGui::DragFloat2(fieldLabel, &component.uiPosition.x, 0.5f); });
+		changed |= DrawMenuAdaptiveField(text("表示枠のサイズ", "Layout Size"), [&](const char* fieldLabel) { return ImGui::DragFloat2(fieldLabel, &component.uiSize.x, 1.0f); });
+		changed |= DrawUIReferencePoints(text("自分の基点 (Pivot)", "Own Origin (Pivot)"), component.uiPivot);
+		if (ImGui::TreeNode(text("詳細", "Details"))) {
+			float degrees = component.uiRotation * 180.0f / 3.14159265358979323846f;
+			if (DrawMenuAdaptiveField(text("回転（度）", "Rotation (degrees)"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &degrees, 0.5f); })) {
+				component.uiRotation = degrees * 3.14159265358979323846f / 180.0f; changed = true;
+			}
+			changed |= DrawMenuAdaptiveField(text("拡大率", "Scale"), [&](const char* fieldLabel) { return ImGui::DragFloat2(fieldLabel, &component.uiScale.x, 0.01f); });
+			changed |= DrawMenuAdaptiveField(text("重なり順", "Order"), [&](const char* fieldLabel) { return ImGui::DragInt(fieldLabel, &component.uiSortingOrder); });
+			ImGui::TreePop();
+		}
+		if (BeginMenuInspectorCombo(text("サイズを合わせる", "Fit Size"), text("選択してください", "Choose"))) {
+			const SceneComponent* renderer = FindComponent(entity, "TextRenderer");
+			ImGui::BeginDisabled(!renderer);
+			if (ImGui::Selectable(text("文字", "Text"))) request = { entity.id, "FitText" };
+			ImGui::EndDisabled();
+			renderer = FindComponent(entity, "SpriteRenderer");
+			ImGui::BeginDisabled(!renderer || renderer->texturePath.empty());
+			if (ImGui::Selectable(text("画像の元サイズ", "Image Native Size"))) request = { entity.id, "FitImage" };
+			ImGui::EndDisabled();
+			ImGui::BeginDisabled(!valid);
+			if (ImGui::Selectable(text("親の枠（位置・基準位置・基点も左上へ）", "Parent Bounds (also resets position, anchor and pivot)"))) request = { entity.id, "FitParent" };
+			ImGui::EndDisabled();
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled("%s", text("サイズ合わせは一度だけ適用し、その後は自動追従しません。", "Fitting applies once; it does not track later changes."));
+	}
+	std::string error;
+	if (changed && !(component.type == "UICanvas" ? SceneUILayout::ValidateCanvas(component, error) : SceneUILayout::ValidateTransform(component, error))) {
+		component = before; uiAuthoringIssue_ = error; changed = false;
+	}
+	if (BeginMenuInspectorCombo(text("子を追加", "Add Child"), text("選択してください", "Choose"))) {
+		for (const auto& choice : { std::pair{ "グループ", "Group" }, std::pair{ "文字（UI配置＋文字表示）", "Text" }, std::pair{ "画像（UI配置＋画像表示）", "Image" } }) {
+			if (ImGui::Selectable(text(choice.first, choice.second))) request = { entity.id, std::string("Create") + choice.second };
+		}
+		ImGui::EndCombo();
+	}
+	if (component.type == "UICanvas") {
+		SceneUILayout::Layout layout; std::string error;
+		if (!SceneUILayout::Resolve(document,entity.id,layout,&error)) ImGui::TextWrapped("%s", LocalizeMenuIssue(error).c_str());
+	}
+	if (!uiAuthoringIssue_.empty()) ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "%s", LocalizeMenuIssue(uiAuthoringIssue_).c_str());
+	return changed;
+}
+
+bool ImGuiManager::DrawUIVisualFields(SceneDocument& document, SceneEntity& entity, SceneComponent& component) {
+	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	bool changed = false;
+	if (component.type == "TextRenderer" && editorSession_ && &document == &editorSession_->GetEditDocument()) {
+		ImGui::BeginDisabled(!editorSession_->IsEditing());
+		// MenuItemの代理編集内でもMenu本体の同名ボタンとIDを共有しない。
+		if (MenuInspectorButton(text("UI編集Sceneで開く###VisualOpenUIEditor", "Open in UI Editing Scene###VisualOpenUIEditor")))
+			StartSceneUIEditorView(document, entity.id);
+		ImGui::EndDisabled();
+	}
+	if (component.type == "SpriteRenderer") {
+		if (BeginMenuInspectorCombo(text("画像", "Image"), component.texturePath.empty() ? text("未選択", "None") : component.texturePath.c_str())) {
+			if (ImGui::Selectable(text("未選択", "None"), component.texturePath.empty())) { component.texturePath.clear(); changed = true; }
+			for (const auto& path : GetCachedTextureAssetPaths()) if (ImGui::Selectable(path.c_str(), path == component.texturePath)) {
+				component.texturePath = path; changed = true;
+			}
+			ImGui::EndCombo();
+		}
+		if (ImGui::BeginDragDropTarget()) {
+			if(const auto* payload=ImGui::AcceptDragDropPayload("PROJECT_TEXTURE_PATH")) {
+				const auto* path=static_cast<const char*>(payload->Data);
+				if(path && path[0]) {component.texturePath=GetProjectResourcePath(path);changed=true;}
+			}
+			ImGui::EndDragDropTarget();
+		}
+		changed |= DrawMenuAdaptiveField(text("色・不透明度", "Color / Opacity"), [&](const char* fieldLabel) { return ImGui::ColorEdit4(fieldLabel, &component.spriteColor.x); });
+		changed |= DrawMenuAdaptiveField(text("左右反転", "Flip X"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.spriteFlipX); });
+		changed |= DrawMenuAdaptiveField(text("上下反転", "Flip Y"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.spriteFlipY); });
+	} else {
+		changed |= DrawMenuAdaptiveField(text("表示する文字", "Display Text"), [&](const char* fieldLabel) { return InputTextMultilineString(fieldLabel, component.textValue, MenuInspectorSection::IsActive() ? MenuInspectorSection::ContentWidth() : -1.0f); });
+		changed |= DrawMenuAdaptiveField(text("文字サイズ", "Font Size"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &component.textFontSize, 1, 1, 512, "%.1f", ImGuiSliderFlags_AlwaysClamp); });
+		changed |= DrawMenuAdaptiveField(text("文字色", "Text Color"), [&](const char* fieldLabel) { return ImGui::ColorEdit4(fieldLabel, &component.textColor.x); });
+		changed |= DrawMenuAdaptiveField(text("不透明度", "Opacity"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &component.textOpacity, 0.01f, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp); });
+		if (ImGui::TreeNode(text("書式・整列・折返し", "Style / Alignment / Wrapping"))) {
+			changed |= DrawMenuAdaptiveField(text("フォント", "Font"), [&](const char* fieldLabel) { return InputTextString(fieldLabel, component.textFontFamily); });
+			changed |= DrawMenuChoice(editorLanguage_, text("太さ", "Weight"), component.textFontWeight, { "Regular", "Bold" });
+			changed |= DrawMenuChoice(editorLanguage_, text("書体", "Style"), component.textFontStyle, { "Normal", "Italic" });
+			changed |= DrawMenuChoice(editorLanguage_, text("横揃え", "Horizontal Alignment"), component.textHorizontalAlignment, { "Left", "Center", "Right" });
+			changed |= DrawMenuChoice(editorLanguage_, text("縦揃え", "Vertical Alignment"), component.textVerticalAlignment, { "Top", "Center", "Bottom" });
+			changed |= DrawMenuChoice(editorLanguage_, text("折返し", "Wrap"), component.textWrapMode, { "NoWrap", "Word" });
+			changed |= DrawMenuChoice(editorLanguage_, text("はみ出し", "Overflow"), component.textOverflowMode, { "Overflow", "Clip", "Ellipsis" });
+			changed |= DrawMenuAdaptiveField(text("文字間隔", "Character Spacing"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &component.textCharacterSpacing, 0.1f, -32, 128, "%.1f", ImGuiSliderFlags_AlwaysClamp); });
+			changed |= DrawMenuAdaptiveField(text("行間", "Line Spacing"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &component.textLineSpacing, 0.01f, 0.1f, 8, "%.2f", ImGuiSliderFlags_AlwaysClamp); });
+			ImGui::TreePop();
+		}
+		if (ImGui::TreeNode(text("輪郭・影", "Outline / Shadow"))) {
+			changed |= DrawMenuAdaptiveField(text("輪郭", "Outline"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.textOutlineEnabled); });
+			changed |= DrawMenuAdaptiveField(text("輪郭の色", "Outline Color"), [&](const char* fieldLabel) { return ImGui::ColorEdit4(fieldLabel, &component.textOutlineColor.x); });
+			changed |= DrawMenuAdaptiveField(text("輪郭の幅", "Outline Width"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &component.textOutlineWidth, 0.1f, 0, 32, "%.1f", ImGuiSliderFlags_AlwaysClamp); });
+			changed |= DrawMenuAdaptiveField(text("影", "Shadow"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.textShadowEnabled); });
+			changed |= DrawMenuAdaptiveField(text("影の色", "Shadow Color"), [&](const char* fieldLabel) { return ImGui::ColorEdit4(fieldLabel, &component.textShadowColor.x); });
+			changed |= DrawMenuAdaptiveField(text("影の位置", "Shadow Offset"), [&](const char* fieldLabel) { return ImGui::DragFloat2(fieldLabel, &component.textShadowOffset.x, 0.1f, -128, 128, "%.1f", ImGuiSliderFlags_AlwaysClamp); });
+			ImGui::TreePop();
+		}
+	}
+	ImGui::TextDisabled("%s", text("位置と表示枠はUI配置で編集します。", "Edit position and bounds in UI Layout."));
+	if (ImGui::TreeNode(text("旧方式の設定（読取専用）", "Legacy Settings (read only)"))) {
+		ImGui::Text("Sprite: %.1f x %.1f / Text: %.1f x %.1f / %s", component.spriteSize.x, component.spriteSize.y,
+			component.textLayoutSize.x, component.textLayoutSize.y, component.textRenderSpace.c_str());
+		ImGui::TreePop();
+	}
+	(void)document; (void)entity;
+	return changed;
+}
+
+void ImGuiManager::ApplyUIAuthoringRequest(SceneDocument& document, const UIAuthoringRequest& request, bool prefab) {
+	if (!request.entityId || (editorSession_ && !editorSession_->IsEditing())) return;
+	SceneEntity* entity = document.FindEntity(request.entityId);
+	if (!entity || entity->locked || entity->folder) return;
+	uiAuthoringIssue_.clear();
+	const std::string& operation = request.operation;
+	SceneDocument preview;
+	const SceneDocument* resolved = &document;
+	if (prefab && BuildUIEditorDocument(document, preview, prefabUIReferenceSize_)) resolved = &preview;
+	SceneUILayout::Layout layout;
+	std::string error;
+	if (!SceneUILayout::Resolve(*resolved, entity->id, layout, &error)) { uiAuthoringIssue_ = error; return; }
+	if (operation.rfind("Create", 0) == 0) {
+		const uint64_t parentId = entity->id;
+		const std::string baseName=operation=="CreateText" ? SelectEditorText(editorLanguage_,"文字","Text") :
+			operation=="CreateImage" ? SelectEditorText(editorLanguage_,"画像","Image") : SelectEditorText(editorLanguage_,"グループ","Group");
+		std::string name=baseName;
+		for(uint32_t suffix=2;document.FindEntityByName(name);++suffix)name=baseName+" "+std::to_string(suffix);
+		const uint64_t id = document.CreateEntity(name, parentId).id;
+		document.AddComponent(id, "UITransform");
+		entity = document.FindEntity(id);
+		if (operation == "CreateText") {
+			document.AddComponent(id, "TextRenderer");
+			entity = document.FindEntity(id);
+			FindComponent(*entity, "TextRenderer")->textValue = "Text";
+			ApplyUIAuthoringRequest(document, { id, "FitText" }, prefab);
+		} else if (operation == "CreateImage") {
+			document.AddComponent(id, "SpriteRenderer");
+		}
+		if (prefab) prefabSelectedEntityId_ = id; else {selectedEntityId_ = id;selectedEntityIds_={id};}
+		document.MarkDirty();
+		return;
+	}
+	SceneComponent* placement = FindComponent(*entity, "UITransform");
+	if (!placement) return;
+	Vector2 size{};
+	if (operation == "FitText") {
+		const auto* renderer = FindComponent(*entity, "TextRenderer");
+		TextRasterizer::Bitmap bitmap;
+		if (!renderer || !TextRasterizer{}.Rasterize(UIEditorTextSettings(*renderer, {}), bitmap) || !bitmap.IsValid()) {
+			uiAuthoringIssue_ = "Text measurement failed"; return;
+		}
+		size = bitmap.layoutSize;
+	} else if (operation == "FitImage") {
+		const auto* renderer = FindComponent(*entity, "SpriteRenderer");
+		auto* textures = TextureManager::GetInstance();
+		if (!renderer || renderer->texturePath.empty() || !textures || !textures->LoadTexture(renderer->texturePath)) {
+			uiAuthoringIssue_ = "Image measurement failed"; return;
+		}
+		const auto& metadata = textures->GetMetaData(renderer->texturePath);
+		size = { static_cast<float>(metadata.width), static_cast<float>(metadata.height) };
+	} else if (operation == "FitParent") size = layout.parentSize;
+	else return;
+	const auto before = *placement;
+	placement->uiSize = size;
+	if (operation == "FitParent") { placement->uiAnchor = {}; placement->uiPivot = {}; placement->uiPosition = {}; }
+	if (!SceneUILayout::ValidateTransform(*placement, error)) { *placement = before; uiAuthoringIssue_ = error; return; }
+	document.MarkDirty();
+}
+
+bool ImGuiManager::DrawUILayoutGizmo(SceneDocument& document, uint64_t entityId, bool prefab,
+	float x, float y, float width, float height) {
+	SceneEntity* entity = document.FindEntity(entityId);
+	if (!entity || !SceneUILayout::IsUIEntity(document, *entity)) return false;
+	if (width <= 1 || height <= 1) return true;
+	SceneDocument preview;
+	const SceneDocument* resolved = &document;
+	if (prefab && BuildUIEditorDocument(document, preview, prefabUIReferenceSize_)) resolved = &preview;
+	const auto editorView = prefab || !drawingUIEditorView_ ? SceneUIEditorView{} : GetSceneUIEditorView();
+	if (editorView.generation) {
+		if (!editorView.Allows(document, entityId)) return true;
+		preview = document;
+		editorView.PrepareDisplay(preview);
+		resolved = &preview;
+	}
+	SceneUILayout::Layout layout;
+	std::string error;
+	if (!SceneUILayout::Resolve(*resolved, entityId, layout, &error)) {
+		ImGui::GetWindowDrawList()->AddText(ImVec2(x + 8, y + 8), IM_COL32(255,190,80,255), LocalizeMenuIssue(error).c_str()); return true;
+	}
+	auto screen = [&](Vector2 p) {
+		p = UIEditorPoint(p, layout.localToCanvas);
+		return ImVec2(x + p.x * width / layout.referenceSize.x, y + p.y * height / layout.referenceSize.y);
+	};
+	auto* draw = ImGui::GetWindowDrawList();
+	draw->PushClipRect(ImVec2(x,y), ImVec2(x+width,y+height), true);
+	if (!editorView.generation || editorView.showBounds)
+		draw->AddQuad(screen({}), screen({layout.size.x,0}), screen(layout.size), screen({0,layout.size.y}), IM_COL32(90,220,255,255), 2);
+	SceneComponent* placement = FindComponent(*entity, "UITransform");
+	if (!placement || entity->locked || (editorSession_ && !editorSession_->IsEditing()) || !layout.visible) { draw->PopClipRect(); return true; }
+	// 親の完全行列を逆変換するので、画面の縦横比と親の非等方scaleを編集値へ混ぜない。
+	const auto* resolvedEntity = resolved->FindEntity(entityId);
+	SceneUILayout::Layout parent;
+	if (!resolvedEntity || !SceneUILayout::Resolve(*resolved, resolvedEntity->parentId, parent, &error)) { draw->PopClipRect(); return true; }
+	Matrix4x4 inverseParent;
+	if (!UIEditorInverse(parent.localToCanvas, inverseParent)) { draw->PopClipRect(); return true; }
+	const ImVec2 handle = gizmoOperation_ == 0 ? screen({placement->uiPivot.x*layout.size.x, placement->uiPivot.y*layout.size.y}) :
+		screen({placement->uiPivot.x<0.5f?layout.size.x:0.0f,placement->uiPivot.y<0.5f?layout.size.y:0.0f});
+	draw->AddCircleFilled(handle, 6, IM_COL32(255,210,70,255));
+	const ImVec2 cursor = ImGui::GetCursorScreenPos();
+	ImGui::SetCursorScreenPos(ImVec2(handle.x-8,handle.y-8));
+	ImGui::PushID(prefab ? "PrefabUILayout" : "SceneUILayout");
+	ImGui::InvisibleButton("Handle", ImVec2(16,16));
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", gizmoOperation_==0 ? SelectEditorText(editorLanguage_, "UIを親の座標で移動", "Move UI in parent space") : gizmoOperation_==1 ? SelectEditorText(editorLanguage_, "UIを親の座標で回転", "Rotate UI in parent space") : SelectEditorText(editorLanguage_, "UIをローカル軸で拡縮", "Scale UI along local axes"));
+	if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+		const auto& io = ImGui::GetIO();
+		auto localMouse = [&](float mx,float my) { return UIEditorPoint({(mx-x)*layout.referenceSize.x/width,(my-y)*layout.referenceSize.y/height}, inverseParent); };
+		const Vector2 now = localMouse(io.MousePos.x,io.MousePos.y), previous = localMouse(io.MousePos.x-io.MouseDelta.x,io.MousePos.y-io.MouseDelta.y);
+		const Vector2 origin{placement->uiAnchor.x*layout.parentSize.x+placement->uiPosition.x,placement->uiAnchor.y*layout.parentSize.y+placement->uiPosition.y};
+		const auto before = *placement;
+		if (gizmoOperation_ == 0) {
+			placement->uiPosition.x += now.x-previous.x; placement->uiPosition.y += now.y-previous.y;
+		} else if (gizmoOperation_ == 1) {
+			placement->uiRotation += std::remainder(std::atan2(now.y-origin.y,now.x-origin.x)-std::atan2(previous.y-origin.y,previous.x-origin.x), 6.28318530718f);
+		} else {
+			const float c=std::cos(placement->uiRotation),s=std::sin(placement->uiRotation);
+			const Vector2 a{(now.x-origin.x)*c+(now.y-origin.y)*s,-(now.x-origin.x)*s+(now.y-origin.y)*c};
+			const Vector2 b{(previous.x-origin.x)*c+(previous.y-origin.y)*s,-(previous.x-origin.x)*s+(previous.y-origin.y)*c};
+			if (std::abs(b.x)>0.001f) placement->uiScale.x *= a.x/b.x;
+			if (std::abs(b.y)>0.001f) placement->uiScale.y *= a.y/b.y;
+		}
+		if (SceneUILayout::ValidateTransform(*placement,error)) document.MarkDirty(); else *placement=before;
+	}
+	ImGui::PopID();
+	ImGui::SetCursorScreenPos(cursor);
+	// 画像上の操作領域から戻した位置をitemとして確定し、ImGuiの境界検証を満たす。
+	ImGui::Dummy(ImVec2(0.0f, 0.0f));
+	draw->PopClipRect();
+	return true;
+}
+
+
+namespace {
+	struct UIMigrationGeometry {
+		Matrix4x4 matrix = MakeIdentity4x4();
+		Vector2 size{100,100};
+		Vector2 pivot{};
+		Vector2 motionPivotCorrection{};
+		Vector2 baseScale{1,1};
+		int order = 0;
+	};
+	// Rendererの現在の規則から配置を求める。表現不能な結果を近似で保存しない。
+	bool BuildUIMigration(const SceneDocument& source, uint64_t rootId, const Vector2& sourceSize,
+		const Vector2& targetSize, SceneDocument& result, SceneDocument& beforePreview, std::string& error) {
+		auto fail = [&](const std::string& reason){ error=reason; return false; };
+		const SceneEntity* root = source.FindEntity(rootId);
+		if (!root || source.IsPrefabVariant()) return fail("対象がないか、Variantです。通常Prefab/Sceneの対象を選んでください。");
+		if (!std::isfinite(sourceSize.x) || !std::isfinite(sourceSize.y) || sourceSize.x<1 || sourceSize.y<1 ||
+			!std::isfinite(targetSize.x) || !std::isfinite(targetSize.y) || targetSize.x<1 || targetSize.y<1 ||
+			static_cast<double>(targetSize.x)>(std::numeric_limits<uint32_t>::max)() || static_cast<double>(targetSize.y)>(std::numeric_limits<uint32_t>::max)() ||
+			static_cast<double>(sourceSize.x)>(std::numeric_limits<uint32_t>::max)() || static_cast<double>(sourceSize.y)>(std::numeric_limits<uint32_t>::max)() ||
+			std::floor(sourceSize.x)!=sourceSize.x || std::floor(sourceSize.y)!=sourceSize.y || std::floor(targetSize.x)!=targetSize.x || std::floor(targetSize.y)!=targetSize.y)
+			return fail("変換元サイズと制作サイズには正の整数を指定してください。");
+		// Canvas境界を新設すると外側の3Dアニメーションは継承しないため、
+		// その演出に従属していた枝を静止姿勢だけで移行しない。
+		std::unordered_set<uint64_t> ancestors;
+		for(const SceneEntity* parent=source.FindEntity(root->parentId);parent;parent=source.FindEntity(parent->parentId)) {
+			if(!ancestors.insert(parent->id).second) return fail("親階層が循環しています。");
+			if(FindComponent(*parent,"PrefabAnimator")) return fail("外側のPrefabAnimatorに従属する枝は移行できません。");
+		}
+		std::vector<uint64_t> ids{rootId};
+		std::unordered_set<uint64_t> selected{rootId};
+		for(size_t i=0;i<ids.size();++i) {
+			for(const auto& e:source.GetEntities()) if(e.parentId==ids[i]) {
+				if(!selected.insert(e.id).second) return fail("対象階層が循環しています。");
+				ids.push_back(e.id);
+			}
+		}
+		std::string space;
+		std::unordered_map<uint64_t,UIMigrationGeometry> geometry;
+		std::vector<std::pair<uint64_t,int>> textOrder;
+		std::vector<uint64_t> spriteOrder;
+		beforePreview=source;
+		for(uint64_t id:ids) {
+			const SceneEntity& entity=*source.FindEntity(id);
+			if(entity.locked || !entity.prefabLinks.empty() || entity.prefabInstanceRootId || !entity.prefabSourcePath.empty())
+				return fail(entity.name+": Lock/Linked Prefabを含む対象は変換できません。");
+			for(const char* type:{"UICanvas","UITransform","MeshRenderer","PhysicsBody","OBBCollider","SphereCollider","PrefabAnimator","MenuPanel","MenuItem","GamePause"})
+				if(FindComponent(entity,type)) return fail(entity.name+": "+type+"を含む枝はこの移行では扱えません。");
+			const auto* image=FindComponent(entity,"SpriteRenderer");
+			const auto* text=FindComponent(entity,"TextRenderer");
+			if(image && text) return fail(entity.name+": 同じEntityの旧文字と画像は枠が異なるため、対象を分けてください。");
+			UIMigrationGeometry g;
+			if(entity.folder) {
+				const auto& t=entity.transform;
+				if(t.translate.x!=0 || t.translate.y!=0 || t.translate.z!=0 || t.scale.x!=1 || t.scale.y!=1 || t.scale.z!=1 ||
+					t.rotate.x!=0 || t.rotate.y!=0 || t.rotate.z!=0 || std::abs(t.rotate.w)!=1)
+					return fail(entity.name+": 非identityのFolderは新UIの整理用Folderとして表現できません。");
+			}
+			if(image || text) {
+				const std::string renderSpace=text?text->textRenderSpace:"Scene2D";
+				if(!space.empty() && renderSpace!=space) return fail("異なる表示先が混在しています。ScreenOverlayとScene2Dの枝を分けて移行してください。");
+				space=renderSpace;
+				const auto transform=SceneTransformResolver::ResolveScene2DTransform(source,entity);
+				Vector2 position{transform.translate.x,transform.translate.y},scale{transform.scale.x,transform.scale.y};
+				float rotation=transform.rotate.z;
+				Vector2 viewportAnchor{};
+				Vector2 correction{};
+				Vector2 dimensions;
+				if(text) {
+					if(text->textHasPlacementProfiles) {
+						const auto& p=renderSpace=="Scene2D"?text->textScene2DPlacement:text->textOverlayPlacement;
+						position=p.position; scale=p.scale; rotation=p.rotation; g.pivot=p.pivot; viewportAnchor=p.viewportAnchor; g.order=p.sortingOrder;
+					} else { g.pivot=text->textPivot; viewportAnchor=text->textViewportAnchor; g.order=text->textSortingOrder; }
+					if(renderSpace=="ScreenOverlay") {position.x+=viewportAnchor.x*sourceSize.x; position.y+=viewportAnchor.y*sourceSize.y;}
+					TextRasterizer::Bitmap oldBitmap,newBitmap;
+					if(!TextRasterizer{}.Rasterize(UIEditorTextSettings(*text,text->textLayoutSize),oldBitmap) || !oldBitmap.IsValid())
+						return fail(entity.name+": 元の文字を計測できません。");
+					dimensions=oldBitmap.layoutSize;
+					if(!TextRasterizer{}.Rasterize(UIEditorTextSettings(*text,dimensions),newBitmap) || oldBitmap.width!=newBitmap.width ||
+						oldBitmap.height!=newBitmap.height || oldBitmap.bgraPixels!=newBitmap.bgraPixels ||
+						oldBitmap.layoutOrigin.x!=newBitmap.layoutOrigin.x || oldBitmap.layoutOrigin.y!=newBitmap.layoutOrigin.y)
+						return fail(entity.name+": 固定枠にした際の折返し/整列が変わるため、見た目を保つ移行ができません。");
+					correction={oldBitmap.layoutOrigin.x-g.pivot.x*oldBitmap.width,oldBitmap.layoutOrigin.y-g.pivot.y*oldBitmap.height};
+					g.motionPivotCorrection={correction.x+g.pivot.x*dimensions.x,correction.y+g.pivot.y*dimensions.y};
+					textOrder.push_back({id,g.order});
+					auto* previewEntity=beforePreview.FindEntity(id);
+					auto* previewText=FindComponent(*previewEntity,"TextRenderer");
+					previewText->textHasPlacementProfiles=true; previewText->textRenderSpace="Scene2D";
+					auto& p=previewText->textScene2DPlacement;
+					p.position=position; p.rotation=rotation; p.scale=scale; p.pivot=g.pivot; p.viewportAnchor={}; p.sortingOrder=g.order;
+				} else {
+					dimensions=image->spriteSize; g.pivot=image->spriteAnchor;
+					correction={-g.pivot.x*dimensions.x,-g.pivot.y*dimensions.y};
+					spriteOrder.push_back(id);
+				}
+				g.size=dimensions; g.baseScale=scale;
+				const Vector2 ratio{text?targetSize.x/sourceSize.x:targetSize.x/1280.0f,text?targetSize.y/sourceSize.y:targetSize.y/720.0f};
+				g.matrix=Multiply(Multiply(MakeTranslateMatrix({correction.x,correction.y,0}),
+					MakeAffineMatrix({scale.x,scale.y,1},Vector3{0,0,rotation},{position.x,position.y,0})),MakeScaleMatrix({ratio.x,ratio.y,1}));
+				auto* previewEntity=beforePreview.FindEntity(id);
+				previewEntity->parentId=0;
+				previewEntity->active=IsEntityActiveInHierarchy(source,entity);
+				previewEntity->transform.translate=transform.translate; previewEntity->transform.scale=transform.scale;
+				previewEntity->transform.rotate=MakeQuaternionFromEuler({0,0,transform.rotate.z});
+			}
+			if(entity.folder && id!=rootId) g.matrix=geometry.at(entity.parentId).matrix;
+			geometry[id]=g;
+		}
+		if(space.empty()) return fail("対象の枝に旧方式の文字/画像がありません。");
+		// 描画順の同値tieはHierarchy探索順でなく、旧描画と同じDocument順を保つ。
+		textOrder.clear(); spriteOrder.clear();
+		for(const auto& e:source.GetEntities()) if(selected.contains(e.id)) {
+			if(FindComponent(e,"SpriteRenderer")) spriteOrder.push_back(e.id);
+			if(FindComponent(e,"TextRenderer")) textOrder.push_back({e.id,geometry.at(e.id).order});
+		}
+		result=source;
+		const std::string canvasBase=root->name+" UI";
+		std::string canvasName=canvasBase;
+		for(uint32_t suffix=2;result.FindEntityByName(canvasName);++suffix)canvasName=canvasBase+" "+std::to_string(suffix);
+		const uint64_t canvasId=result.CreateEntity(canvasName,root->parentId).id;
+		if(!result.AddComponent(canvasId,"UICanvas")) return fail("UI画面を作成できません。");
+		auto* canvas=FindComponent(*result.FindEntity(canvasId),"UICanvas");
+		canvas->uiReferenceSize={static_cast<uint32_t>(targetSize.x),static_cast<uint32_t>(targetSize.y)}; canvas->uiRenderSpace=space;
+		// Canvasは新規IDで旧親直下に作ったので循環しない。3D用SetParentの旧Transform再分解は行わない。
+		result.FindEntity(rootId)->parentId=canvasId;
+		// 元のSprite→文字の前後順を、同じCanvas内の明示順へ写す。
+		std::stable_sort(textOrder.begin(),textOrder.end(),[](const auto& a,const auto& b){return a.second<b.second;});
+		int order=0;
+		for(uint64_t id:spriteOrder) geometry[id].order=order++;
+		for(const auto& pair:textOrder) geometry[pair.first].order=order++;
+		for(uint64_t id:ids) {
+			auto* entity=result.FindEntity(id);
+			if(entity->folder) continue;
+			if(!result.AddComponent(id,"UITransform")) return fail("UI配置を追加できません。");
+			auto* ui=FindComponent(*result.FindEntity(id),"UITransform");
+			const auto& g=geometry.at(id);
+			Matrix4x4 inverseParent=MakeIdentity4x4();
+			const auto* oldEntity=source.FindEntity(id);
+			if(id!=rootId && !UIEditorInverse(geometry.at(oldEntity->parentId).matrix,inverseParent)) return fail("親の軸が潰れています。");
+			const Matrix4x4 local=Multiply(g.matrix,inverseParent);
+			Vector3 scale{},rotation{},position{};
+			if(!DecomposeAffineMatrix(local,scale,rotation,position) || scale.x<=0 || scale.y<=0 ||
+				std::abs(rotation.x)>0.0001f || std::abs(rotation.y)>0.0001f) return fail("親と子の回転・拡縮を新しい2D配置で表現できません。");
+			const auto reconstructed=MakeAffineMatrix(scale,rotation,position);
+			for(int y=0;y<4;++y) for(int x=0;x<4;++x)
+				if(!std::isfinite(local.m[y][x]) || std::abs(local.m[y][x]-reconstructed.m[y][x])>0.0001f*(std::max)(1.0f,std::abs(local.m[y][x])))
+					return fail("shearを含む配置のため、近似せず移行を中止しました。");
+			ui->uiSize=g.size; ui->uiPivot=g.pivot; ui->uiScale={scale.x,scale.y}; ui->uiRotation=rotation.z; ui->uiSortingOrder=g.order;
+			ui->uiPosition={position.x+g.pivot.x*g.size.x*local.m[0][0]+g.pivot.y*g.size.y*local.m[1][0],
+				position.y+g.pivot.x*g.size.x*local.m[0][1]+g.pivot.y*g.size.y*local.m[1][1]};
+			// TextMotionは文字自身のローカル量になる。offsetだけの演出は線形変換で全時刻を保てる。
+			auto* motion=FindComponent(*result.FindEntity(id),"TextMotion");
+			if(motion) {
+				Matrix4x4 inverse;
+				if(!UIEditorInverse(g.matrix,inverse)) return fail("TextMotionの移動量を変換できません。");
+				if(!FindComponent(*result.FindEntity(id),"TextRenderer")) return fail("TextMotionの文字がありません。");
+				for(auto& clip:motion->textMotionClips) {
+					const bool hasCenterCorrection=g.motionPivotCorrection.x!=0 || g.motionPivotCorrection.y!=0;
+					const bool uniformBase=g.baseScale.x==g.baseScale.y;
+					const float firstRotation=clip.keyframes.empty()?0:clip.keyframes.front().rotationOffset;
+					for(auto& key:clip.keyframes) {
+						// 非一様scaleと可変回転の合成、または基点補正に必要なsin/cos曲線は、
+						// 既存のTRS/同一easingの位置keyへ一般には写せない。近似keyを増やさず拒否する。
+						if((!uniformBase && key.rotationOffset!=0) || (hasCenterCorrection && key.rotationOffset!=firstRotation))
+							return fail("このTextMotionは基点補正または非一様scaleと可変回転の合成を位置keyで再現できません。移行を中止しました。");
+						const Vector2 d{key.positionOffset.x*targetSize.x/sourceSize.x,key.positionOffset.y*targetSize.y/sourceSize.y};
+						const float c=std::cos(key.rotationOffset),s=std::sin(key.rotationOffset);
+						const auto correction=g.motionPivotCorrection;
+						key.positionOffset={
+							d.x*inverse.m[0][0]+d.y*inverse.m[1][0]+correction.x*key.scaleMultiplier.x*c-correction.y*key.scaleMultiplier.y*s-correction.x,
+							d.x*inverse.m[0][1]+d.y*inverse.m[1][1]+correction.x*key.scaleMultiplier.x*s+correction.y*key.scaleMultiplier.y*c-correction.y};
+						if(!std::isfinite(key.positionOffset.x) || !std::isfinite(key.positionOffset.y) ||
+							!std::isfinite(key.rotationOffset) || !std::isfinite(key.scaleMultiplier.x) || !std::isfinite(key.scaleMultiplier.y) ||
+							!std::isfinite(key.opacityMultiplier)) return fail("TextMotionの値が有限ではありません。");
+					}
+				}
+			}
+			SceneUILayout::Layout verified; std::string reason;
+			if(!SceneUILayout::Resolve(result,id,verified,&reason)) return fail(reason);
+		}
+		// 元のPreviewは元規則の文字/Spriteだけを分離し、Event/Simulationは実行しない。
+		auto& visible=beforePreview.GetEntities();
+		visible.erase(std::remove_if(visible.begin(),visible.end(),[&](const auto& e){return !selected.contains(e.id) || (!FindComponent(e,"TextRenderer") && !FindComponent(e,"SpriteRenderer"));}),visible.end());
+		const uint64_t metadataId=beforePreview.CreateEntity("Migration Preview Reference").id;
+		beforePreview.AddComponent(metadataId,"UICanvas");
+		FindComponent(*beforePreview.FindEntity(metadataId),"UICanvas")->uiReferenceSize={static_cast<uint32_t>(sourceSize.x),static_cast<uint32_t>(sourceSize.y)};
+		// 変換後Previewも対象枝だけ。適用候補resultには無関係のEntityをそのまま保持する。
+		result.MarkDirty();
+		error.clear();
+		return true;
+	}
+}
+
+
+void ImGuiManager::ClearUIMigrationSnapshots() {
+	uiMigrationOpen_=false;
+	delete uiMigrationOriginal_; uiMigrationOriginal_=nullptr;
+	delete uiMigrationCandidate_; uiMigrationCandidate_=nullptr;
+	delete uiMigrationPreview_; uiMigrationPreview_=nullptr;
+}
+
+void ImGuiManager::DrawUIMigration(SceneDocument& document, uint64_t entityId, bool prefab) {
+	auto label=[&](const char* ja,const char* en){return SelectEditorText(editorLanguage_,ja,en);};
+	const std::string key=prefab?prefabEditorSession_->GetFilePath():editorSession_->GetSceneFilePath();
+	ImGui::PushID(prefab?"PrefabUIMigration":"SceneUIMigration");
+	const auto* entity=document.FindEntity(entityId);
+	const bool canEdit=entity && !entity->locked && (!editorSession_ || editorSession_->IsEditing());
+	ImGui::BeginDisabled(!canEdit || (entity && SceneUILayout::IsUIEntity(document,*entity)));
+	if(ImGui::Button(label("UI画面へ移行…","Migrate to UI Canvas…"))) {
+		uiMigrationRoot_=entityId; uiMigrationPrefab_=prefab; uiMigrationDocumentKey_=key; uiMigrationRevision_=document.GetRevision();
+		uiMigrationOpen_=false; uiMigrationShowAfter_=false; uiMigrationBeforeSeen_=false;uiMigrationAfterSeen_=false;uiAuthoringIssue_.clear();
+		if(!uiMigrationOriginal_) uiMigrationOriginal_=new SceneDocument();
+		if(!uiMigrationCandidate_) uiMigrationCandidate_=new SceneDocument();
+		if(!uiMigrationPreview_) uiMigrationPreview_=new SceneDocument();
+		*uiMigrationOriginal_=document;
+		// 非表示Viewや初期値1x1は変換元サイズに採用しない。初期値は未指定でユーザーが確定する。
+		uiMigrationSourceSize_={}; uiMigrationTargetSize_={1280,720};
+		ImGui::OpenPopup("Migration");
+	}
+	ImGui::EndDisabled();
+	if(ImGui::BeginPopupModal("Migration",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		const bool same=key==uiMigrationDocumentKey_ && prefab==uiMigrationPrefab_ && uiMigrationRevision_==document.GetRevision();
+		ImGui::TextWrapped("%s",label("選択した枝を一括変換します。旧設定とIDを保持し、Undoで戻せます。Assetへの保存は通常の保存操作で行います。",
+			"Converts the selected branch in one edit, preserving IDs and legacy settings. Undo restores it. Save the asset separately."));
+		if(const auto* selected=uiMigrationOriginal_->FindEntity(uiMigrationRoot_)) ImGui::Text("%s",selected->name.c_str());
+		bool changed=ImGui::InputFloat2(label("変換元の表示サイズ（要指定）","Source Display Size (required)"),&uiMigrationSourceSize_.x,"%.0f");
+		if(ImGui::Button(label("1280×720の旧表示を基準にする","Use old display at 1280 x 720"))) {uiMigrationSourceSize_={1280,720};changed=true;}
+		const bool scene2DText=std::any_of(uiMigrationOriginal_->GetEntities().begin(),uiMigrationOriginal_->GetEntities().end(),[&](const auto& e) {
+			const auto* text=FindComponent(e,"TextRenderer");
+			return text && text->textRenderSpace=="Scene2D" && (e.id==uiMigrationRoot_ || uiMigrationOriginal_->IsDescendantOf(e.id,uiMigrationRoot_));
+		});
+		ImGui::TextWrapped("%s",label("旧Scene2D文字の投影はアプリ画面寸法、旧ScreenOverlay文字は表示画像の描画寸法です。旧画像は1280×720固定です。制作元の寸法で旧表示を確認してください。",
+			"Legacy Scene 2D text uses application dimensions; overlay text uses rendered-image dimensions; sprites use 1280 x 720. Review the old view at the original authoring dimensions."));
+		if(!prefab && scene2DText && dxCommon_ && dxCommon_->GetClientWidth()>1 && dxCommon_->GetClientHeight()>1) {
+			if(ImGui::Button(label("現在のアプリ画面寸法を使う","Use Current Application Dimensions"))) {
+				uiMigrationSourceSize_={static_cast<float>(dxCommon_->GetClientWidth()),static_cast<float>(dxCommon_->GetClientHeight())};changed=true;
+			}
+		} else if(!prefab && !scene2DText && sceneViewRenderable_ && uiSourceTextureWidth_>1 && uiSourceTextureHeight_>1) {
+			if(ImGui::Button(label("現在のScene View描画寸法を使う","Use Current Scene View Render Dimensions"))) {
+				uiMigrationSourceSize_={static_cast<float>(uiSourceTextureWidth_),static_cast<float>(uiSourceTextureHeight_)};changed=true;
+			}
+		}
+		changed|=ImGui::InputFloat2(label("制作サイズ","Authoring Size"),&uiMigrationTargetSize_.x,"%.0f");
+		if(changed) { uiMigrationOpen_=false;uiMigrationBeforeSeen_=false;uiMigrationAfterSeen_=false;uiAuthoringIssue_.clear(); }
+		ImGui::BeginDisabled(!same || !canEdit);
+		if(ImGui::Button(label("変換を検証してPreview","Validate and Preview"))) {
+			uiMigrationOpen_=BuildUIMigration(*uiMigrationOriginal_,uiMigrationRoot_,uiMigrationSourceSize_,uiMigrationTargetSize_,
+				*uiMigrationCandidate_,*uiMigrationPreview_,uiAuthoringIssue_);
+			uiMigrationShowAfter_=false;uiMigrationBeforeSeen_=false;uiMigrationAfterSeen_=false;++uiMigrationPreviewSerial_;
+		}
+		ImGui::EndDisabled();
+		if(!same) {uiMigrationOpen_=false;ImGui::TextWrapped("%s",label("確認中に原本が変わりました。閉じて対象を選び直してください。","The source changed. Close and select it again."));}
+		if(!uiAuthoringIssue_.empty()) ImGui::TextWrapped("%s",uiAuthoringIssue_.c_str());
+		if(uiMigrationOpen_) {
+			ImGui::SeparatorText(label("変更対象","Affected Entities"));
+			for(const auto& candidate:uiMigrationOriginal_->GetEntities()) if(candidate.id==uiMigrationRoot_ || uiMigrationOriginal_->IsDescendantOf(candidate.id,uiMigrationRoot_))
+				ImGui::BulletText("%s%s",candidate.name.c_str(),FindComponent(candidate,"TextMotion")?" (TextMotion offset)":"");
+			ImGui::TextWrapped("%s",label("UI画面とUI配置を追加し、親・枠・位置・基点・拡大率・重なり順・演出の移動量を変更します。元の配置値は読取専用で残ります。",
+				"Adds canvas/layout components, reparents the branch and converts bounds, origins, scale, order and motion offsets. Legacy values remain."));
+			if(ImGui::RadioButton(label("変換前","Before"),!uiMigrationShowAfter_)) uiMigrationShowAfter_=false;
+			ImGui::SameLine();
+			if(ImGui::RadioButton(label("変換後","After"),uiMigrationShowAfter_)) uiMigrationShowAfter_=true;
+			const std::string previewKey="UI Migration:"+key+"#"+std::to_string(uiMigrationPreviewSerial_)+(uiMigrationShowAfter_?"#After":"#Before");
+			if(prefabPreviewTexture_.ptr && prefabPreviewRenderedPath_==previewKey && prefabPreviewRenderedRevision_==uiMigrationRevision_) {
+				ImGui::Image(ImTextureRef(static_cast<ImTextureID>(prefabPreviewTexture_.ptr)),ImVec2(640,360));
+				if(uiMigrationShowAfter_)uiMigrationAfterSeen_=true;else uiMigrationBeforeSeen_=true;
+			} else ImGui::Dummy(ImVec2(640,360));
+			if(!uiMigrationBeforeSeen_ || !uiMigrationAfterSeen_)ImGui::TextDisabled("%s",label("変換前・後の両方のPreviewを確認してください。","Review both the before and after previews."));
+			ImGui::BeginDisabled(!same || !canEdit || !uiMigrationBeforeSeen_ || !uiMigrationAfterSeen_);
+			if(ImGui::Button(label("この内容で一括適用（保存は別操作）","Apply in one edit (does not save)"))) {
+				document=*uiMigrationCandidate_; document.MarkDirty();
+				if(!prefab) editorSession_->RequestSceneReload();
+				ClearUIMigrationSnapshots(); ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+		}
+		if(ImGui::Button(label("閉じる","Close"))) {ClearUIMigrationSnapshots();ImGui::CloseCurrentPopup();}
+		ImGui::EndPopup();
+	}
+	ImGui::PopID();
+}
+
+
+bool ImGuiManager::ConfirmUICoordinateChange(const SceneDocument& document, uint64_t entityId, const char* operation) {
+	const auto* standardOwner = document.FindEntity(entityId);
+	const auto* standardPanel = standardOwner ? FindComponent(*standardOwner, "MenuPanel") : nullptr;
+	if (standardPanel && standardPanel->menuLayoutMode == "CanvasItems" && std::strcmp(operation, "Remove UI Component") == 0) {
+		if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "削除", "Remove"))) {
+			menuWarningReason_ = "MenuRuntime:StandardCanvasRequired"; menuWarningOperation_ = "UILayout";
+			menuWarningTarget_ = standardOwner->name; menuWarningRequested_ = true;
+		}
+		return false;
+	}
+	const auto* entity=document.FindEntity(entityId);
+	bool affected=entity && SceneUILayout::IsUIEntity(document,*entity);
+	for(const auto& e:document.GetEntities()) if(document.IsDescendantOf(e.id,entityId) && SceneUILayout::IsUIEntity(document,e)) affected=true;
+	if(!affected) return true;
+	if(ImGui::Button(SelectEditorText(editorLanguage_,"影響するUIを確認して適用…","Review affected UI and apply…"))) ImGui::OpenPopup(operation);
+	bool accepted=false;
+	if(ImGui::BeginPopupModal(operation,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"座標系が変わり、表示位置が変わるか非表示になる場合があります。保存値は維持し、Undoで戻せます。","This changes coordinate space. Affected UI may move or stop drawing. Values are retained and Undo restores the edit."));
+		for(const auto& e:document.GetEntities()) if(e.id==entityId || document.IsDescendantOf(e.id,entityId)) ImGui::BulletText("%s",e.name.c_str());
+		if(ImGui::Button(SelectEditorText(editorLanguage_,"適用","Apply"))) {accepted=true;ImGui::CloseCurrentPopup();}
+		ImGui::SameLine();
+		if(ImGui::Button(SelectEditorText(editorLanguage_,"キャンセル","Cancel"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	return accepted;
+}
+
+bool ImGuiManager::PickUILayoutEntity(SceneDocument& document, bool prefab, float x, float y, float width, float height) {
+	if(width<=1 || height<=1 || ImGui::IsAnyItemActive()) return false;
+	const ImVec2 mouse=ImGui::GetMousePos();
+	if(mouse.x<x || mouse.y<y || mouse.x>x+width || mouse.y>y+height) return false;
+	SceneDocument preview;
+	const SceneDocument* resolved=&document;
+	if(prefab && BuildUIEditorDocument(document,preview,prefabUIReferenceSize_)) resolved=&preview;
+	const auto editorView = prefab || !drawingUIEditorView_ ? SceneUIEditorView{} : GetSceneUIEditorView();
+	if (editorView.generation) { preview = document; editorView.PrepareDisplay(preview); resolved = &preview; }
+	struct Candidate {uint64_t id; SceneUILayout::Layout layout; size_t traversal;};
+	std::vector<Candidate> hits;
+	// Runtimeと同じCanvas→Hierarchyの安定順を作る。全てのヒットから最後の描画要素を選ぶ。
+	std::unordered_map<uint64_t,std::vector<uint64_t>> children;
+	for(const auto& e:resolved->GetEntities()) children[e.parentId].push_back(e.id);
+	size_t traversal=0;
+	for(const auto& root:resolved->GetEntities()) if(FindComponent(root,"UICanvas") && (editorView.generation || !FindComponent(root,"MenuPanel"))) {
+		std::vector<uint64_t> stack;
+		auto push=[&](uint64_t id){auto found=children.find(id);if(found!=children.end())for(auto it=found->second.rbegin();it!=found->second.rend();++it)stack.push_back(*it);};
+		push(root.id); std::unordered_set<uint64_t> visited{root.id};
+		while(!stack.empty()) {
+			uint64_t id=stack.back();stack.pop_back();
+			if(!visited.insert(id).second) continue;
+			const auto* entity=resolved->FindEntity(id);
+			if(!entity || FindComponent(*entity,"UICanvas") || (FindComponent(*entity,"MenuPanel") && (!editorView.generation || id != editorView.panelId)))continue;
+			push(id);++traversal;
+			SceneUILayout::Layout layout;Matrix4x4 inverse;
+			if((editorView.generation && !editorView.Allows(*resolved, id)) || entity->locked || !FindComponent(*entity,"UITransform") ||
+				(!FindEnabledComponent(*entity,"TextRenderer") && !FindEnabledComponent(*entity,"SpriteRenderer")) ||
+				!SceneUILayout::Resolve(*resolved,id,layout) || !layout.visible || !UIEditorInverse(layout.localToCanvas,inverse))continue;
+			const auto point=UIEditorPoint({(mouse.x-x)*layout.referenceSize.x/width,(mouse.y-y)*layout.referenceSize.y/height},inverse);
+			if(point.x>=0 && point.y>=0 && point.x<=layout.size.x && point.y<=layout.size.y)hits.push_back({id,layout,traversal});
+		}
+	}
+	if(hits.empty())return false;
+	std::stable_sort(hits.begin(),hits.end(),[](const auto& a,const auto& b) {
+		if(a.layout.renderSpace!=b.layout.renderSpace)return a.layout.renderSpace=="Scene2D";
+		if(a.layout.canvasSortingOrder!=b.layout.canvasSortingOrder)return a.layout.canvasSortingOrder<b.layout.canvasSortingOrder;
+		if(a.layout.canvasEntityId!=b.layout.canvasEntityId)return a.traversal<b.traversal;
+		if(a.layout.sortingOrder!=b.layout.sortingOrder)return a.layout.sortingOrder<b.layout.sortingOrder;
+		return a.traversal<b.traversal;
+	});
+	if(prefab)prefabSelectedEntityId_=hits.back().id;
+	else {selectedEntityId_=hits.back().id;selectedEntityIds_={selectedEntityId_};selectedProjectFile_.clear();}
+	return true;
+}
+
+
+bool ImGuiManager::QueueUIReparent(const SceneDocument& document, const std::vector<uint64_t>& roots,
+	uint64_t parentId, uint64_t siblingId, bool after) {
+	const auto* destination=document.FindEntity(parentId);
+	bool needsConfirmation=false;
+	for(uint64_t id:roots) {
+		const auto* entity=document.FindEntity(id);
+		if(!entity || entity->parentId==parentId)continue;
+		bool affected=SceneUILayout::IsUIEntity(document,*entity) ||
+			(destination && SceneUILayout::IsUIEntity(document,*destination));
+		for(const auto& child:document.GetEntities()) if(document.IsDescendantOf(child.id,id) && SceneUILayout::IsUIEntity(document,child)) affected=true;
+		needsConfirmation|=affected;
+	}
+	if(!needsConfirmation)return false;
+	uiReparentRoots_=roots;uiReparentParent_=parentId;uiReparentSibling_=siblingId;uiReparentAfter_=after;
+	uiReparentRevision_=document.GetRevision();uiReparentDocumentKey_=editorSession_->GetSceneFilePath();uiReparentPopupRequested_=true;
+	return true;
+}
+
+void ImGuiManager::DrawUIReparentConfirmation() {
+	if(!editorSession_ || !editorSession_->IsEditing()) {uiReparentRoots_.clear();uiReparentPopupRequested_=false;return;}
+	ImGui::PushID("UICoordinateReparent");
+	if(uiReparentPopupRequested_) {ImGui::OpenPopup("UI Parent Change");uiReparentPopupRequested_=false;}
+	if(ImGui::BeginPopupModal("UI Parent Change",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		auto& document=editorSession_->GetEditDocument();
+		const bool same=uiReparentDocumentKey_==editorSession_->GetSceneFilePath() && uiReparentRevision_==document.GetRevision();
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"親の枠・座標系が変わります。位置や表示可否が変化する対象を確認してください。値は維持し、一回のUndoで戻せます。","Changing parent changes the reference bounds and coordinate space. These items may move or stop drawing. Values are retained; one Undo restores the change."));
+		const auto* target=document.FindEntity(uiReparentParent_);
+		ImGui::Text("%s: %s",SelectEditorText(editorLanguage_,"変更先","Destination"),target?target->name.c_str():"Root");
+		bool allowed=same && (!target || !target->locked);
+		if(uiReparentParent_ && !target)allowed=false;
+		std::unordered_set<uint64_t> affected;
+		for(uint64_t root:uiReparentRoots_) {
+			for(const auto& entity:document.GetEntities()) if(entity.id==root || document.IsDescendantOf(entity.id,root)) {
+				if(affected.insert(entity.id).second)ImGui::BulletText("%s",entity.name.c_str());
+				allowed &= !entity.locked;
+			}
+		}
+		if(!same)ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"Documentが変わったため、この操作をやり直してください。","The document changed. Start this operation again."));
+		ImGui::BeginDisabled(!allowed);
+		if(ImGui::Button(SelectEditorText(editorLanguage_,"適用","Apply"))) {
+			// 複数対象の途中失敗を原本へ残さない。候補を一括反映して既存Frame Undoへ渡す。
+			SceneDocument candidate=document;
+			// 既存の並べ替えは3D用SetParentで旧Transformを再分解する。
+			// UIの親変更ではその非使用値を変えないため、候補内だけidentityで並べ替え、ID別に原本値を戻す。
+			for(auto& entity:candidate.GetEntities()) {
+				entity.transform.translate={};entity.transform.scale={1,1,1};entity.transform.rotate=MakeIdentityQuaternion();
+			}
+			bool success=true;
+			if(uiReparentSibling_ && !uiReparentAfter_) {
+				for(auto it=uiReparentRoots_.rbegin();it!=uiReparentRoots_.rend();++it)
+					success &= candidate.MoveEntityToSibling(*it,uiReparentSibling_,false);
+			} else {
+				uint64_t sibling=uiReparentSibling_;
+				for(uint64_t id:uiReparentRoots_) {
+					success &= sibling ? candidate.MoveEntityToSibling(id,sibling,true):candidate.MoveEntityToParent(id,uiReparentParent_);
+					if(sibling)sibling=id;
+				}
+			}
+			for(auto& entity:candidate.GetEntities()) if(const auto* original=document.FindEntity(entity.id)) entity.transform=original->transform;
+			if(success) {document=std::move(candidate);document.MarkDirty();editorSession_->RequestSceneReload();}
+			uiReparentRoots_.clear();ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndDisabled();ImGui::SameLine();
+		if(ImGui::Button(SelectEditorText(editorLanguage_,"キャンセル","Cancel"))) {uiReparentRoots_.clear();ImGui::CloseCurrentPopup();}
+		ImGui::EndPopup();
+	}
+	ImGui::PopID();
+}
+
+bool ImGuiManager::DrawUITextMotionFields(SceneComponent& component) {
+	bool textMotionChanged = false;
+	int removeClipIndex = -1;
+	for (size_t clipIndex = 0;
+		clipIndex < component.textMotionClips.size();
+		++clipIndex) {
+		SceneTextMotionClip& clip = component.textMotionClips[clipIndex];
+		ImGui::PushID(static_cast<int>(clipIndex));
+		if (ImGui::TreeNodeEx(
+			"TextMotionClip",
+			ImGuiTreeNodeFlags_DefaultOpen,
+			"Clip %zu: %s",
+			clipIndex + 1,
+			clip.id.empty() ? "<empty>" : clip.id.c_str()
+		)) {
+			textMotionChanged |= InputTextString(
+				LocalizedComponentWidgetLabel(editorLanguage_, "Clip Id"),
+				clip.id
+			);
+			textMotionChanged |= ImGui::Checkbox(
+				LocalizedComponentWidgetLabel(editorLanguage_, "Hold Final Pose"),
+				&clip.holdFinalPose
+			);
+			int removeKeyframeIndex = -1;
+			for (size_t keyframeIndex = 0;
+				keyframeIndex < clip.keyframes.size();
+				++keyframeIndex) {
+				SceneTextMotionKeyframe& keyframe = clip.keyframes[keyframeIndex];
+				ImGui::PushID(static_cast<int>(keyframeIndex));
+				if (ImGui::TreeNodeEx(
+					"TextMotionKeyframe",
+					ImGuiTreeNodeFlags_DefaultOpen,
+					"Keyframe %zu", keyframeIndex + 1
+				)) {
+					textMotionChanged |= ImGui::DragFloat(
+						LocalizedComponentWidgetLabel(editorLanguage_, "Time Seconds"),
+						&keyframe.timeSeconds,
+						0.01f
+					);
+					textMotionChanged |= ImGui::DragFloat2(
+						LocalizedComponentWidgetLabel(editorLanguage_, "Position Offset"),
+						&keyframe.positionOffset.x,
+						0.5f
+					);
+					textMotionChanged |= ImGui::DragFloat(
+						LocalizedComponentWidgetLabel(editorLanguage_, "Rotation Offset"),
+						&keyframe.rotationOffset,
+						0.5f
+					);
+					textMotionChanged |= ImGui::DragFloat2(
+						LocalizedComponentWidgetLabel(editorLanguage_, "Scale Multiplier"),
+						&keyframe.scaleMultiplier.x,
+						0.01f
+					);
+					textMotionChanged |= ImGui::DragFloat(
+						LocalizedComponentWidgetLabel(editorLanguage_, "Opacity Multiplier"),
+						&keyframe.opacityMultiplier,
+						0.01f
+					);
+					if (ImGui::BeginCombo(
+						LocalizedComponentWidgetLabel(editorLanguage_, "Easing To Next"),
+						keyframe.easingToNext.c_str()
+					)) {
+						for (const char* easing : {
+							"Linear", "EaseIn", "EaseOut", "EaseInOut", "SmoothStep"
+						}) {
+							if (ImGui::Selectable(
+								easing,
+								keyframe.easingToNext == easing
+							)) {
+								keyframe.easingToNext = easing;
+								textMotionChanged = true;
+							}
+						}
+						ImGui::EndCombo();
+					}
+					if (ImGui::SmallButton(SelectEditorText(
+						editorLanguage_, "Keyframeを削除###RemoveTextMotionKeyframe",
+						"Remove Keyframe###RemoveTextMotionKeyframe"
+					))) {
+						removeKeyframeIndex = static_cast<int>(keyframeIndex);
+					}
+					ImGui::TreePop();
+				}
+				ImGui::PopID();
+			}
+			if (removeKeyframeIndex >= 0) {
+				clip.keyframes.erase(
+					clip.keyframes.begin() + removeKeyframeIndex
+				);
+				textMotionChanged = true;
+			}
+			if (ImGui::SmallButton(SelectEditorText(
+				editorLanguage_, "Keyframeを追加###AddTextMotionKeyframe",
+				"Add Keyframe###AddTextMotionKeyframe"
+			))) {
+				SceneTextMotionKeyframe keyframe{};
+				keyframe.timeSeconds = clip.keyframes.empty()
+					? 0.0f : clip.keyframes.back().timeSeconds + 0.25f;
+				clip.keyframes.push_back(std::move(keyframe));
+				textMotionChanged = true;
+			}
+			if (ImGui::SmallButton(SelectEditorText(
+				editorLanguage_, "Clipを削除###RemoveTextMotionClip",
+				"Remove Clip###RemoveTextMotionClip"
+			))) {
+				removeClipIndex = static_cast<int>(clipIndex);
+			}
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+	if (removeClipIndex >= 0) {
+		component.textMotionClips.erase(
+			component.textMotionClips.begin() + removeClipIndex
+		);
+		textMotionChanged = true;
+	}
+	if (ImGui::Button(SelectEditorText(
+		editorLanguage_, "Clipを追加###AddTextMotionClip",
+		"Add Clip###AddTextMotionClip"
+	))) {
+		SceneTextMotionClip clip{};
+		clip.id = "Clip" + std::to_string(
+			component.textMotionClips.size() + 1
+		);
+		clip.keyframes = {
+			SceneTextMotionKeyframe{},
+			SceneTextMotionKeyframe{ 0.25f }
+		};
+		component.textMotionClips.push_back(std::move(clip));
+		textMotionChanged = true;
+	}
+	return textMotionChanged;
+}
+
+bool ImGuiManager::DrawMenuTextFields(SceneComponent& text) {
+	bool changed = DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "表示する文字", "Display Text"), [&](const char* fieldLabel) { return InputTextMultilineString(fieldLabel, text.textValue, MenuInspectorSection::IsActive() ? MenuInspectorSection::ContentWidth() : -1.0f); });
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "文字の見た目", "Text Appearance"))) {
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "フォント", "Font Family"), [&](const char* fieldLabel) { return InputTextString(fieldLabel, text.textFontFamily); });
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "文字サイズ", "Font Size"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &text.textFontSize, 1.0f, 1.0f, 512.0f); });
+		bool bold = text.textFontWeight == "Bold";
+		if (DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "太字", "Bold"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &bold); })) {
+			text.textFontWeight = bold ? "Bold" : "Regular"; changed = true;
+		}
+		if (!MenuInspectorSection::IsActive()) ImGui::SameLine();
+		bool italic = text.textFontStyle == "Italic";
+		if (DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "斜体", "Italic"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &italic); })) {
+			text.textFontStyle = italic ? "Italic" : "Normal"; changed = true;
+		}
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "通常の文字色", "Normal Text Color"), [&](const char* fieldLabel) { return ImGui::ColorEdit4(fieldLabel, &text.textColor.x); });
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "不透明度", "Opacity"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &text.textOpacity, 0.01f, 0.0f, 1.0f); });
+		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "描画空間", "Render Space"), text.textRenderSpace, { "ScreenOverlay", "Scene2D" });
+		ImGui::TreePop();
+	}
+	return changed;
+}
+
+SceneUIEditorView ImGuiManager::GetSceneUIEditorView() {
+	if (!sceneUIEditorOpen_ || !editorSession_) return {};
+	// Sceneを開き直したときだけ接続を解除する。Documentのcopy/Undoは同じ編集Scene。
+	if (sceneUIEditorEpoch_ != editorSession_->GetEditSceneEpoch() ||
+		sceneUIEditorSceneId_ != editorSession_->GetEditSceneId() ||
+		sceneUIEditorScenePath_ != editorSession_->GetSceneFilePath()) {
+		sceneUIEditorView_ = {}; sceneUIEditorIssue_.clear();
+		return {};
+	}
+	if (!editorSession_->IsEditing()) return {};
+	const auto& source = editorSession_->GetEditDocument();
+	auto* panel = source.FindEntity(sceneUIEditorView_.panelId);
+	auto* text = source.FindEntity(sceneUIEditorView_.textId);
+	if (sceneUIEditorView_.panelId && (!panel || !FindComponent(*panel, "MenuPanel"))) {
+		sceneUIEditorView_ = {}; sceneUIEditorIssue_.clear(); return {};
+	}
+	if (sceneUIEditorView_.textId && (!text || !FindComponent(*text, "TextRenderer") ||
+		(sceneUIEditorView_.panelId && !sceneUIEditorView_.InPanel(source, text->id)))) {
+		sceneUIEditorView_.textId = 0;
+		if (sceneUIEditorView_.scope == SceneUIEditorView::Scope::Text)
+			sceneUIEditorView_.scope = SceneUIEditorView::Scope::Panel;
+	}
+	if (!sceneUIEditorView_.panelId && !sceneUIEditorView_.textId) {
+		sceneUIEditorView_ = {}; sceneUIEditorIssue_.clear(); return {};
+	}
+	SceneDocument display = source;
+	sceneUIEditorView_.PrepareDisplay(display);
+	SceneUILayout::Layout layout;
+	std::string error;
+	const uint64_t target = sceneUIEditorView_.textId ? sceneUIEditorView_.textId : sceneUIEditorView_.panelId;
+	if (!SceneUILayout::Resolve(display, target, layout, &error) || !layout.visible ||
+		(sceneUIEditorView_.panelId && layout.renderSpace != "ScreenOverlay")) {
+		sceneUIEditorIssue_ = error.empty() ? "EditorCanvasUnavailable" : error;
+		return {};
+	}
+	sceneUIEditorIssue_.clear();
+	sceneUIEditorView_.generation = source.GetContentGeneration();
+	sceneUIEditorView_.revision = source.GetRevision();
+	return sceneUIEditorView_;
+}
+
+void ImGuiManager::DrawSceneUIEditorWindow() {
+	sceneUIEditorRenderable_ = false;
+	if (!sceneUIEditorOpen_) return;
+	const char* title = SelectEditorText(editorLanguage_, "UI編集Scene###UIEditingSceneWindow", "UI Editing Scene###UIEditingSceneWindow");
+	if (!sceneUIEditorDocked_) {
+		// 保存済みレイアウト/独立Windowがあれば尊重し、新規タブだけSceneへ追加する。
+		if (ImGui::FindWindowByName(title) || ImGui::FindWindowSettingsByID(ImHashStr(title)))
+			sceneUIEditorDocked_ = true;
+		else if (sceneDockId_) {
+			ImGui::SetNextWindowDockID(sceneDockId_, ImGuiCond_Always);
+			sceneUIEditorDocked_ = true;
+		}
+	}
+	if (sceneUIEditorFocus_) { ImGui::SetNextWindowFocus(); sceneUIEditorFocus_ = false; }
+	const bool visible = ImGui::Begin(title, &sceneUIEditorOpen_, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	if (visible && editorSession_) {
+		if (ImGui::Button(SelectEditorText(editorLanguage_, "Sceneへ戻る", "Back to Scene")))
+			ImGui::SetWindowFocus("Scene");
+		if (!editorSession_->IsEditing()) {
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+				"実行中はUI編集を一時停止しています。停止すると編集を再開できます。",
+				"UI editing is suspended during Play/Pause. Stop to resume editing."));
+		} else {
+			auto& document = editorSession_->GetEditDocument();
+			DrawSceneUIEditorControls(document);
+			const auto view = GetSceneUIEditorView();
+			if (!view.generation) {
+				ImGui::TextWrapped("%s", sceneUIEditorIssue_.empty() ?
+					SelectEditorText(editorLanguage_, "編集対象がありません。対象を選択してください。", "No editing target. Select a target.") :
+					LocalizeMenuIssue(sceneUIEditorIssue_).c_str());
+			} else {
+				const char* operations[] = {
+					SelectEditorText(editorLanguage_, "移動 (W)", "Move (W)"),
+					SelectEditorText(editorLanguage_, "回転 (E)", "Rotate (E)"),
+					SelectEditorText(editorLanguage_, "拡縮 (R)", "Scale (R)") };
+				for (int i = 0; i < 3; ++i) {
+					if (i) ImGui::SameLine();
+					if (ImGui::Button(operations[i])) gizmoOperation_ = i;
+				}
+				if (ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput) {
+					if (ImGui::IsKeyPressed(ImGuiKey_W, false)) gizmoOperation_ = 0;
+					if (ImGui::IsKeyPressed(ImGuiKey_E, false)) gizmoOperation_ = 1;
+					if (ImGui::IsKeyPressed(ImGuiKey_R, false)) gizmoOperation_ = 2;
+				}
+				const auto size = ImGui::GetContentRegionAvail();
+				sceneUIEditorRenderable_ = std::isfinite(size.x) && std::isfinite(size.y) && size.x > 1 && size.y > 1;
+				if (sceneUIEditorRenderable_) {
+					sceneUIEditorWidth_ = static_cast<uint32_t>(std::clamp(size.x, 1.0f, 4096.0f));
+					sceneUIEditorHeight_ = static_cast<uint32_t>(std::clamp(size.y, 1.0f, 4096.0f));
+					// 内容/対象/範囲が変わったframeは、古い画像の操作を受け付けない。
+					const auto& rendered = sceneUIEditorRenderedView_;
+					const bool ready = sceneUIEditorTexture_.ptr && rendered.Matches(document) &&
+						rendered.panelId == view.panelId && rendered.textId == view.textId && rendered.scope == view.scope;
+					if (ready) {
+						ImGui::Image(ImTextureRef(static_cast<ImTextureID>(sceneUIEditorTexture_.ptr)), size);
+						const bool hovered = ImGui::IsItemHovered();
+						const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+						drawingUIEditorView_ = true;
+						DrawSceneUIEditorBounds(min.x, min.y, max.x-min.x, max.y-min.y);
+						DrawUILayoutGizmo(document, selectedEntityId_, false, min.x, min.y, max.x-min.x, max.y-min.y);
+						if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+							PickUILayoutEntity(document, false, min.x, min.y, max.x-min.x, max.y-min.y);
+						drawingUIEditorView_ = false;
+					} else ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "編集画像を更新しています…", "Updating the editing view..."));
+				}
+			}
+		}
+	}
+	ImGui::End();
+	if (!sceneUIEditorOpen_) {
+		sceneUIEditorView_ = {}; sceneUIEditorRenderedView_ = {}; sceneUIEditorTexture_ = {};
+		sceneUIEditorRenderable_ = false; sceneUIEditorIssue_.clear();
+	}
+}
+
+void ImGuiManager::DrawSceneUIEditorBounds(float x, float y, float width, float height) {
+	const auto view = GetSceneUIEditorView();
+	if (!view.generation || !view.showBounds || width <= 1 || height <= 1) return;
+	SceneDocument display = editorSession_->GetEditDocument();
+	view.PrepareDisplay(display);
+	SceneUILayout::Layout layout;
+	if (!SceneUILayout::Resolve(display, view.textId ? view.textId : view.panelId, layout)) return;
+	auto screen = [&](Vector2 point) {
+		point = UIEditorPoint(point, layout.localToCanvas);
+		return ImVec2(x + point.x * width / layout.referenceSize.x, y + point.y * height / layout.referenceSize.y);
+	};
+	const ImVec2 points[] = {screen({}), screen({layout.size.x, 0}), screen(layout.size), screen({0, layout.size.y})};
+	float minX = points[0].x, maxX = minX, minY = points[0].y, maxY = minY;
+	for (const auto& point : points) {
+		minX = (std::min)(minX, point.x); maxX = (std::max)(maxX, point.x);
+		minY = (std::min)(minY, point.y); maxY = (std::max)(maxY, point.y);
+	}
+	auto* draw = ImGui::GetWindowDrawList();
+	draw->PushClipRect(ImVec2(x,y), ImVec2(x+width,y+height), true);
+	draw->AddQuad(points[0], points[1], points[2], points[3], IM_COL32(255, 200, 70, 255), 2);
+	if (maxX < x || maxY < y || minX > x + width || minY > y + height) {
+		draw->AddText(ImVec2(x+8, y+8), IM_COL32(255,200,70,255),
+			SelectEditorText(editorLanguage_, "対象は画面外です。Inspectorの位置を確認してください。", "Target is outside the screen. Check Position in the Inspector."));
+		const float marginX = (std::min)(5.0f, width * 0.5f), marginY = (std::min)(5.0f, height * 0.5f);
+		const ImVec2 edge(std::clamp((minX+maxX)*0.5f,x+marginX,x+width-marginX), std::clamp((minY+maxY)*0.5f,y+marginY,y+height-marginY));
+		draw->AddCircleFilled(edge, 4, IM_COL32(255,200,70,255));
+	}
+	draw->PopClipRect();
+}
+
+void ImGuiManager::StartSceneUIEditorView(SceneDocument& document, uint64_t entityId) {
+	if (!editorSession_ || !editorSession_->IsEditing() || &document != &editorSession_->GetEditDocument()) return;
+	const auto* entity = document.FindEntity(entityId);
+	if (!entity) return;
+	SceneUIEditorView next;
+	if (FindComponent(*entity, "TextRenderer")) next.textId = entityId;
+	else if (const auto* item = FindComponent(*entity, "MenuItem")) {
+		const uint64_t labelId = item->menuLabelEntityId ? item->menuLabelEntityId : entityId;
+		const auto* label = document.FindEntity(labelId);
+		if (label && FindComponent(*label, "TextRenderer")) next.textId = labelId;
+	}
+	std::unordered_set<uint64_t> visited;
+	for (const auto* node = entity; node && visited.insert(node->id).second; node = document.FindEntity(node->parentId)) {
+		if (FindComponent(*node, "MenuPanel")) { next.panelId = node->id; break; }
+	}
+	if (!next.panelId && !next.textId) return;
+	next.generation = document.GetContentGeneration();
+	next.revision = document.GetRevision();
+	next.scope = next.panelId ? SceneUIEditorView::Scope::Panel : SceneUIEditorView::Scope::Text;
+	sceneUIEditorEpoch_ = editorSession_->GetEditSceneEpoch();
+	sceneUIEditorSceneId_ = editorSession_->GetEditSceneId();
+	sceneUIEditorScenePath_ = editorSession_->GetSceneFilePath();
+	sceneUIEditorOpen_ = true;
+	sceneUIEditorFocus_ = true;
+	sceneUIEditorView_ = next;
+	if (!GetSceneUIEditorView().generation && !sceneUIEditorIssue_.empty()) {
+		menuWarningReason_ = sceneUIEditorIssue_; menuWarningOperation_ = "UILayout";
+		menuWarningTarget_ = entity->name; menuWarningRequested_ = true;
+	}
+}
+
+void ImGuiManager::DrawSceneUIEditorControls(SceneDocument& document) {
+	if (!editorSession_ || &document != &editorSession_->GetEditDocument()) return;
+	GetSceneUIEditorView();
+	const auto view = sceneUIEditorView_;
+	ImGui::SeparatorText(SelectEditorText(editorLanguage_, "編集プレビュー", "Edit Preview"));
+	const auto* panel = document.FindEntity(view.panelId);
+	const auto* text = document.FindEntity(view.textId);
+	if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "対象パネル", "Panel"), panel ? panel->name.c_str() : "-")) {
+		for (const auto& candidate : document.GetEntities()) {
+			if (FindComponent(candidate, "MenuPanel") &&
+				ImGui::Selectable((candidate.name + "##Panel" + std::to_string(candidate.id)).c_str(), candidate.id == view.panelId))
+				StartSceneUIEditorView(document, candidate.id);
+		}
+		ImGui::EndCombo();
+	}
+	if (!view.panelId && ImGui::BeginCombo(SelectEditorText(editorLanguage_, "対象の文字", "Text Target"), text ? text->name.c_str() : "-")) {
+		for (const auto& candidate : document.GetEntities())
+			if (FindComponent(candidate, "TextRenderer") && SceneUILayout::IsUIEntity(document, candidate) &&
+				ImGui::Selectable((candidate.name + "##Text" + std::to_string(candidate.id)).c_str(), candidate.id == view.textId))
+				StartSceneUIEditorView(document, candidate.id);
+		ImGui::EndCombo();
+	}
+	ImGui::Text("%s: %s", SelectEditorText(editorLanguage_, "対象の文字", "Text"), text ? text->name.c_str() : "-");
+	const char* scopes[] = {
+		SelectEditorText(editorLanguage_, "全体", "Full Scene"),
+		SelectEditorText(editorLanguage_, "パネルだけ", "Panel Only"),
+		SelectEditorText(editorLanguage_, "この文字だけ", "Text Only")
+	};
+	if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "表示範囲", "View Scope"), scopes[static_cast<int>(view.scope)])) {
+		for (int i = 0; i < 3; ++i) {
+			ImGui::BeginDisabled((i == 1 && !view.panelId) || (i == 2 && !view.textId));
+			if (ImGui::Selectable(scopes[i], i == static_cast<int>(view.scope)))
+				sceneUIEditorView_.scope = static_cast<SceneUIEditorView::Scope>(i);
+			ImGui::EndDisabled();
+		}
+		ImGui::EndCombo();
+	}
+	if (panel && ImGui::BeginCombo(SelectEditorText(editorLanguage_, "確認する文字", "Preview Text"), text ? text->name.c_str() : "-")) {
+		for (const auto& candidate : document.GetEntities()) {
+			if (view.InPanel(document, candidate.id) && FindComponent(candidate, "TextRenderer") &&
+				ImGui::Selectable((candidate.name + "##" + std::to_string(candidate.id)).c_str(), view.textId == candidate.id))
+				sceneUIEditorView_.textId = candidate.id;
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "表示する状態: 基本配置（文字演出の差分なし）", "State: Base Layout (no text motion)"));
+	ImGui::Checkbox(SelectEditorText(editorLanguage_, "対象の枠を表示", "Show Target Bounds"), &sceneUIEditorView_.showBounds);
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "編集表示だけを変更しています。表示範囲・有効状態をSceneへ保存しません。", "Preview visibility is temporary. Scope and visibility overrides are not saved to the scene."));
+	SceneUILayout::Layout original;
+	const uint64_t targetId = view.textId ? view.textId : view.panelId;
+	const auto* target = document.FindEntity(targetId);
+	if (target && SceneUILayout::Resolve(document, targetId, original)) {
+		const auto* renderer = FindComponent(*target, "TextRenderer");
+		if (!original.visible || (renderer && !renderer->enabled))
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "実行時は対象または親が非表示・無効です。編集中だけ表示しています。", "The target or a parent is hidden/disabled at runtime. It is visible only for editing."));
+		if (renderer && (renderer->textOpacity == 0.0f || renderer->textColor.w == 0.0f))
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "文字の不透明度が0です。枠を表示して位置を確認できます。", "Text opacity is zero. Use bounds to inspect its position."));
+	}
+	ImGui::BeginDisabled();
+	ImGui::Button(SelectEditorText(editorLanguage_, "基本配置を表示中", "Showing Base Layout"));
+	ImGui::EndDisabled();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "対象位置を確認", "Locate Target Bounds")))
+		sceneUIEditorView_.showBounds = true;
+	if (target && SceneUILayout::Resolve(document, targetId, original))
+		ImGui::Text("%s: %.1f, %.1f", SelectEditorText(editorLanguage_, "基本配置の基点", "Base Layout Pivot"), original.pivotInCanvas.x, original.pivotInCanvas.y);
+
+}
+
+std::string ImGuiManager::LocalizeMenuIssue(const std::string& error) const {
+	if (error.starts_with("MenuRuntime:")) return LocalizeMenuRuntimeIssue(error);
+	// 内部診断は保存/API契約を変えず、利用者向けの理由と対処へ翻訳する。
+	struct Message { const char* key; const char* ja; const char* en; };
+	static const Message messages[] = {
+		{ "Menu runtime: panel unavailable", "MenuPanelが無効または見つからないため設定を追加できません。MenuPanelを有効にして再操作してください。", "MenuPanel is disabled or missing. Enable it and try adding the bindings again." },
+		{ "Menu runtime: events disabled", "EventTriggerが無効です。有効にしてから方向キー設定を追加してください。", "EventTrigger is disabled. Enable it before adding navigation bindings." },
+		{ "MenuItem marker must", "Markerはこの項目の子にある文字または画像を指定してください。自分自身や他の項目は指定できません。", "Assign a child text/image as the marker, not the item itself or another item." },
+		{ "MenuItem selection marker must not", "Markerが共有されています。項目ごとに別の装飾の子を指定してください。", "The marker is shared. Use a separate decoration child for each item." },
+		{ "MenuPanel items must", "項目は登録するPanelの子孫に配置してください。Hierarchyと項目一覧を確認してください。", "Items must be descendants of their panel. Check the hierarchy and item list." },
+		{ "MenuItem label must", "文字はこの項目自身または子孫のTextRendererを指定してください。", "Assign this item or a descendant TextRenderer as its label." },
+		{ "requires an explicit enabled", "参照先が未設定または無効です。対象のEntityとComponentを確認し、参照を設定し直してください。", "A target is missing or disabled. Check the entity/component and assign a valid reference." },
+		{ "MenuItem label has no enabled", "有効な文字表示がありません。TextRendererを設定するか、選択Markerを用意してください。", "There is no enabled text label. Configure TextRenderer or a selection marker." },
+		{ "selectedTextColor", "選択文字色の値が不正です。色の各値を0〜1に設定してください。", "The selected text color is invalid. Set each channel between 0 and 1." },
+		{ "Menu runtime: key conflict", "同じキーのUI設定またはGameplay設定が競合しています。EventTriggerで重複・対象・処理を確認し、競合を解消してから追加してください。", "A UI or Gameplay key binding conflicts. Check duplicates, targets and actions in EventTrigger before adding bindings." },
+		{ "Menu runtime: keys already configured", "方向キーは設定済みのため追加しませんでした。変更する場合はEventTriggerを編集してください。", "Navigation keys are already configured. Edit EventTrigger to change them." },
+		{ "Menu runtime: unsupported binding", "このUI Eventは現在未対応です。選択移動には「UI／指定メニューを操作中／キー押下」と前後移動だけを設定し、Panel IDを一致させてください。混在した処理は実行されません。", "This UI binding is not supported yet. Use UI / Focused Menu / Key Press with only previous/next actions and matching panel IDs. Mixed bindings are skipped." },
+		{ "Menu runtime: marker branch", "Markerの枝に文字・別項目・Panelを含むか、参照先が共有されています。項目ごとに独立した装飾の子を指定してください。", "The marker contains a label/item/panel or is shared. Assign an independent decoration child for each item." },
+		{ "Menu runtime: no selectable item", "選択可能な項目がありません。項目の登録、選択可能、有効状態、親とUI配置を確認してください。", "No item is selectable. Check registration, interactability, enabled state, parents and UI layout." },
+		{ "Duplicate UI key binding", "同じメニュー・キーのUI Eventが重複しています。先頭のみ評価されます。EventTriggerの重複を解消してください。", "Duplicate UI bindings target the same menu/key. Only the first is evaluated. Remove duplicates in EventTrigger." },
+		{ "Only one active MenuPanel", "開始時に開く有効なメニューが複数あります。一つだけに設定してください。", "Multiple active panels are initially open. Leave only one enabled." },
+		{ "initial selection", "初期項目が選択できません。登録済みで有効な項目を指定するか、初期項目を未指定にしてください。", "The initial item is not selectable. Choose an enabled registered item or clear the initial selection." },
+		{ "MenuPanel contains a duplicate", "項目が重複登録されています。MenuPanelの一覧から重複を外してください。", "An item is registered more than once. Remove the duplicate entry." },
+		{ "MenuItem is listed more than once", "項目が複数のPanelで共有されています。所属Panel一つだけに登録してください。", "An item is shared between panels. Register it only with its own panel." },
+		{ "EditorCanvasUnavailable", "UI画面が無効か、メニューの表示先が不正です。UICanvasを有効にし、メニューは「画面に重ねる」に設定してください。", "The canvas is disabled or the menu render space is invalid. Enable UICanvas and use ScreenOverlay for menus." },
+		{ "SetupProtected", "ロック中またはPrefabのリンク管理対象です。ロックを解除するか、編集可能な元Prefabで設定してください。", "This is locked or managed by a prefab link. Unlock it or edit the source prefab." },
+		{ "SetupLegacyVisual", "旧方式の文字・画像があるため、自動で配置を切り替えられません。表示設定を確認してからUI配置へ移行してください。", "Legacy text or images need an explicit layout migration. Review their placement before converting them to UI layout." },
+		{ "SetupSpatial", "3D用Componentまたはアニメーションと共存しています。メニュー用Entityを分けてください。", "Spatial components or animation conflict with UI layout. Use a separate entity for the menu." },
+		{ "SetupPose", "旧配置を2Dの初期値にできません。位置・回転・拡大率を確認し、X/Y軸回転や奥行き、負の拡大率を取り除いてください。", "The legacy transform cannot initialize a 2D layout. Check position, rotation and scale; remove depth, X/Y rotation and negative scale." },
+		{ "SetupAncestor", "親のUI配置に対応するUI画面がありません。親側にUICanvasを用意してから追加してください。", "The parent UI layout has no canvas. Add a UICanvas for the parent before adding this item." },
+		{ "SetupCreate", "必要なUI配置を作成できませんでした。対象のComponent構成を確認してください。", "Required UI components could not be created. Check the target's component configuration." },
+		{ "cycle", "親子関係が循環しています。Hierarchyの親子関係を修正してください。", "The hierarchy contains a cycle. Correct the parent-child links." },
+		{ "missing parent", "親Entityが見つかりません。Hierarchyの親を設定し直してください。", "A parent entity is missing. Assign a valid parent in the hierarchy." },
+		{ "nested", "UI画面またはメニューが入れ子になっています。Canvas/MenuPanelの所属を分けてください。", "Canvases or menu panels are nested. Separate their ownership in the hierarchy." },
+		{ "Nested", "UI画面が入れ子になっています。UICanvasの親子関係を修正してください。", "Canvases are nested. Correct the UICanvas hierarchy." },
+		{ "spatial component", "3D用ComponentとUI配置が共存しています。用途ごとにEntityを分けてください。", "Spatial components conflict with UI layout. Separate them into different entities." },
+		{ "unique on an Entity", "同じUI Componentが重複しています。重複を取り除いてください。", "A UI component is duplicated. Remove the duplicate component." },
+		{ "cannot also have UITransform", "同じEntityにUICanvasとUITransformがあります。画面と子の配置を別Entityに分けてください。", "UICanvas and UITransform share one entity. Put child layout on a separate entity." },
+		{ "referenceSize", "制作時の画面サイズが不正です。幅と高さに正の整数を設定してください。", "The reference size is invalid. Set positive integer width and height." },
+		{ "UITransform requires finite", "位置・回転・サイズ・拡大率・基準位置が不正です。UI配置の値を確認してください。", "UI position, rotation, size, scale or anchors are invalid. Check the UI layout values." },
+		{ "not finite", "配置の計算結果が有効な数値になりません。位置・サイズ・拡大率を小さくして確認してください。", "The calculated layout is not finite. Check and reduce position, size or scale values." },
+		{ "requires a UICanvas", "所属するUI画面がありません。項目追加時に準備できます。既存のUI階層がある場合は親のUICanvasを確認してください。", "There is no UI canvas. Adding an item can prepare it; for an existing UI hierarchy, check the parent UICanvas." },
+		{ "descendants require UITransform", "UI配置が未設定のEntityがあります。項目追加時に対応できる旧2D配置を引き継いで準備します。", "Some entities have no UI layout. Adding an item will initialize compatible legacy 2D placement." },
+		{ "ScreenOverlay", "メニューには有効な「画面に重ねる」UI画面が必要です。UICanvasを有効にし、表示先を確認してください。", "Menus require an enabled ScreenOverlay canvas. Enable UICanvas and check its render space." },
+		{ "renderSpace", "UI画面の表示先が不正です。UICanvasの表示先を設定し直してください。", "The canvas render space is invalid. Select a valid render space on UICanvas." },
+		{ "missing, duplicated", "項目参照が欠落・重複しているか、Panelの子ではありません。項目一覧とHierarchyを確認してください。", "An item is missing, duplicated or outside its panel. Check the item list and hierarchy." },
+		{ "Menu text must", "文字参照が項目の子ではないか、同じCanvas内にありません。文字の参照先とHierarchyを確認してください。", "Menu text is not on the item or its descendants in the same canvas. Check its reference and hierarchy." },
+		{ "All menu items", "項目がPanelと別のUI画面に属しています。同じUICanvas内へ配置してください。", "Items belong to a different canvas. Place them in their panel's UICanvas." },
+		{ "navigation axis", "項目の並び方向が不正です。縦または横を選び直してください。", "The navigation axis is invalid. Select Vertical or Horizontal." },
+		{ "minimum sorting order", "背景をさらに後ろへ置ける重なり順がありません。現在の最小の重なり順を大きくしてください。", "No lower sorting order is available for the background. Increase the current minimum sorting order." },
+		{ "Text measurement failed", "文字の大きさを計測できません。フォントと文字の設定を確認してください。", "Text measurement failed. Check the font and text settings." },
+		{ "FitMenuTextUnavailable", "枠を文字に合わせられません。このMenuItem本体の文字表示とUI配置を有効にし、文字の参照先を確認してください。", "Cannot fit these bounds. Enable this MenuItem's own text display and UI layout, and check its text reference." },
+		{ "Image measurement failed", "画像の大きさを取得できません。画像を選択し、参照先を確認してください。", "Image measurement failed. Select an image and check its reference." },
+		{ "Could not create", "子EntityまたはComponentを作成できませんでした。対象の構成を確認してください。", "A child entity or component could not be created. Check the target configuration." }
+	};
+	for (const auto& message : messages)
+		if (error.find(message.key) != std::string::npos) return SelectEditorText(editorLanguage_, message.ja, message.en);
+	return SelectEditorText(editorLanguage_,
+		"対象またはUI配置を確認できません。Hierarchy、Component、参照先を確認してください。",
+		"The target or UI layout could not be resolved. Check the hierarchy, components and references.");
+}
+
+std::string ImGuiManager::LocalizeMenuRuntimeIssue(const std::string& issue) const {
+	if (issue.starts_with("MenuRuntime:StandardMode"))
+		return SelectEditorText(editorLanguage_, "メニューの配置方式または操作方式が不正です。対応する方式を指定したデータへ戻してください。", "The menu layout or input mode is invalid. Restore a supported mode in the document.");
+	if (issue.starts_with("MenuRuntime:CanvasSize"))
+		return SelectEditorText(editorLanguage_, "制作サイズを変更できません。幅・高さをそれぞれ1以上の整数にしてください。", "Cannot change reference size. Set width and height to positive integers.");
+	if (issue.starts_with("MenuRuntime:StandardCanvasRequired"))
+		return SelectEditorText(editorLanguage_, "標準MenuPanelには同じEntityのUICanvasが必要です。画面基準を用意するか、先にMenuPanelを外してください。", "A standard MenuPanel needs UICanvas on the same entity. Prepare its canvas, or remove MenuPanel first.");
+	if (issue.starts_with("MenuRuntime:TextPlacement"))
+		return SelectEditorText(editorLanguage_, "文字の余白・ずらしを適用できません。有限の値と、項目の枠に収まる余白を指定してください。", "Cannot apply text placement. Use finite values and padding smaller than the item bounds.");
+	if (issue.starts_with("MenuRuntime:ReservedKey"))
+		return SelectEditorText(editorLanguage_, "このキーはPanelの標準操作が使用します。既存Eventを確認するか、詳細の操作方式をEventへ切り替えてください。", "This key is reserved by standard panel controls. Review the existing event or switch to Event controls in Advanced.");
+	if (issue.starts_with("MenuRuntime:Standard"))
+		return SelectEditorText(editorLanguage_, "標準メニューを用意できません。同じEntityのUICanvasと、配置を持たない親構造が必要です。空のroot Entityを使うか、旧構成として追加してください。", "Cannot prepare a standard menu. It needs a UICanvas on the same entity and no transformed ancestors. Use an empty root entity or add a legacy panel.");
+	if (issue.starts_with("MenuRuntime:Transition")) return SelectEditorText(editorLanguage_, "Scene遷移を完了できません。メニューと選択は保持しています。遷移先の登録、Sceneファイル、演出Assetを確認して再操作してください。", "The scene transition could not complete. The menu and selection are kept. Check the destination registration, scene file and transition asset, then try again.");
+	if (issue.starts_with("MenuRuntime:UnsupportedAction")) return SelectEditorText(editorLanguage_, "この処理は現在未対応です。ゲーム内Pause・再開・アプリ終了は後続実装です。対応済みのメニュー操作、Scene遷移、音、文字演出を設定してください。", "This action is not supported yet. In-game pause, resume and application exit are pending. Configure supported menu, scene, audio or text-motion actions.");
+	if (issue.starts_with("MenuRuntime:MultipleInitialPanels")) return SelectEditorText(editorLanguage_, "開始時に開くメニューが複数あります。MenuPanelの「開始時」を一つだけ開く設定にしてください。", "Multiple menus are initially open. Configure only one MenuPanel to open at startup.");
+	if (issue.starts_with("MenuRuntime:InvalidTarget")) return SelectEditorText(editorLanguage_, "音または文字演出の対象が無効です。UI Eventで同じSceneの有効なComponentとClipを選び直してください。", "The audio or text-motion target is invalid. Select an enabled component and valid clip in this scene's UI event.");
+	return SelectEditorText(editorLanguage_, "メニュー操作を実行できません。対象Panelの有効状態、UI画面、項目登録、初期項目、キャンセル設定を確認してください。", "The menu operation could not run. Check the panel's enabled state, canvas, registered items, initial selection and cancel settings.");
+}
+
+std::string ImGuiManager::LocalizeSceneRestartIssue(const std::string& issue) const {
+	if (issue.starts_with("SceneRestart:InvalidDomain"))
+		return SelectEditorText(editorLanguage_, "Sceneの再起動はGameplay側のEventに設定してください。UI側では実行できません。", "Configure Restart Scene as a Gameplay event. It cannot run in the UI domain.");
+	if (issue.starts_with("SceneRestart:Rejected"))
+		return SelectEditorText(editorLanguage_, "現在の状態では再起動できません。プレイ中のSceneで、他の読込や遷移が終わってからRを押してください。", "Cannot restart in the current state. Press R in the active playing scene after other loads or transitions finish.");
+	return SelectEditorText(editorLanguage_, "Sceneを再読込できません。登録先のSceneファイルの存在と内容を確認してから再操作してください。", "Could not reload the scene. Check the registered scene file and its contents, then try again.");
+}
+
+std::string ImGuiManager::LocalizeGameFlowIssue(const std::string& issue) const {
+	struct Message { const char* code; const char* ja; const char* en; };
+	static const Message messages[] = {
+		{"InvalidSettings", "開始方法または時間の設定が不正です。開始数は1〜9、案内・カウントダウン間隔・計測表示間隔は0より大きく、他の待ち時間は0以上に設定してください。", "Invalid sequence or timing. Use a countdown of 1–9, positive briefing/countdown/timer intervals, and nonnegative other delays."},
+		{"IntroReference", "案内には同じScene内で表示可能な「画面に重ねる」文字が必要です。TextRenderer・UI配置・親の有効状態と文字演出の参照を確認してください。", "The briefing needs a visible ScreenOverlay text in this scene. Check TextRenderer, UI layout, parent visibility and the motion clip."},
+		{"IntroConflict", "案内の文字はカウントダウンと共用できます。Phase・計測・残敵数・結果の文字とは別の参照にしてください。", "The briefing may share countdown text. Use a separate target from phase, timer, remaining and result text."},
+		{"EventConflict", "案内の文字を別のEventも操作しています。対象の文字演出・有効状態を操作するEventを確認し、ゲーム進行との二重制御を解消してください。", "Another event controls the briefing text. Remove conflicting text-motion or activation control."},
+		{"CapacityExceeded", "最初のWaveを全員待つには最大同時出現数が足りません。対象Spawnerの上限を最初のWaveの敵数以上にしてください。", "Initial preparation exceeds Max Alive. Increase the spawner limit to at least its first-wave count."},
+		{"InvalidPhase", "Phase IDが空・重複、またはWaveが未設定です。Phase IDを固有にし、各Phaseへ敵の出現設定を登録してください。", "A phase ID is empty/duplicated or a wave is missing. Use unique IDs and add a wave to each phase."},
+		{"MultipleDirectors", "同じSceneに有効なゲーム進行が複数あります。GameFlowDirectorは一つだけ有効にしてください。", "Multiple game flow directors are enabled. Enable only one in this scene."},
+		{"WaveReference", "WaveのSpawner参照または敵数が不正です。自動開始を無効にした有効なSpawnerとPrefabを指定し、敵数を1以上にしてください。同一Phase内でSpawnerを重複登録できません。", "Invalid wave spawner or count. Use an enabled spawner with Auto Start off, a valid prefab and a positive count; do not duplicate a spawner in a phase."},
+		{"WaveMismatch", "最初のWaveの準備中に世代・敵数・参照が変わったか、処理が取り消されました。進行設定とEventを確認してプレイを開始し直してください。", "The wave generation, count or reference changed, or preparation was cancelled. Review the flow/events and restart Play."},
+		{"SpawnFailed", "敵の出現準備に失敗したためゲーム進行を停止しました。SpawnerのPrefab参照・出現設定・対応構成を確認してプレイを開始し直してください。", "Game flow stopped because enemy preparation failed. Check the prefab, appearance settings and supported components, then restart Play."},
+		{"InvalidReference", "文字・文字演出・結果の親の参照が未設定または重複しています。参照欄で同じSceneの対象を選び直してください。", "Text, motion or result-root references are missing or overlap. Assign valid targets in the reference fields."}
+	};
+	const std::string primary = issue.substr(0, issue.find(' '));
+	for (const auto& message : messages) if (primary == std::string("FlowPreparation:") + message.code)
+		return SelectEditorText(editorLanguage_, message.ja, message.en);
+	return SelectEditorText(editorLanguage_, "開始の準備を完了できません。ゲーム進行の設定と参照先を確認してください。", "Game preparation could not finish. Check the game flow settings and references.");
+}
+
+std::string ImGuiManager::LocalizeSpawnIssue(const std::string& issue) const {
+	struct Message { const char* code; const char* ja; const char* en; };
+	static const Message messages[] = {
+		{"InvalidSettings", "出現演出の値が不正です。最初の大きさを0〜100％、演出時間を0より大きい秒数にし、出現方法と拡大の変化を選び直してください。", "Invalid appearance settings. Set the initial size to 0–100%, duration to a positive number of seconds, and select a valid appearance and curve."},
+		{"InvalidReference", "敵PrefabまたはSpawnerを確認できません。Prefabの参照先とSpawnerの有効状態を確認してください。", "The enemy prefab or spawner is unavailable. Check the prefab reference and enable the spawner."},
+		{"UnsupportedPrefab", "このPrefabの構成は拡大出現に対応していません。MeshRendererを持つ敵を使い、プレイヤー・UI・カメラ制御を分離し、姿勢・判定・能力値の参照をPrefab内に揃えてください。", "This prefab does not support scale-up spawning. Use a mesh enemy, separate player/UI/camera control, and keep pose, combat and stat references within its branch."},
+		{"CapacityExceeded", "開始前に全員を出現させるには最大同時出現数が足りません。最初のWaveの敵数以上に設定してください。", "Max Alive is too small for initial preparation. Set it to at least the first wave's enemy count."},
+		{"SpawnFailed", "敵Prefabを生成できませんでした。Prefabのパスと内容を確認してからプレイを開始し直してください。", "The enemy prefab could not be spawned. Check its path and contents, then restart Play."},
+		{"InstanceLost", "出現中の敵が削除・無効化されたか、親子関係が変更されました。出現中の敵を変更するEventなどを確認してプレイを開始し直してください。", "An appearing enemy was removed, disabled or reparented. Check events that change the branch, then restart Play."},
+		{"WaveMismatch", "別のWaveが進行中です。同じSpawnerへ重複した開始要求を送らないよう進行設定を確認してください。", "Another wave is already running. Check the flow so it does not start overlapping waves on one spawner."}
+	};
+	for (const auto& message : messages) if (issue.find(message.code) != std::string::npos)
+		return SelectEditorText(editorLanguage_, message.ja, message.en);
+	return SelectEditorText(editorLanguage_, "出現の準備を完了できません。Spawnerと敵Prefabの設定を確認してください。",
+		"Spawn preparation could not finish. Check the spawner and enemy prefab settings.");
+}
+
+void ImGuiManager::DrawSpawnPreparationWarning() {
+	const auto diagnostic = sceneManager_ ? sceneManager_->GetActivePreparationDiagnostic() : ScenePreparationDiagnostic{};
+	const uint64_t instance = sceneManager_ ? sceneManager_->GetActiveSceneInstanceId() : 0;
+	if (diagnostic.code != ScenePreparationDiagnosticCode::None &&
+		(instance != spawnDiagnosticInstance_ || diagnostic.documentGeneration != spawnDiagnosticGeneration_ || diagnostic.serial != spawnDiagnosticSerial_)) {
+		spawnDiagnosticInstance_ = instance; spawnDiagnosticGeneration_ = diagnostic.documentGeneration; spawnDiagnosticSerial_ = diagnostic.serial;
+		spawnWarningRequested_ = true; spawnWarningRuntime_ = true;
+		spawnWarningEntityId_ = diagnostic.entityId; spawnWarningDetail_ = diagnostic.detail;
+		switch (diagnostic.code) {
+		case ScenePreparationDiagnosticCode::InvalidSettings: spawnWarningIssue_ = "InvalidSettings"; break;
+		case ScenePreparationDiagnosticCode::InvalidReference: spawnWarningIssue_ = "InvalidReference"; break;
+		case ScenePreparationDiagnosticCode::UnsupportedPrefab: spawnWarningIssue_ = "UnsupportedPrefab"; break;
+		case ScenePreparationDiagnosticCode::CapacityExceeded: spawnWarningIssue_ = "CapacityExceeded"; break;
+		case ScenePreparationDiagnosticCode::SpawnFailed: spawnWarningIssue_ = "SpawnFailed"; break;
+		case ScenePreparationDiagnosticCode::InstanceLost: spawnWarningIssue_ = "InstanceLost"; break;
+		case ScenePreparationDiagnosticCode::WaveMismatch: spawnWarningIssue_ = "WaveMismatch"; break;
+		default: spawnWarningIssue_.clear(); break;
+		}
+		if (diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
+	}
+	const bool flow = spawnWarningIssue_.starts_with("FlowPreparation:");
+	const bool restart = spawnWarningIssue_.starts_with("SceneRestart:");
+	const bool menu = spawnWarningIssue_.starts_with("MenuRuntime:");
+	const char* title = menu ? SelectEditorText(editorLanguage_, "メニュー操作を完了できません###SpawnPreparationWarning", "Menu Operation Failed###SpawnPreparationWarning") :
+		restart ? SelectEditorText(editorLanguage_, "Sceneを再起動できません###SpawnPreparationWarning", "Scene Restart Failed###SpawnPreparationWarning") :
+		flow ? SelectEditorText(editorLanguage_, "ゲーム開始を準備できません###SpawnPreparationWarning", "Game Start Preparation Failed###SpawnPreparationWarning") :
+		SelectEditorText(editorLanguage_, "敵の出現を準備できません###SpawnPreparationWarning", "Enemy Spawn Preparation Failed###SpawnPreparationWarning");
+	if (spawnWarningRequested_) { ImGui::OpenPopup(title); spawnWarningRequested_ = false; }
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 540.0f);
+	ImGui::TextWrapped("%s", menu ? SelectEditorText(editorLanguage_, "メニューまたはUI Eventの処理を完了できませんでした。以下の原因と対処を確認してください。", "A menu or UI event operation could not complete. Review the cause and corrective steps below.") :
+		restart ? SelectEditorText(editorLanguage_, "Sceneを再起動できませんでした。現在のSceneは維持しています。", "The scene could not restart. The current scene has been kept.") :
+		flow ? (spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "ゲーム開始・進行の処理を停止しました。", "Game preparation or progression has stopped.") :
+		SelectEditorText(editorLanguage_, "開始設定の適用または確認を完了できません。設定値と参照先を確認してください。", "Start settings could not be applied or validated. Review their values and references.")) :
+		(spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "このSpawnerの出現処理を停止しました。", "Spawning has stopped for this spawner.") :
+		SelectEditorText(editorLanguage_, "出現設定を適用できません。入力前の値を維持しています。", "Spawn settings could not be applied. Previous values have been kept.")));
+	ImGui::Text("%s: %llu", SelectEditorText(editorLanguage_, "対象ID", "Entity ID"), static_cast<unsigned long long>(spawnWarningEntityId_));
+	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) { ImGui::TextWrapped("%s", spawnWarningDetail_.c_str()); ImGui::TreePop(); }
+	ImGui::PopTextWrapPos();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
+}
+
+void ImGuiManager::DrawMenuAuthoringWarning() {
+	// Scene/PrefabのInspector走査後、同じpopup ID階層から一度だけ開く。
+	const char* title = SelectEditorText(editorLanguage_, "UI編集操作を完了できません###MenuAuthoringWarning",
+		"UI Edit Operation Failed###MenuAuthoringWarning");
+	if (menuWarningRequested_) { ImGui::OpenPopup(title); menuWarningRequested_ = false; }
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 520.0f);
+	const char* action = menuWarningOperation_ == "NavigationKeys" ? SelectEditorText(editorLanguage_, "方向キー設定の追加", "Add Navigation Key Bindings")
+		: menuWarningOperation_ == "CreateBackground"
+		? SelectEditorText(editorLanguage_, "背景の追加", "Add Background")
+		: menuWarningOperation_ == "AddMenuText" ? SelectEditorText(editorLanguage_, "文字の追加", "Add Text")
+		: menuWarningOperation_ == "FitMenuText" ? SelectEditorText(editorLanguage_, "枠を文字に合わせる", "Fit Bounds to Text")
+		: (menuWarningOperation_ == "UILayout" || menuWarningOperation_ == "PrepareLayout") ? SelectEditorText(editorLanguage_, "UI配置の変更", "Edit UI Layout")
+		: SelectEditorText(editorLanguage_, "項目の追加", "Add Item");
+	ImGui::Text("%s: %s", action, menuWarningTarget_.c_str());
+	ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "%s", LocalizeMenuIssue(menuWarningReason_).c_str());
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "原因を解消してから、もう一度操作してください。",
+		"Resolve the issue, then try the operation again."));
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) {
+		ImGui::TextWrapped("%s", menuWarningReason_.c_str());
+		ImGui::TreePop();
+	}
+	ImGui::PopTextWrapPos();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+	ImGui::EndPopup();
+}
+
+bool ImGuiManager::PrepareStandardMenuPanel(SceneDocument& candidate, uint64_t ownerId, std::string& error) {
+	auto fail = [&]() { error = "MenuRuntime:StandardSetup"; return false; };
+	const auto* owner = candidate.FindEntity(ownerId);
+	if (!owner || owner->folder || owner->locked || candidate.IsPrefabVariant() ||
+		!owner->prefabLinks.empty() || owner->prefabInstanceRootId || !owner->prefabSourcePath.empty()) return fail();
+	const auto& t = owner->transform;
+	if (t.translate.x || t.translate.y || t.translate.z || t.scale.x != 1 || t.scale.y != 1 || t.scale.z != 1 ||
+		t.rotate.x || t.rotate.y || t.rotate.z || std::abs(t.rotate.w) != 1) return fail();
+	for (const auto& c : owner->components)
+		if (c.type != "MenuPanel" && c.type != "UICanvas" && c.type != "EventTrigger") return fail();
+	for (const auto& child : candidate.GetEntities()) if (child.parentId == ownerId) return fail();
+	if (!FindComponent(*owner, "UICanvas") && !candidate.AddComponent(ownerId, "UICanvas")) return fail();
+	// Component追加後はvector内の参照を再取得する。
+	auto* panel = FindComponent(*candidate.FindEntity(ownerId), "MenuPanel");
+	if (!panel) return fail();
+	panel->menuLayoutMode = "CanvasItems"; panel->menuInputMode = "Standard";
+	SceneUILayout::Layout layout;
+	if (!SceneUILayout::Resolve(candidate, ownerId, layout, &error) || layout.renderSpace != "ScreenOverlay" ||
+		!FindComponent(*candidate.FindEntity(ownerId), "UICanvas")->enabled) return fail();
+	return true;
+}
+
+bool ImGuiManager::PrepareStandardMenuItem(SceneDocument& candidate, uint64_t itemId, bool withText, bool place, std::string& error) {
+	auto fail = [&]() { error = "MenuRuntime:StandardSetup"; return false; };
+	const auto* owner = candidate.FindEntity(itemId);
+	const auto* parent = owner ? candidate.FindEntity(owner->parentId) : nullptr;
+	const auto* panel = parent ? FindComponent(*parent, "MenuPanel") : nullptr;
+	if (!owner || owner->locked || !panel || panel->menuLayoutMode != "CanvasItems") return fail();
+	if (candidate.IsPrefabVariant() || !owner->prefabLinks.empty() || owner->prefabInstanceRootId || !owner->prefabSourcePath.empty()) {
+		error = "SetupProtected"; return false;
+	}
+	const uint64_t panelId = parent->id;
+	const auto ids = panel->menuItemEntityIds;
+	if (!FindComponent(*owner, "UITransform") && !candidate.AddComponent(itemId, "UITransform")) return fail();
+	if (withText && !FindComponent(*candidate.FindEntity(itemId), "TextRenderer")) {
+		if (!candidate.AddComponent(itemId, "TextRenderer")) return fail();
+		FindComponent(*candidate.FindEntity(itemId), "TextRenderer")->textValue = SelectEditorText(editorLanguage_, "選択肢", "Item");
+	}
+	auto* item = FindComponent(*candidate.FindEntity(itemId), "MenuItem");
+	if (!item) return fail();
+	if (withText) item->menuLabelEntityId = 0;
+	if (place) {
+		auto* placement = FindComponent(*candidate.FindEntity(itemId), "UITransform");
+		if (const auto* text = FindComponent(*candidate.FindEntity(itemId), "TextRenderer")) {
+			TextRasterizer::Bitmap bitmap;
+			if (!TextRasterizer{}.Rasterize(UIEditorTextSettings(*text, {}), bitmap) || !bitmap.IsValid()) return fail();
+			placement->uiSize = bitmap.layoutSize;
+		}
+		SceneUILayout::Layout canvas;
+		if (!SceneUILayout::Resolve(candidate, panelId, canvas, &error)) return false;
+		placement->uiAnchor = {}; placement->uiPivot = {0.5f, 0.5f};
+		placement->uiPosition = {canvas.referenceSize.x * 0.5f, canvas.referenceSize.y * 0.5f};
+		const bool horizontal = FindComponent(*candidate.FindEntity(panelId), "MenuPanel")->menuNavigationAxis == "Horizontal";
+		float edge = -(std::numeric_limits<float>::max)(); bool found = false;
+		for (uint64_t id : ids) {
+			if (id == itemId) continue;
+			SceneUILayout::Layout layout;
+			if (!SceneUILayout::Resolve(candidate, id, layout, &error)) return false;
+			const Vector2 corners[] = {{}, {layout.size.x, 0}, layout.size, {0, layout.size.y}};
+			for (const auto& corner : corners) {
+				const auto point = UIEditorPoint(corner, layout.localToCanvas);
+				edge = (std::max)(edge, horizontal ? point.x : point.y);
+			}
+			if (horizontal) placement->uiPosition.y = layout.pivotInCanvas.y;
+			else placement->uiPosition.x = layout.pivotInCanvas.x;
+			found = true;
+		}
+		if (found) {
+			if (horizontal) placement->uiPosition.x = edge + placement->uiSize.x * 0.5f;
+			else placement->uiPosition.y = edge + placement->uiSize.y * 0.5f;
+		}
+	}
+	auto* targetPanel = FindComponent(*candidate.FindEntity(panelId), "MenuPanel");
+	if (std::find(targetPanel->menuItemEntityIds.begin(), targetPanel->menuItemEntityIds.end(), itemId) == targetPanel->menuItemEntityIds.end())
+		targetPanel->menuItemEntityIds.push_back(itemId);
+	SceneUILayout::Layout layout;
+	return SceneUILayout::Resolve(candidate, itemId, layout, &error);
+}
+
+bool ImGuiManager::PrepareMenuUILayout(SceneDocument& candidate, uint64_t ownerId, std::string& error) {
+	auto fail = [&](const char* reason) { error = reason; return false; };
+	SceneEntity* owner = candidate.FindEntity(ownerId);
+	if (!owner) return fail("SetupCreate");
+	if (candidate.IsPrefabVariant() || owner->locked || !owner->prefabLinks.empty() ||
+		owner->prefabInstanceRootId || !owner->prefabSourcePath.empty()) return fail("SetupProtected");
+	SceneUILayout::Layout existing;
+	if (SceneUILayout::Resolve(candidate, ownerId, existing)) {
+		const auto* canvas = FindComponent(*candidate.FindEntity(existing.canvasEntityId), "UICanvas");
+		return existing.renderSpace == "ScreenOverlay" && canvas && canvas->enabled
+			? true : fail("Menu requires an enabled ScreenOverlay UICanvas.");
+	}
+	if (const auto* panel = FindComponent(*owner, "MenuPanel"); panel && panel->menuLayoutMode == "CanvasItems")
+		return fail("MenuRuntime:StandardHierarchy");
+	uint64_t rootId = ownerId;
+	bool foundPanel = false;
+	std::unordered_set<uint64_t> visited;
+	uint64_t canvasId = 0;
+	for (const SceneEntity* node = owner; node; node = candidate.FindEntity(node->parentId)) {
+		if (!visited.insert(node->id).second) return fail("UI hierarchy contains a cycle");
+		if (FindComponent(*node, "PrefabAnimator")) return fail("SetupSpatial");
+		if (FindComponent(*node, "MenuPanel")) {
+			if (foundPanel) return fail("MenuPanel roots must not be nested.");
+			foundPanel = true;
+			rootId = node->id;
+		}
+		if (FindComponent(*node, "UICanvas")) { canvasId = node->id; break; }
+		if (node->parentId && !candidate.FindEntity(node->parentId)) return fail("UI hierarchy references a missing parent");
+	}
+	auto* root = candidate.FindEntity(rootId);
+	if (!canvasId) {
+		for (const SceneEntity* parent = candidate.FindEntity(root->parentId); parent; parent = candidate.FindEntity(parent->parentId))
+			if (FindComponent(*parent, "UITransform")) return fail("SetupAncestor");
+	}
+	// 既存子の座標系も変わるため、枝全体を確認してから候補内でのみ補完する。
+	std::vector<uint64_t> ids{rootId};
+	std::unordered_set<uint64_t> branch{rootId};
+	for (size_t i = 0; i < ids.size(); ++i) {
+		for (const auto& entity : candidate.GetEntities()) if (entity.parentId == ids[i]) {
+			if (!branch.insert(entity.id).second) return fail("UI hierarchy contains a cycle");
+			ids.push_back(entity.id);
+		}
+	}
+	for (uint64_t id : ids) {
+		auto* entity = candidate.FindEntity(id);
+		if (entity->locked || !entity->prefabLinks.empty() || entity->prefabInstanceRootId || !entity->prefabSourcePath.empty())
+			return fail("SetupProtected");
+		for (const char* type : {"MeshRenderer", "PhysicsBody", "OBBCollider", "SphereCollider", "PrefabAnimator"})
+			if (FindComponent(*entity, type)) return fail("SetupSpatial");
+		if (FindComponent(*entity, "UICanvas")) {
+			if (id != canvasId) return fail("Nested UICanvas is not supported");
+			continue;
+		}
+		if (FindComponent(*entity, "UITransform")) continue;
+		if (FindComponent(*entity, "TextRenderer") || FindComponent(*entity, "SpriteRenderer")) return fail("SetupLegacyVisual");
+		const auto old = entity->transform;
+		const float norm = old.rotate.x * old.rotate.x + old.rotate.y * old.rotate.y +
+			old.rotate.z * old.rotate.z + old.rotate.w * old.rotate.w;
+		if (!std::isfinite(norm) || std::abs(norm - 1.0f) > 0.0001f) return fail("SetupPose");
+		const auto rotation = MakeEulerFromQuaternion(old.rotate);
+		if (!std::isfinite(old.translate.x) || !std::isfinite(old.translate.y) || old.translate.z != 0 ||
+			!std::isfinite(old.scale.x) || !std::isfinite(old.scale.y) || old.scale.x <= 0 || old.scale.y <= 0 ||
+			old.scale.z != 1 || !std::isfinite(rotation.z) || std::abs(rotation.x) > 0.0001f || std::abs(rotation.y) > 0.0001f)
+			return fail("SetupPose");
+		if (entity->folder) {
+			if (old.translate.x != 0 || old.translate.y != 0 || old.scale.x != 1 || old.scale.y != 1 ||
+				old.rotate.x != 0 || old.rotate.y != 0 || old.rotate.z != 0 || std::abs(old.rotate.w) != 1) return fail("SetupPose");
+			continue;
+		}
+		if (!candidate.AddComponent(id, "UITransform")) return fail("SetupCreate");
+		auto* placement = FindComponent(*candidate.FindEntity(id), "UITransform");
+		placement->uiPosition = {old.translate.x, old.translate.y};
+		placement->uiScale = {old.scale.x, old.scale.y};
+		placement->uiRotation = rotation.z;
+		// 枠は共通UIの既定値を使い、旧Transformを以後の保存元にはしない。
+	}
+	if (!canvasId) {
+		root = candidate.FindEntity(rootId);
+		const uint64_t parentId = root->parentId;
+		std::string name = root->name + " UI";
+		const std::string base = name;
+		for (size_t suffix = 2; candidate.FindEntityByName(name); ++suffix) name = base + " " + std::to_string(suffix);
+		canvasId = candidate.CreateEntity(name, parentId).id;
+		if (!candidate.AddComponent(canvasId, "UICanvas")) return fail("SetupCreate");
+		// 新Canvasを元の親の下へ挿入する。3D SetParentによる旧値の書換えを避ける。
+		candidate.FindEntity(rootId)->parentId = canvasId;
+	}
+	for (uint64_t id : ids) {
+		SceneUILayout::Layout layout;
+		if (!SceneUILayout::Resolve(candidate, id, layout, &error)) return false;
+		const auto* canvas = FindComponent(*candidate.FindEntity(layout.canvasEntityId), "UICanvas");
+		if (layout.renderSpace != "ScreenOverlay" || !canvas || !canvas->enabled) return fail("Menu requires an enabled ScreenOverlay UICanvas.");
+	}
+	return true;
+}
+
+bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEntity& entity,
+	SceneComponent& component, bool prefab, MenuAuthoringRequest& request) {
+	bool changed = false;
+	// 共通UI配置の代理編集。構造を変える要求は外側のComponent走査が終わるまで遅延する。
+	auto drawPlacement = [&](SceneEntity& target, const char* label) {
+		if (!ImGui::TreeNode(label)) return;
+		ImGui::PushID(static_cast<int>(target.id));
+		SceneComponent* placement = FindComponent(target, "UITransform");
+		if (!placement) placement = FindComponent(target, "UICanvas");
+		if (placement) {
+			ImGui::BeginDisabled(target.locked || !placement->enabled);
+			UIAuthoringRequest uiRequest;
+			changed |= DrawUILayoutFields(document, target, *placement, prefab, uiRequest);
+			if (uiRequest.entityId) request = { entity.id, "UILayout", uiRequest.entityId, uiRequest.operation };
+			ImGui::EndDisabled();
+		} else {
+			ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "UI配置が未設定です", "UI layout is not configured"));
+			if (target.id == entity.id && MenuInspectorButton(SelectEditorText(editorLanguage_, "UI配置を準備", "Prepare UI Layout")))
+				request = { entity.id, "PrepareLayout" };
+		}
+		ImGui::PopID();
+		ImGui::TreePop();
+	};
+	MenuInspectorSection section;
+	if (component.type == "MenuPanel")
+		section.Begin(SelectEditorText(editorLanguage_, "基本設定", "Basic Settings"));
+	else if (component.type == "MenuItem")
+		section.Begin(SelectEditorText(editorLanguage_, "配置", "Placement"));
+	auto openEvents = [&]() {
+		request = { entity.id, "InspectEvents", entity.id };
+	};
+	if (!prefab && (component.type == "MenuPanel" || component.type == "MenuItem")) {
+		ImGui::BeginDisabled(!editorSession_ || !editorSession_->IsEditing());
+		if (MenuInspectorButton(SelectEditorText(editorLanguage_, "UI編集Sceneで開く###MenuOpenUIEditor", "Open in UI Editing Scene###MenuOpenUIEditor")))
+			StartSceneUIEditorView(document, entity.id);
+		ImGui::EndDisabled();
+	}
+	if (component.type == "MenuPanel") {
+		if (component.menuLayoutMode == "CanvasItems") {
+			auto* canvas = FindComponent(entity, "UICanvas");
+			if (canvas) {
+				int dimensions[] = {static_cast<int>(canvas->uiReferenceSize[0]), static_cast<int>(canvas->uiReferenceSize[1])};
+				ImGui::BeginDisabled(!canvas->enabled);
+				if (DrawMenuInspectorField(SelectEditorText(editorLanguage_, "制作サイズ", "Reference Size"), [&]() { return ImGui::InputInt2("##ReferenceSize", dimensions); })) {
+					if (dimensions[0] > 0 && dimensions[1] > 0) {
+						canvas->uiReferenceSize = {static_cast<uint32_t>(dimensions[0]), static_cast<uint32_t>(dimensions[1])}; changed = true;
+					} else {
+						menuWarningReason_ = "MenuRuntime:CanvasSize";
+						menuWarningOperation_ = "UILayout"; menuWarningTarget_ = entity.name; menuWarningRequested_ = true;
+					}
+				}
+				ImGui::EndDisabled();
+				ImGui::TextUnformatted(canvas->uiRenderSpace == "ScreenOverlay" ? SelectEditorText(editorLanguage_, "表示先：画面に重ねる", "Display: Screen Overlay") : SelectEditorText(editorLanguage_, "表示先が不正です。詳細のUICanvasを確認してください。", "Invalid render space. Review UICanvas in the component details."));
+				if (!canvas->enabled) {
+					ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "画面基準が無効です。", "The canvas is disabled."));
+					if (MenuInspectorButton(SelectEditorText(editorLanguage_, "画面基準を有効にする", "Enable Canvas"))) {canvas->enabled = true; changed = true;}
+				}
+			} else {
+				ImGui::TextWrapped("%s", LocalizeMenuIssue("MenuRuntime:StandardCanvasRequired").c_str());
+				if (MenuInspectorButton(SelectEditorText(editorLanguage_, "画面基準を用意", "Prepare Canvas"))) request = {entity.id, "RepairStandardCanvas"};
+			}
+		} else drawPlacement(entity, SelectEditorText(editorLanguage_, "パネル全体の配置（旧方式）", "Panel Placement (Legacy)"));
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "開始時に開く", "Initially Open"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.menuInitiallyOpen); });
+		section.Begin(SelectEditorText(editorLanguage_, "選択肢", "Items"));
+		changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "項目の並び", "Navigation Axis"), [&]() {
+			return DrawMenuChoice(editorLanguage_, "##Axis", component.menuNavigationAxis, { "Vertical", "Horizontal" });
+		});
+		int removeIndex = -1;
+		for (size_t i = 0; i < component.menuItemEntityIds.size(); ++i) {
+			// 自動整列で行が移動しても文字入力や展開状態を同じItemへ結び付ける。
+			const uint64_t rowId = component.menuItemEntityIds[i];
+			const auto occurrence = std::count(component.menuItemEntityIds.begin(), component.menuItemEntityIds.begin() + i, rowId);
+			const std::string rowKey = std::to_string(rowId) + ":" + std::to_string(occurrence);
+			ImGui::PushID(rowKey.c_str());
+			MenuInspectorSection itemRow;
+			itemRow.Begin(nullptr);
+			ImGui::AlignTextToFramePadding();
+			ImGui::Text("%zu.", i + 1);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+			bool expandItem = false;
+			changed |= DrawMenuEntityField("##ItemReference", document, component.menuItemEntityIds[i], "MenuItem", entity.id, false);
+			ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+			if (BeginMenuInspectorCombo("##ItemActions", SelectEditorText(editorLanguage_, "項目の操作…", "Item Actions..."))) {
+				const SceneEntity* item = document.FindEntity(component.menuItemEntityIds[i]);
+				const bool validItem = item && FindComponent(*item, "MenuItem") && IsMenuDescendant(document, item->id, entity.id, false);
+				ImGui::BeginDisabled(!validItem);
+				if (ImGui::Selectable(SelectEditorText(editorLanguage_, "ここで項目を編集", "Edit Item Here"))) expandItem = true;
+				if (ImGui::Selectable(SelectEditorText(editorLanguage_, "MenuItemのInspectorを開く", "Open MenuItem Inspector"))) {
+					request = { entity.id, "InspectItem", component.menuItemEntityIds[i] };
+				}
+				ImGui::EndDisabled();
+				ImGui::Separator();
+				if (ImGui::Selectable(SelectEditorText(editorLanguage_, "一覧から外す（Entityは残す）", "Unregister (Keep Entity)"))) removeIndex = static_cast<int>(i);
+				ImGui::EndCombo();
+			}
+			if (std::count(component.menuItemEntityIds.begin(), component.menuItemEntityIds.end(), component.menuItemEntityIds[i]) > 1) ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "同じ項目が重複しています", "Duplicate menu item"));
+			SceneEntity* itemEntity = document.FindEntity(component.menuItemEntityIds[i]);
+			SceneComponent* itemComponent = itemEntity ? FindComponent(*itemEntity, "MenuItem") : nullptr;
+			const bool canEditItem = itemComponent && IsMenuDescendant(document, itemEntity->id, entity.id, false);
+			if (canEditItem && expandItem) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+			if (canEditItem && ImGui::TreeNode(SelectEditorText(editorLanguage_, "この項目を編集", "Edit This Item"))) {
+				ImGui::BeginDisabled(itemEntity->locked || !itemComponent->enabled);
+				changed |= DrawMenuAuthoringComponent(document, *itemEntity, *itemComponent, prefab, request);
+				ImGui::EndDisabled();
+				ImGui::TreePop();
+			}
+			itemRow.End();
+			ImGui::PopID();
+		}
+		if (removeIndex >= 0) { component.menuItemEntityIds.erase(component.menuItemEntityIds.begin() + removeIndex); changed = true; }
+		if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "項目を追加", "Add Item"), SelectEditorText(editorLanguage_, "追加方法を選択…", "Choose How to Add..."))) {
+			if (ImGui::Selectable(SelectEditorText(editorLanguage_, "文字付きの子項目を作成", "Create Child Item with Text")))
+				request = { entity.id, "CreateTextItem" };
+			if (ImGui::Selectable(SelectEditorText(editorLanguage_, "空の子項目を作成", "Create Empty Child Item")))
+				request = { entity.id, "CreateItem" };
+			uint64_t addId = 0;
+			if (DrawMenuEntityField(SelectEditorText(editorLanguage_, "既存の項目を登録…", "Register Existing Item..."), document, addId, "MenuItem", entity.id, false) && addId &&
+				std::find(component.menuItemEntityIds.begin(), component.menuItemEntityIds.end(), addId) == component.menuItemEntityIds.end()) {
+				component.menuItemEntityIds.push_back(addId); changed = true;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndCombo();
+		}
+		std::vector<SceneMenuLayout::ItemPosition> positions;
+		std::string orderError;
+		if (!SceneMenuLayout::EvaluatePositions(document, entity, component, positions, orderError)) {
+			ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "配置を確認できないため、元の選択順を保持します。", "Cannot resolve placement; the saved selection order is kept."));
+			ImGui::TextWrapped("%s", LocalizeMenuIssue(orderError).c_str());
+		}
+		section.Begin(SelectEditorText(editorLanguage_, "最初の選択", "Initial Selection"));
+		changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "開始時に選ぶ項目", "Initially Selected Item"), [&]() {
+			return DrawMenuEntityField("##InitialItem", document, component.menuInitialItemEntityId, "MenuItem", entity.id, false, &component.menuItemEntityIds,
+				SelectEditorText(editorLanguage_, "自動（最初の選択可能項目）", "Automatic (First Selectable Item)"));
+		});
+		section.Begin(SelectEditorText(editorLanguage_, "キャンセル時の動作", "Cancel Behavior"));
+		changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "動作", "Behavior"), [&]() {
+			return DrawMenuChoice(editorLanguage_, "##CancelMode", component.menuCancelMode, { "Close", "InvokeItem", "None" });
+		});
+		if (component.menuCancelMode == "InvokeItem") changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "実行する項目", "Item to Invoke"), [&]() {
+			return DrawMenuEntityField("##CancelItem", document, component.menuCancelItemEntityId, "MenuItem", entity.id, false, &component.menuItemEntityIds);
+		});
+		if (component.menuCancelMode == "InvokeItem" && !component.menuCancelItemEntityId) {
+			ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "キャンセルで実行する項目を選んでください", "Choose the item invoked by cancel"));
+		}
+		if (component.menuItemEntityIds.empty() && component.menuCancelMode != "Close") {
+			ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "項目が空です。選択肢を追加するか、キャンセルを「閉じる」にしてください。", "Add a selectable item or allow cancel to close the panel."));
+		}
+		if (section.Begin(SelectEditorText(editorLanguage_, "詳細設定", "Advanced Settings"), true)) {
+			if (component.menuInputMode != "Standard" && MenuInspectorButton(SelectEditorText(editorLanguage_, "方向キーの設定を追加", "Add Navigation Key Bindings"))) request = { entity.id, "NavigationKeys" };
+			if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "操作の詳細", "Control Details"))) {
+				if (component.menuInputMode == "Standard")
+					ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "切替後は操作Eventの設定が必要です。標準操作への復帰は未対応です。", "Switching requires input events. Switching back to Standard is not available yet."));
+				if (component.menuInputMode == "Standard" && MenuInspectorButton(SelectEditorText(editorLanguage_, "Eventによる操作に切り替える", "Use Event Controls"))) {component.menuInputMode = "Events"; changed = true;}
+				if (auto* canvas = FindComponent(entity, "UICanvas")) changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "通常描画でのCanvas順", "Canvas Sorting Order"), [&](const char* fieldLabel) { return ImGui::InputInt(fieldLabel, &canvas->uiCanvasSortingOrder); });
+				if (FindComponent(entity, "EventTrigger") && MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "関連Eventを開く", "Open Related Events"))) openEvents();
+				if (auto* events = FindComponent(entity, "EventTrigger")) {
+					for (size_t i = 0; i < events->eventBindings.size(); ++i) {
+						auto& binding = events->eventBindings[i];
+						if (binding.executionDomain != "UI" || binding.triggerType != "OnMenuCancelled" || binding.targetEntityId != entity.id) continue;
+						ImGui::PushID(static_cast<int>(i));
+						ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "キャンセル通知の処理", "On Cancelled"));
+						if (!events->enabled) ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "EventTriggerが無効です", "EventTrigger is disabled"));
+						changed |= DrawUiEventActions(document, binding);
+						ImGui::PopID();
+					}
+				}
+				if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "キャンセル通知の処理を追加", "Add Cancelled Action"), SelectEditorText(editorLanguage_, "処理を選択…", "Choose Action..."))) {
+					for (const char* type : {"OpenMenu", "CloseMenu", "SceneTransition", "PlayAudio", "PlayTextMotion"})
+						if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, type))) request = {entity.id, "AddCancelAction", 0, type};
+					ImGui::EndCombo();
+				}
+				ImGui::TreePop();
+			}
+			if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "メニュー設定の診断", "Menu Configuration Diagnostics"))) {
+				std::vector<SceneValidationIssue> issues;
+				SceneValidator::ValidateDocument(document, nullptr, {}, {}, issues);
+				bool hasMenuIssue = false;
+				for (const auto& issue : issues) {
+					if (issue.message.starts_with("Menu runtime:") || issue.message.find("Menu") != std::string::npos || issue.message.find("UI key") != std::string::npos) {
+						hasMenuIssue = true;
+						ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s %llu: %s", SelectEditorText(editorLanguage_, "対象ID", "Entity ID"), static_cast<unsigned long long>(issue.entityId), LocalizeMenuIssue(issue.message).c_str());
+					}
+				}
+				if (!hasMenuIssue) ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "メニュー設定の問題は検出されませんでした。", "No menu configuration issues detected."));
+				ImGui::TreePop();
+			}
+			if (component.menuInputMode != "Standard" && MenuInspectorButton(SelectEditorText(editorLanguage_, "操作イベントを設定…", "Set Up Input Events..."))) ImGui::OpenPopup("MenuInputSetup");
+		}
+	} else if (component.type == "MenuItem") {
+		const auto* parent = document.FindEntity(entity.parentId);
+		const auto* parentPanel = parent ? FindComponent(*parent, "MenuPanel") : nullptr;
+		const bool standard = parentPanel && parentPanel->menuLayoutMode == "CanvasItems";
+		auto* placement = FindComponent(entity, "UITransform");
+		SceneUILayout::Layout resolved;
+		if (standard && placement && SceneUILayout::Resolve(document, entity.id, resolved)) {
+			const SceneComponent previous = *placement;
+			Vector2 position = resolved.pivotInCanvas;
+			bool edit = DrawMenuInspectorField(SelectEditorText(editorLanguage_, "画面内の位置", "Position in Canvas"), [&]() { return ImGui::InputFloat2("##Position", &position.x); });
+			if (edit) placement->uiPosition = {position.x - placement->uiAnchor.x * resolved.parentSize.x, position.y - placement->uiAnchor.y * resolved.parentSize.y};
+			edit |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "幅・高さ", "Width / Height"), [&]() { return ImGui::InputFloat2("##Size", &placement->uiSize.x); });
+			if (edit) {
+				std::string reason;
+				if (SceneUILayout::Resolve(document, entity.id, resolved, &reason)) changed = true;
+				else { *placement = previous; menuWarningReason_ = reason; menuWarningOperation_ = "UILayout"; menuWarningTarget_ = entity.name; menuWarningRequested_ = true; }
+			}
+			if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "配置の詳細", "Advanced Placement"))) {
+				UIAuthoringRequest uiRequest;
+				changed |= DrawUILayoutFields(document, entity, *placement, prefab, uiRequest);
+				if (uiRequest.entityId) request = {entity.id, "UILayout", uiRequest.entityId, uiRequest.operation};
+				ImGui::TreePop();
+			}
+		} else drawPlacement(entity, SelectEditorText(editorLanguage_, "項目全体の配置", "Item Placement"));
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "選択可能", "Interactable"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.menuInteractable); });
+		section.Begin(SelectEditorText(editorLanguage_, "文字", "Text"));
+		SceneEntity* labelEntity = document.FindEntity(component.menuLabelEntityId ? component.menuLabelEntityId : entity.id);
+		SceneComponent* labelText = labelEntity ? FindComponent(*labelEntity, "TextRenderer") : nullptr;
+		const bool validLabel = labelEntity && !labelEntity->folder && IsMenuDescendant(document, labelEntity->id, entity.id);
+		if (validLabel && labelText) {
+			ImGui::BeginDisabled(labelEntity->locked || !labelText->enabled);
+			if (SceneUILayout::IsUIEntity(document, *labelEntity))
+				changed |= DrawUIVisualFields(document, *labelEntity, *labelText);
+			else changed |= DrawMenuTextFields(*labelText);
+			ImGui::EndDisabled();
+			if (labelEntity->id == entity.id && placement) {
+				const Vector2 oldPadding = component.menuTextPadding, oldOffset = component.menuTextOffset;
+				bool edit = DrawMenuInspectorField(SelectEditorText(editorLanguage_, "文字の余白（左右・上下）", "Text Padding (X / Y)"), [&]() { return ImGui::InputFloat2("##TextPadding", &component.menuTextPadding.x); });
+				edit |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "文字だけのずらし", "Text Offset"), [&]() { return ImGui::InputFloat2("##TextOffset", &component.menuTextOffset.x); });
+				if (edit) {
+					SceneUILayout::Layout verified; std::string reason;
+					if (SceneUILayout::Resolve(document, entity.id, verified, &reason)) changed = true;
+					else {
+						component.menuTextPadding = oldPadding; component.menuTextOffset = oldOffset;
+						menuWarningReason_ = reason; menuWarningOperation_ = "UILayout"; menuWarningTarget_ = entity.name; menuWarningRequested_ = true;
+					}
+				}
+				ImGui::BeginDisabled(!placement->enabled || !labelText->enabled || labelEntity->locked);
+				if (MenuInspectorButton(SelectEditorText(editorLanguage_, "枠を文字に合わせる###MenuFitText", "Fit Bounds to Text###MenuFitText")))
+					request = { entity.id, "FitMenuText" };
+				ImGui::EndDisabled();
+			} else if (labelEntity->id != entity.id) ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "参照文字の配置を使用します。本体文字の余白・ずらしは適用しません。", "Uses the referenced text layout; item text padding/offset are not applied."));
+			if (labelEntity->id != entity.id) drawPlacement(*labelEntity, SelectEditorText(editorLanguage_, "文字だけの配置", "Text Placement"));
+			if (!labelText->enabled) ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "文字表示が無効です。文字Componentで有効にしてください。", "Text display is disabled. Enable it in the text component."));
+			if (labelEntity->locked) ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "文字のEntityがLockされています", "The text entity is locked"));
+			if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "文字ComponentのInspectorを開く", "Open Text Component Inspector"))) {
+				request = { entity.id, "InspectText", labelEntity->id };
+			}
+		} else if (validLabel && !labelText) {
+			ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "文字表示が未設定です", "Text display is not configured"));
+			ImGui::BeginDisabled(labelEntity->locked);
+			if (MenuInspectorButton(SelectEditorText(editorLanguage_, "文字表示を追加", "Add Text Display"))) {
+				request = { entity.id, "AddMenuText", labelEntity->id };
+			}
+			ImGui::EndDisabled();
+		} else {
+			ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "文字の参照先が無効です。「文字の参照」で指定し直してください。", "Invalid text reference. Choose a valid entity under Text Reference."));
+		}
+		if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "文字の参照（詳細）", "Text Reference (Advanced)"))) {
+			changed |= DrawMenuEntityField(SelectEditorText(editorLanguage_, "文字を表示するEntity", "Text Entity"), document, component.menuLabelEntityId, "TextRenderer", entity.id);
+			ImGui::TreePop();
+		}
+		if (validLabel && labelText) {
+			SceneUILayout::Layout labelLayout;
+			const bool overlay = SceneUILayout::IsUIEntity(document, *labelEntity)
+				? SceneUILayout::Resolve(document, labelEntity->id, labelLayout) && labelLayout.renderSpace == "ScreenOverlay"
+				: labelText->textRenderSpace == "ScreenOverlay";
+			if (!overlay) ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s",
+				SelectEditorText(editorLanguage_, "表示文字は有効なScreenOverlay Canvas内に配置してください。", "Place menu text under a valid ScreenOverlay UICanvas."));
+		}
+		section.Begin(SelectEditorText(editorLanguage_, "背景", "Background"));
+		if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "背景を編集###背景", "Edit Background###Background"))) {
+			if (auto* image = standard ? FindComponent(entity, "SpriteRenderer") : nullptr) {
+				bool enabled = image->enabled;
+				if (DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "画像背景を使う", "Use Image Background"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &enabled); })) {image->enabled = enabled; changed = true;}
+				if (image->enabled) changed |= DrawUIVisualFields(document, entity, *image);
+			} else if (MenuInspectorButton(SelectEditorText(editorLanguage_, "背景を追加", "Add Background")))
+				request = { entity.id, "CreateBackground" };
+			for (auto& child : document.GetEntities()) {
+				if (child.parentId != entity.id) continue;
+				SceneComponent* image = FindComponent(child, "SpriteRenderer");
+				if (!image) continue;
+				ImGui::PushID(static_cast<int>(child.id));
+				if (ImGui::TreeNode(child.name.c_str())) {
+					ImGui::BeginDisabled(child.locked || !image->enabled);
+					changed |= DrawUIVisualFields(document, child, *image);
+					drawPlacement(child, SelectEditorText(editorLanguage_, "背景の配置", "Background Placement"));
+					ImGui::EndDisabled();
+					if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "画像のInspectorを開く", "Open Image Inspector")))
+						request = { entity.id, "InspectBackground", child.id };
+					ImGui::TreePop();
+				}
+				ImGui::PopID();
+			}
+			ImGui::TreePop();
+		}
+		section.Begin(SelectEditorText(editorLanguage_, "選択時の見た目", "Selection Appearance"));
+		changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "選択Marker", "Selection Marker"), [&]() {
+			return DrawMenuEntityField("##Marker", document, component.menuSelectionMarkerEntityId, "Visual", entity.id, false);
+		});
+		if (component.menuSelectionMarkerEntityId)
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "Markerは親ごと有効にし、通常の文字・背景を含む枝は指定しないでください。", "Keep the marker and its parents enabled. Do not select a branch containing normal text or backgrounds."));
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "選択時の文字色を使う", "Use Selected Text Color"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.menuSelectedTextColorEnabled); });
+		if (component.menuSelectedTextColorEnabled) changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "選択時の文字色", "Selected Text Color"), [&]() {
+			return ImGui::ColorEdit4("##SelectedTextColor", &component.menuSelectedTextColor.x);
+		});
+		section.Begin(SelectEditorText(editorLanguage_, "決定されたとき", "When Confirmed"));
+		SceneComponent* events = FindComponent(entity, "EventTrigger");
+		std::vector<size_t> bindings;
+		if (events) for (size_t i = 0; i < events->eventBindings.size(); ++i) {
+			const SceneEventBinding& binding = events->eventBindings[i];
+			if (binding.executionDomain == "UI" && binding.triggerType == "OnMenuItemConfirmed" && binding.targetEntityId == entity.id) bindings.push_back(i);
+		}
+		if (!bindings.empty()) {
+			if (!events->enabled) ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "EventTriggerが無効です", "EventTrigger is disabled"));
+			for (size_t index : bindings) {
+				ImGui::PushID(static_cast<int>(index));
+				if (bindings.size() > 1) ImGui::Text("%s %zu", SelectEditorText(editorLanguage_, "決定処理", "Confirmation"), index + 1);
+				changed |= DrawUiEventActions(document, events->eventBindings[index]);
+				if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "受付の詳細", "Activation Details"))) {
+					changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "一度だけ", "Trigger Once"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &events->eventBindings[index].triggerOnce); });
+					changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "再受付までの秒数", "Cooldown Seconds"), [&](const char* fieldLabel) { return ImGui::DragFloat(fieldLabel, &events->eventBindings[index].cooldown, 0.01f, 0.0f); });
+					ImGui::TreePop();
+				}
+				ImGui::PopID();
+			}
+		} else if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "処理を追加", "Add Action"), SelectEditorText(editorLanguage_, "処理を選択…", "Choose Action..."))) {
+			for (const char* type : {"SceneTransition", "OpenMenu", "CloseMenu", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio", "PlayTextMotion", "StopTextMotion", "ResetTextMotion"})
+				if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, type))) request = {entity.id, "AddConfirmAction", 0, type};
+			ImGui::EndCombo();
+		}
+		for (const auto& other : document.GetEntities()) if (other.id != entity.id) {
+			const auto* related = FindComponent(other, "EventTrigger");
+			if (!related) continue;
+			for (const auto& binding : related->eventBindings) if (binding.executionDomain == "UI" && binding.triggerType == "OnMenuItemConfirmed" && binding.targetEntityId == entity.id)
+				ImGui::Text("%s: %s", SelectEditorText(editorLanguage_, "関連Event", "Related Event"), other.name.c_str());
+		}
+		if (events && MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "EventTriggerで開く", "Open EventTrigger"))) openEvents();
+	} else if (component.type == "GamePause") {
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "ゲーム内PauseのRuntime接続は後続実装です。現在は参照・操作イベントの設定だけを編集できます。", "In-game pause runtime integration is pending. Only its references and event settings can be edited now."));
+		if (prefab) { ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "GamePauseはScene専用です", "GamePause is scene-only")); return false; }
+		changed |= DrawMenuEntityField(SelectEditorText(editorLanguage_, "Pause画面", "Pause Panel"), document, component.gamePausePanelEntityId, "MenuPanel");
+		const SceneEntity* panelEntity = document.FindEntity(component.gamePausePanelEntityId);
+		const SceneComponent* panel = panelEntity ? FindEnabledComponent(*panelEntity, "MenuPanel") : nullptr;
+		if (panel && panel->menuInitiallyOpen) ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "Pause画面は開始時に閉じてください", "The pause panel must start closed"));
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "ゲーム進行・Camera・Effectを停止します。UI操作音は継続し、効果音・環境音は一時停止します。", "Pauses gameplay, camera, and effects. UI audio continues; SFX and ambience pause."));
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "BGMも停止する", "Pause BGM Too"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.gamePauseBgm); });
+		ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "ゲーム内PauseとEditor Pauseは別の状態です", "In-game pause and editor pause are separate states"));
+		if (MenuInspectorButton(SelectEditorText(editorLanguage_, "Escから開くイベントを設定…", "Set Up Escape Event..."))) ImGui::OpenPopup("MenuInputSetup");
+	}
+	section.End();
+	if (ImGui::BeginPopup("MenuInputSetup")) {
+		const std::string operation = component.type == "GamePause" ? "PauseKey" : "MenuKeys";
+		const auto keys = MenuSetupKeys(entity, operation);
+		bool conflict = false;
+		bool missing = false;
+		for (const MenuKeySetup& key : keys) {
+			const int state = MenuSetupKeyState(document, key);
+			conflict |= state < 0; missing |= state == 0;
+			ImGui::Text("%s -> %s (%s)", MenuAuthoringLabel(editorLanguage_, key.key), MenuAuthoringLabel(editorLanguage_, key.action),
+				state < 0 ? SelectEditorText(editorLanguage_, "競合", "Conflict") : state == 0 ? SelectEditorText(editorLanguage_, "追加", "Add") : SelectEditorText(editorLanguage_, "設定済み", "Already Set"));
+		}
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "既存の処理は変更せず、不足する操作だけ追加します。競合はEventTriggerで解消してください。", "Adds only missing bindings and keeps existing actions. Resolve conflicts in EventTrigger."));
+		ImGui::BeginDisabled(conflict || !missing || keys.empty());
+		if (MenuInspectorButton(SelectEditorText(editorLanguage_, "不足する操作だけ追加", "Add Missing Bindings"))) { request = { entity.id, operation }; ImGui::CloseCurrentPopup(); }
+		ImGui::EndDisabled();
+		if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	return changed;
+}
+
+void ImGuiManager::ApplyMenuAuthoringRequest(SceneDocument& document, const MenuAuthoringRequest& request, bool prefab) {
+	if (!request.entityId || (editorSession_ && !editorSession_->IsEditing())) return;
+	SceneEntity* owner = document.FindEntity(request.entityId);
+	if (!owner || owner->folder || owner->locked) return;
+	const std::string operationTargetName = owner->name;
+	auto warn = [&](const std::string& reason) {
+		menuWarningReason_ = reason;
+		menuWarningOperation_ = request.operation;
+		menuWarningTarget_ = operationTargetName;
+		menuWarningRequested_ = true;
+	};
+	if (request.operation == "FitMenuText") {
+		auto* item = FindComponent(*owner, "MenuItem");
+		const auto* text = FindEnabledComponent(*owner, "TextRenderer");
+		const auto* placement = FindEnabledComponent(*owner, "UITransform");
+		if (!item || !item->enabled || !text || !placement || (item->menuLabelEntityId && item->menuLabelEntityId != owner->id)) {
+			warn("FitMenuTextUnavailable"); return;
+		}
+		// 余白を先に除き、縮小後の内側枠検証と同じ状態で計測する。
+		// 共通FitTextは寸法検証失敗時に枠を復元するため、ここでは余白も戻す。
+		const Vector2 previousPadding = item->menuTextPadding;
+		item->menuTextPadding = {};
+		ApplyUIAuthoringRequest(document, { owner->id, "FitText" }, prefab);
+		if (!uiAuthoringIssue_.empty()) {
+			item->menuTextPadding = previousPadding;
+			warn(uiAuthoringIssue_);
+		}
+		return;
+	}
+	if (request.operation == "UILayout") {
+		SceneEntity* target = document.FindEntity(request.targetEntityId);
+		if (!target || target->locked || !IsMenuDescendant(document, target->id, owner->id)) return;
+		ApplyUIAuthoringRequest(document, { target->id, request.uiOperation }, prefab);
+		if (!uiAuthoringIssue_.empty()) warn(uiAuthoringIssue_);
+		return;
+	}
+	if (request.operation == "InspectItem" || request.operation == "InspectText" || request.operation == "InspectBackground" || request.operation == "InspectEvents") {
+		SceneEntity* target = document.FindEntity(request.targetEntityId);
+		if (!target || target->folder) return;
+		const bool inspectItem = request.operation == "InspectItem";
+		if (inspectItem) {
+			const SceneComponent* panel = FindComponent(*owner, "MenuPanel");
+			if (!panel || !FindComponent(*target, "MenuItem") ||
+				!IsMenuDescendant(document, target->id, owner->id, false) ||
+				std::find(panel->menuItemEntityIds.begin(), panel->menuItemEntityIds.end(), target->id) == panel->menuItemEntityIds.end()) return;
+		} else if (request.operation == "InspectEvents") {
+			if (target->id != owner->id || !FindComponent(*target, "EventTrigger")) return;
+		} else if (request.operation == "InspectBackground") {
+			if (!FindComponent(*owner, "MenuItem") || target->parentId != owner->id ||
+				!FindComponent(*target, "SpriteRenderer")) return;
+		} else {
+			const SceneComponent* item = FindComponent(*owner, "MenuItem");
+			if (!item || !IsMenuDescendant(document, target->id, owner->id) ||
+				(item->menuLabelEntityId ? item->menuLabelEntityId : owner->id) != target->id) return;
+		}
+		const char* type = inspectItem ? "MenuItem" : request.operation == "InspectEvents" ? "EventTrigger" :
+			request.operation == "InspectBackground" ? "SpriteRenderer" : "TextRenderer";
+		if (!FindComponent(*target, type)) return;
+		// Inspector移動は保存値を変更しない。SceneとPrefabの選択状態を混在させない。
+		if (prefab) {
+			prefabSelectedEntityId_ = target->id;
+			prefabSummarySelectedComponentType_ = type;
+		} else {
+			selectedEntityId_ = target->id;
+			selectedEntityIds_.clear();
+			selectedEntityIds_.insert(target->id);
+			hierarchySelectionAnchorId_ = target->id;
+			selectedProjectFile_.clear();
+			sceneSummarySelectedComponentType_ = type;
+			showInspector_ = true;
+			revealInspectorRequested_ = true;
+		}
+		const std::string key = prefab ? prefabEditorSession_->GetFilePath() : editorSession_->GetActiveSceneId();
+		componentFoldoutStates_[MakeComponentFoldoutKey(key, target->id, type)] = true;
+		return;
+	}
+	const auto* standardParent = document.FindEntity(owner->parentId);
+	const auto* standardOwner = FindComponent(*owner, "MenuPanel");
+	const auto* parentPanel = standardParent ? FindComponent(*standardParent, "MenuPanel") : nullptr;
+	const bool standardPanel = standardOwner && standardOwner->menuLayoutMode == "CanvasItems";
+	const bool standardItem = parentPanel && parentPanel->menuLayoutMode == "CanvasItems" && FindComponent(*owner, "MenuItem");
+	const bool protectedStructure = document.IsPrefabVariant() || !owner->prefabLinks.empty() || owner->prefabInstanceRootId || !owner->prefabSourcePath.empty();
+	const bool createsStandardPart = (standardPanel && (request.operation == "CreateItem" || request.operation == "CreateTextItem" || request.operation == "RepairStandardCanvas")) ||
+		(standardItem && (request.operation == "AddMenuText" || request.operation == "CreateBackground"));
+	if (protectedStructure && (createsStandardPart || ((request.operation == "AddConfirmAction" || request.operation == "AddCancelAction") && !FindComponent(*owner, "EventTrigger")))) {
+		warn("SetupProtected"); return;
+	}
+	if (request.operation == "RepairStandardCanvas" && standardPanel) {
+		SceneDocument candidate = document;
+		if (!FindComponent(*candidate.FindEntity(owner->id), "UICanvas")) candidate.AddComponent(owner->id, "UICanvas");
+		SceneUILayout::Layout checked; std::string issue;
+		if (!SceneUILayout::Resolve(candidate, owner->id, checked, &issue)) {warn(issue); return;}
+		candidate.MarkDirty(); document = std::move(candidate); return;
+	}
+	if ((standardPanel && (request.operation == "CreateItem" || request.operation == "CreateTextItem")) ||
+		(standardItem && ((request.operation == "AddMenuText" && request.targetEntityId == owner->id) || request.operation == "CreateBackground"))) {
+		SceneDocument candidate = document;
+		uint64_t itemId = owner->id;
+		const bool create = standardPanel;
+		if (create) {
+			std::string name = "MenuItem";
+			for (size_t i = 2; candidate.FindEntityByName(name); ++i) name = "MenuItem " + std::to_string(i);
+			itemId = candidate.CreateEntity(name, owner->id).id;
+			candidate.AddComponent(itemId, "MenuItem");
+		}
+		std::string issue;
+		if (request.operation == "CreateBackground") {
+			if (!FindComponent(*candidate.FindEntity(itemId), "SpriteRenderer")) candidate.AddComponent(itemId, "SpriteRenderer");
+			FindComponent(*candidate.FindEntity(itemId), "SpriteRenderer")->enabled = true;
+		} else if (!PrepareStandardMenuItem(candidate, itemId, request.operation != "CreateItem", create, issue)) { warn(issue); return; }
+		candidate.MarkDirty(); document = std::move(candidate); return;
+	}
+	if (request.operation == "AddConfirmAction" || request.operation == "AddCancelAction") {
+		SceneDocument candidate = document;
+		const uint64_t id = owner->id;
+		const bool cancel = request.operation == "AddCancelAction";
+		const char* trigger = cancel ? "OnMenuCancelled" : "OnMenuItemConfirmed";
+		if (!FindComponent(*candidate.FindEntity(id), cancel ? "MenuPanel" : "MenuItem")) return;
+		const bool hadEvents = FindComponent(*candidate.FindEntity(id), "EventTrigger") != nullptr;
+		if (!hadEvents) candidate.AddComponent(id, "EventTrigger");
+		auto* events = FindComponent(*candidate.FindEntity(id), "EventTrigger");
+		if (!events) { warn("SetupCreate"); return; }
+		if (!hadEvents) events->eventBindings.clear();
+		auto found = std::find_if(events->eventBindings.begin(), events->eventBindings.end(), [&](const auto& b) {
+			return b.executionDomain == "UI" && b.triggerType == trigger && b.targetEntityId == id;
+		});
+		if (found == events->eventBindings.end()) {
+			SceneEventBinding binding; binding.executionDomain = "UI"; binding.triggerType = trigger;
+			binding.targetEntityId = id; binding.triggerOnce = false; binding.cooldown = 0;
+			events->eventBindings.push_back(binding); found = events->eventBindings.end() - 1;
+		}
+		SceneEventAction action; action.type = request.uiOperation; found->actions.push_back(action);
+		candidate.MarkDirty(); document = std::move(candidate); return;
+	}
+	if (request.operation == "CreateItem" || request.operation == "CreateTextItem" ||
+		request.operation == "AddMenuText" || request.operation == "CreateBackground" || request.operation == "PrepareLayout") {
+		uiAuthoringIssue_.clear();
+		const bool createItem = request.operation == "CreateItem" || request.operation == "CreateTextItem";
+		if (request.operation != "PrepareLayout" && !FindComponent(*owner, createItem ? "MenuPanel" : "MenuItem")) return;
+		if (request.operation == "AddMenuText") {
+			const auto* item = FindComponent(*owner, "MenuItem");
+			const SceneEntity* target = document.FindEntity(request.targetEntityId);
+			if (!target || target->locked || !IsMenuDescendant(document, target->id, owner->id) ||
+				(item->menuLabelEntityId ? item->menuLabelEntityId : owner->id) != target->id ||
+				FindComponent(*target, "TextRenderer")) return;
+		}
+		// UI補完と子追加を同じ候補で行い、途中失敗では何も原本へ残さない。
+		SceneDocument candidate = document;
+		std::string setupError;
+		if (!PrepareMenuUILayout(candidate, request.entityId, setupError)) { warn(setupError); return; }
+		if (request.operation == "PrepareLayout") {
+			candidate.MarkDirty();
+			document = std::move(candidate);
+			return;
+		}
+		SceneUILayout::Layout ownerLayout;
+		if (!SceneUILayout::Resolve(candidate, request.entityId, ownerLayout, &setupError)) { warn(setupError); return; }
+		const bool background = request.operation == "CreateBackground";
+		int backgroundOrder = 0;
+		if (background) {
+			backgroundOrder = ownerLayout.sortingOrder;
+			for (const auto& descendant : candidate.GetEntities()) {
+				if (!IsMenuDescendant(candidate, descendant.id, request.entityId)) continue;
+				if (const auto* layout = FindComponent(descendant, "UITransform"))
+					backgroundOrder = (std::min)(backgroundOrder, layout->uiSortingOrder);
+			}
+			if (backgroundOrder == (std::numeric_limits<int>::min)()) {
+				warn("Cannot place a background behind the minimum sorting order.");
+				return;
+			}
+			--backgroundOrder;
+		}
+		// CreateEntityで再配置されるため、候補内のEntityはIDから取り直す。
+		std::vector<uint64_t> createdIds;
+		auto createChild = [&](uint64_t parentId, const std::string& baseName, const char* visual) -> uint64_t {
+			std::string name = baseName;
+			for (size_t suffix = 2; candidate.FindEntityByName(name); ++suffix) name = baseName + " " + std::to_string(suffix);
+			const uint64_t id = candidate.CreateEntity(name, parentId).id;
+			if (!candidate.AddComponent(id, "UITransform") || (visual && !candidate.AddComponent(id, visual))) return 0;
+			createdIds.push_back(id);
+			return id;
+		};
+		const uint64_t itemId = createItem ? createChild(owner->id, "MenuItem", "MenuItem") : owner->id;
+		if (!itemId) { warn("Could not create the menu item."); return; }
+		if (request.operation == "CreateTextItem" || request.operation == "AddMenuText") {
+			const uint64_t textId = createChild(itemId, "MenuText", "TextRenderer");
+			if (!textId) { warn("Could not create menu text."); return; }
+			auto* textEntity = candidate.FindEntity(textId);
+			auto* text = FindComponent(*textEntity, "TextRenderer");
+			text->textValue = SelectEditorText(editorLanguage_, "選択肢", "Item");
+			TextRasterizer::Bitmap bitmap;
+			if (!TextRasterizer{}.Rasterize(UIEditorTextSettings(*text, {}), bitmap) || !bitmap.IsValid()) {
+				warn("Text measurement failed; no menu changes were applied."); return;
+			}
+			FindComponent(*textEntity, "UITransform")->uiSize = bitmap.layoutSize;
+			auto* itemEntity = candidate.FindEntity(itemId);
+			FindComponent(*itemEntity, "MenuItem")->menuLabelEntityId = textId;
+			if (createItem) FindComponent(*itemEntity, "UITransform")->uiSize = bitmap.layoutSize;
+		}
+		if (background) {
+			const uint64_t imageId = createChild(itemId, "MenuBackground", "SpriteRenderer");
+			if (!imageId) { warn("Could not create a background."); return; }
+			auto* imageEntity = candidate.FindEntity(imageId);
+			auto* placement = FindComponent(*imageEntity, "UITransform");
+			placement->uiSize = ownerLayout.size;
+			placement->uiSortingOrder = backgroundOrder;
+			FindComponent(*imageEntity, "SpriteRenderer")->texturePath.clear();
+			// 通常背景は選択Markerとは独立した子画像。Marker参照は変更しない。
+		}
+		if (createItem) FindComponent(*candidate.FindEntity(request.entityId), "MenuPanel")->menuItemEntityIds.push_back(itemId);
+		SceneUILayout::Layout verified;
+		std::string reason;
+		for (uint64_t id : createdIds) {
+			if (!SceneUILayout::Resolve(candidate, id, verified, &reason)) { warn(reason); return; }
+		}
+		candidate.MarkDirty();
+		document = std::move(candidate);
+		return;
+	}
+	const auto keys = MenuSetupKeys(*owner, request.operation);
+	if (request.operation == "Confirm" && !FindEnabledComponent(*owner, "MenuItem")) return;
+	if (request.operation != "Confirm" && keys.empty()) {
+		if (request.operation == "NavigationKeys") warn("Menu runtime: panel unavailable");
+		return;
+	}
+	if (request.operation == "NavigationKeys") {
+		const auto* existing = FindComponent(*owner, "EventTrigger");
+		if (existing && !existing->enabled) { warn("Menu runtime: events disabled"); return; }
+	}
+	for (const MenuKeySetup& key : keys) if (MenuSetupKeyState(document, key) < 0) { warn("Menu runtime: key conflict"); return; }
+	bool missing = request.operation == "Confirm";
+	for (const MenuKeySetup& key : keys) missing |= MenuSetupKeyState(document, key) == 0;
+	if (!missing) { if (request.operation == "NavigationKeys") warn("Menu runtime: keys already configured"); return; }
+	const bool hadEvents = FindComponent(*owner, "EventTrigger") != nullptr;
+	// 所有EntityのComponent追加も、呼出し元の配列走査を終えてから行う。
+	if (!hadEvents && !document.AddComponent(owner->id, "EventTrigger")) { warn("SetupCreate"); return; }
+	owner = document.FindEntity(request.entityId);
+	SceneComponent* events = owner ? FindComponent(*owner, "EventTrigger") : nullptr;
+	if (!events) return;
+	if (!hadEvents) events->eventBindings.clear();
+	if (request.operation == "Confirm") {
+		for (const SceneEventBinding& binding : events->eventBindings) {
+			if (binding.executionDomain == "UI" && binding.triggerType == "OnMenuItemConfirmed" && binding.targetEntityId == owner->id) return;
+		}
+		SceneEventBinding binding{};
+		binding.executionDomain = "UI"; binding.triggerType = "OnMenuItemConfirmed";
+		binding.targetEntityId = owner->id; binding.triggerOnce = false;
+		events->eventBindings.push_back(std::move(binding));
+	} else {
+		for (const MenuKeySetup& key : keys) {
+			if (MenuSetupKeyState(document, key) != 0) continue;
+			SceneEventBinding binding{};
+			binding.executionDomain = "UI"; binding.triggerType = "OnKeyPressed";
+			binding.triggerKey = key.key; binding.triggerOnce = false; binding.uiInputScope = key.scope;
+			if (binding.uiInputScope == "FocusedMenu") binding.targetEntityId = owner->id;
+			SceneEventAction action{}; action.type = key.action; action.targetEntityId = key.target;
+			binding.actions.push_back(std::move(action)); events->eventBindings.push_back(std::move(binding));
+		}
+	}
+	document.MarkDirty();
 }
 
 void ImGuiManager::DrawInspectorWindow() {
@@ -8419,8 +11249,8 @@ void ImGuiManager::DrawInspectorWindow() {
 				document.AddComponent(entity.id, "SpriteRenderer");
 				entity.components.front().texturePath = entity.spriteTexturePath;
 				entity.transform.translate = {
-					static_cast<float>(dxCommon_->GetClientWidth()) * 0.5f,
-					static_cast<float>(dxCommon_->GetClientHeight()) * 0.5f,
+					static_cast<float>(WinApp::kClientWidth) * 0.5f,
+					static_cast<float>(WinApp::kClientHeight) * 0.5f,
 					0.0f
 				};
 				if (TextureManager::GetInstance()) {
@@ -9221,7 +12051,7 @@ void ImGuiManager::DrawInspectorWindow() {
 		ImGui::BeginDisabled(entityLocked);
 		if (ImGui::BeginCombo("Parent", parentName)) {
 			if (ImGui::Selectable("None (Root)", entity->parentId == 0)) {
-				document.SetParent(entity->id, 0);
+				if (!QueueUIReparent(document,{entity->id},0)) document.SetParent(entity->id, 0);
 			}
 			for (const SceneEntity& candidate : document.GetEntities()) {
 				if (
@@ -9234,7 +12064,7 @@ void ImGuiManager::DrawInspectorWindow() {
 					candidate.name.c_str(),
 					entity->parentId == candidate.id
 				)) {
-					document.SetParent(entity->id, candidate.id);
+					if (!QueueUIReparent(document,{entity->id},candidate.id)) document.SetParent(entity->id, candidate.id);
 				}
 			}
 			ImGui::EndCombo();
@@ -9903,17 +12733,21 @@ void ImGuiManager::DrawInspectorWindow() {
 				ImGui::TextDisabled("Play mode changes are temporary");
 			}
 			}
+			DrawUIMigration(document,entity->id,false);
 			ImGui::End();
 			return;
 		}
 
 		if (DrawPersistentInspectorHeader(
 			sceneInspectorKey + "Transform",
-			"Transform###SceneTransformSection"
+			SceneUILayout::IsUIEntity(document,*entity) ? SelectEditorText(editorLanguage_,"旧方式の設定（読取専用）###SceneTransformSection","Legacy Settings (read only)###SceneTransformSection") : "Transform###SceneTransformSection"
 		)) {
 		bool transformChanged = false;
 		ImGui::BeginDisabled(entityLocked);
-		if (HasComponent(*entity, "SpriteRenderer")) {
+		if (SceneUILayout::IsUIEntity(document, *entity)) {
+			ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "旧方式の設定（読取専用）。位置はUI配置で編集します。", "Legacy settings (read only). Edit position in UI Layout."));
+			ImGui::Text("Position %.1f, %.1f / Scale %.2f, %.2f", entity->transform.translate.x, entity->transform.translate.y, entity->transform.scale.x, entity->transform.scale.y);
+		} else if (HasComponent(*entity, "SpriteRenderer")) {
 			transformChanged |= ImGui::DragFloat2(
 				SelectEditorText(editorLanguage_, "位置###SceneTransformPosition", "Position###SceneTransformPosition"),
 				&entity->transform.translate.x,
@@ -10000,6 +12834,8 @@ void ImGuiManager::DrawInspectorWindow() {
 		const bool simpleComponentInspector =
 			componentInspectorMode_ == ComponentInspectorMode::Simple;
 		std::string removeComponentType;
+		MenuAuthoringRequest menuAuthoringRequest;
+		UIAuthoringRequest uiRequest;
 		for (SceneComponent& component : entity->components) {
 			if (
 				simpleComponentInspector &&
@@ -10008,7 +12844,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				continue;
 			}
 			ImGui::PushID(component.type.c_str());
-			const char* componentLabel = component.type == "OBBCollider"
+			const char* componentLabel = component.type == "UICanvas" ? SelectEditorText(editorLanguage_,"UI画面 (UICanvas)","UI Canvas (UICanvas)") : component.type == "UITransform" ? SelectEditorText(editorLanguage_,"UI配置 (UITransform)","UI Layout (UITransform)") : component.type == "OBBCollider"
 				? "Collider"
 				: component.type.c_str();
 			const std::string componentHeaderLabel =
@@ -10045,7 +12881,9 @@ void ImGuiManager::DrawInspectorWindow() {
 				editorSession_->RequestSceneReload();
 			}
 			ImGui::SameLine();
-			if (ImGui::SmallButton(SelectEditorText(
+			const bool removeUI = component.type == "UICanvas" || component.type == "UITransform";
+			if (removeUI && ConfirmUICoordinateChange(document,entity->id,"Remove UI Component")) removeComponentType=component.type;
+			if (!removeUI && ImGui::SmallButton(SelectEditorText(
 				editorLanguage_,
 				"削除###SceneComponentRemove",
 				"Remove###SceneComponentRemove"
@@ -10054,7 +12892,19 @@ void ImGuiManager::DrawInspectorWindow() {
 			}
 			ImGui::EndDisabled();
 
-			if (component.type == "MeshRenderer") {
+			if (component.type == "UICanvas" || component.type == "UITransform") {
+				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
+				if (DrawUILayoutFields(document, *entity, component, false, uiRequest)) document.MarkDirty();
+				ImGui::EndDisabled();
+			} else if ((component.type == "TextRenderer" || component.type == "SpriteRenderer") && SceneUILayout::IsUIEntity(document, *entity)) {
+				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
+				if (DrawUIVisualFields(document, *entity, component)) document.MarkDirty();
+				ImGui::EndDisabled();
+			} else if (component.type == "MenuPanel" || component.type == "MenuItem" || component.type == "GamePause") {
+				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
+				if (DrawMenuAuthoringComponent(document, *entity, component, false, menuAuthoringRequest)) document.MarkDirty();
+				ImGui::EndDisabled();
+			} else if (component.type == "MeshRenderer") {
 				const bool modelEditingDisabled =
 					!editorSession_->IsEditing() || entityLocked;
 				auto assignModel = [&](const std::string& modelPath) {
@@ -12310,141 +15160,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				ImGui::EndDisabled();
 			} else if (component.type == "TextMotion") {
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
-				bool textMotionChanged = false;
-				int removeClipIndex = -1;
-				for (size_t clipIndex = 0;
-					clipIndex < component.textMotionClips.size();
-					++clipIndex) {
-					SceneTextMotionClip& clip = component.textMotionClips[clipIndex];
-					ImGui::PushID(static_cast<int>(clipIndex));
-					if (ImGui::TreeNodeEx(
-						"TextMotionClip",
-						ImGuiTreeNodeFlags_DefaultOpen,
-						"Clip %zu: %s",
-						clipIndex + 1,
-						clip.id.empty() ? "<empty>" : clip.id.c_str()
-					)) {
-						textMotionChanged |= InputTextString(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Clip Id"),
-							clip.id
-						);
-						textMotionChanged |= ImGui::Checkbox(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Hold Final Pose"),
-							&clip.holdFinalPose
-						);
-						int removeKeyframeIndex = -1;
-						for (size_t keyframeIndex = 0;
-							keyframeIndex < clip.keyframes.size();
-							++keyframeIndex) {
-							SceneTextMotionKeyframe& keyframe = clip.keyframes[keyframeIndex];
-							ImGui::PushID(static_cast<int>(keyframeIndex));
-							if (ImGui::TreeNodeEx(
-								"TextMotionKeyframe",
-								ImGuiTreeNodeFlags_DefaultOpen,
-								"Keyframe %zu", keyframeIndex + 1
-							)) {
-								textMotionChanged |= ImGui::DragFloat(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Time Seconds"),
-									&keyframe.timeSeconds,
-									0.01f
-								);
-								textMotionChanged |= ImGui::DragFloat2(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Position Offset"),
-									&keyframe.positionOffset.x,
-									0.5f
-								);
-								textMotionChanged |= ImGui::DragFloat(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Rotation Offset"),
-									&keyframe.rotationOffset,
-									0.5f
-								);
-								textMotionChanged |= ImGui::DragFloat2(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Scale Multiplier"),
-									&keyframe.scaleMultiplier.x,
-									0.01f
-								);
-								textMotionChanged |= ImGui::DragFloat(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Opacity Multiplier"),
-									&keyframe.opacityMultiplier,
-									0.01f
-								);
-								if (ImGui::BeginCombo(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Easing To Next"),
-									keyframe.easingToNext.c_str()
-								)) {
-									for (const char* easing : {
-										"Linear", "EaseIn", "EaseOut", "EaseInOut", "SmoothStep"
-									}) {
-										if (ImGui::Selectable(
-											easing,
-											keyframe.easingToNext == easing
-										)) {
-											keyframe.easingToNext = easing;
-											textMotionChanged = true;
-										}
-									}
-									ImGui::EndCombo();
-								}
-								if (ImGui::SmallButton(SelectEditorText(
-									editorLanguage_, "Keyframeを削除###RemoveTextMotionKeyframe",
-									"Remove Keyframe###RemoveTextMotionKeyframe"
-								))) {
-									removeKeyframeIndex = static_cast<int>(keyframeIndex);
-								}
-								ImGui::TreePop();
-							}
-							ImGui::PopID();
-						}
-						if (removeKeyframeIndex >= 0) {
-							clip.keyframes.erase(
-								clip.keyframes.begin() + removeKeyframeIndex
-							);
-							textMotionChanged = true;
-						}
-						if (ImGui::SmallButton(SelectEditorText(
-							editorLanguage_, "Keyframeを追加###AddTextMotionKeyframe",
-							"Add Keyframe###AddTextMotionKeyframe"
-						))) {
-							SceneTextMotionKeyframe keyframe{};
-							keyframe.timeSeconds = clip.keyframes.empty()
-								? 0.0f : clip.keyframes.back().timeSeconds + 0.25f;
-							clip.keyframes.push_back(std::move(keyframe));
-							textMotionChanged = true;
-						}
-						if (ImGui::SmallButton(SelectEditorText(
-							editorLanguage_, "Clipを削除###RemoveTextMotionClip",
-							"Remove Clip###RemoveTextMotionClip"
-						))) {
-							removeClipIndex = static_cast<int>(clipIndex);
-						}
-						ImGui::TreePop();
-					}
-					ImGui::PopID();
-				}
-				if (removeClipIndex >= 0) {
-					component.textMotionClips.erase(
-						component.textMotionClips.begin() + removeClipIndex
-					);
-					textMotionChanged = true;
-				}
-				if (ImGui::Button(SelectEditorText(
-					editorLanguage_, "Clipを追加###AddTextMotionClip",
-					"Add Clip###AddTextMotionClip"
-				))) {
-					SceneTextMotionClip clip{};
-					clip.id = "Clip" + std::to_string(
-						component.textMotionClips.size() + 1
-					);
-					clip.keyframes = {
-						SceneTextMotionKeyframe{},
-						SceneTextMotionKeyframe{ 0.25f }
-					};
-					component.textMotionClips.push_back(std::move(clip));
-					textMotionChanged = true;
-				}
-				if (textMotionChanged) {
-					document.MarkDirty();
-				}
+				if (DrawUITextMotionFields(component)) document.MarkDirty();
 				ImGui::EndDisabled();
 			} else if (component.type == "EventTrigger") {
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
@@ -12626,6 +15342,16 @@ void ImGuiManager::DrawInspectorWindow() {
 					++bindingIndex) {
 					SceneEventBinding& binding = component.eventBindings[bindingIndex];
 					ImGui::PushID(static_cast<int>(bindingIndex));
+					if (binding.executionDomain != "Gameplay") {
+						if (ImGui::TreeNodeEx("UiEvent", ImGuiTreeNodeFlags_DefaultOpen, "UI Event %zu", bindingIndex + 1)) {
+							eventsChanged |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "実行対象", "Execution Domain"), binding.executionDomain, { "Gameplay", "UI" });
+							if (binding.executionDomain == "UI") eventsChanged |= DrawUiEventBinding(document, binding);
+							if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Eventを削除", "Remove Event"))) removeBindingIndex = static_cast<int>(bindingIndex);
+							ImGui::TreePop();
+						}
+						ImGui::PopID();
+						continue;
+					}
 					if (ImGui::TreeNodeEx(
 						"Event Binding",
 						ImGuiTreeNodeFlags_DefaultOpen,
@@ -12633,6 +15359,7 @@ void ImGuiManager::DrawInspectorWindow() {
 						bindingIndex + 1,
 						binding.triggerType.c_str()
 					)) {
+						eventsChanged |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "実行対象", "Execution Domain"), binding.executionDomain, { "Gameplay", "UI" });
 						if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Trigger"), binding.triggerType.c_str())) {
 							for (const char* trigger : {
 								"OnStart", "OnInterval", "OnStatReachedMin", "OnStatCompare",
@@ -12782,7 +15509,7 @@ void ImGuiManager::DrawInspectorWindow() {
 							)) {
 								if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Type"), action.type.c_str())) {
 									for (const char* actionType : {
-										"ModifyStat", "SetEntityActive",
+										"ModifyStat", "SetEntityActive", "OpenMenu", "PauseGame",
 										"InstantiatePrefab", "ChangeState",
 										"SceneTransition", "SetPostProcessProfile",
 										"NextPostProcessProfile",
@@ -12803,6 +15530,7 @@ void ImGuiManager::DrawInspectorWindow() {
 									ImGui::EndCombo();
 								}
 								if (
+								action.type != "OpenMenu" && action.type != "PauseGame" &&
 								action.type != "SceneTransition" &&
 								action.type != "SetPostProcessProfile" &&
 								action.type != "NextPostProcessProfile" &&
@@ -12827,7 +15555,10 @@ void ImGuiManager::DrawInspectorWindow() {
 										action.targetEntityName
 									);
 								}
-								if (action.type == "ModifyStat") {
+								if (action.type == "OpenMenu" || action.type == "PauseGame") {
+									if (DrawMenuEntityField(SelectEditorText(editorLanguage_, "対象", "Target"), document, action.targetEntityId,
+										action.type == "OpenMenu" ? "MenuPanel" : "GamePause")) { action.targetEntityName.clear(); eventsChanged = true; }
+								} else if (action.type == "ModifyStat") {
 									eventsChanged |= InputTextString(
 										LocalizedComponentWidgetLabel(editorLanguage_, "Action Stat Id"), action.statId
 									);
@@ -13047,6 +15778,12 @@ void ImGuiManager::DrawInspectorWindow() {
 				if (ImGui::Button(SelectEditorText(editorLanguage_, "Eventを追加###AddEvent", "Add Event###AddEvent"))) {
 					component.eventBindings.push_back(SceneEventBinding{});
 					eventsChanged = true;
+				}
+				ImGui::SameLine();
+				if (ImGui::Button(SelectEditorText(editorLanguage_, "UI Eventを追加", "Add UI Event"))) {
+					SceneEventBinding binding{}; binding.executionDomain = "UI"; binding.triggerType = "OnKeyPressed";
+					binding.triggerKey = "ENTER"; binding.triggerOnce = false;
+					component.eventBindings.push_back(std::move(binding)); eventsChanged = true;
 				}
 				if (eventsChanged) {
 					document.MarkDirty();
@@ -14947,9 +17684,17 @@ void ImGuiManager::DrawInspectorWindow() {
 			}
 			ImGui::PopID();
 		}
+		if (uiRequest.entityId) {
+			const uint64_t id = entity->id; ApplyUIAuthoringRequest(document, uiRequest, false); entity = document.FindEntity(id);
+		}
 		if (!removeComponentType.empty()) {
 			document.RemoveComponent(entity->id, removeComponentType);
 			editorSession_->RequestSceneReload();
+		}
+		if (editorSession_->IsEditing() && !entityLocked && menuAuthoringRequest.entityId) {
+			const uint64_t inspectedEntityId = entity->id;
+			ApplyMenuAuthoringRequest(document, menuAuthoringRequest, false);
+			entity = document.FindEntity(inspectedEntityId);
 		}
 
 		ImGui::SeparatorText(SelectEditorText(
@@ -15000,6 +17745,7 @@ void ImGuiManager::DrawInspectorWindow() {
 		if (editorSession_->IsPlaying() || editorSession_->IsPaused()) {
 			ImGui::TextDisabled("Play mode changes are temporary");
 		}
+		DrawUIMigration(document, entity->id, false);
 	}
 	else {
 		// Default scene hierarchy inspector
@@ -16532,7 +19278,7 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 		const SceneValidationIssue& issue = issues[issueIndex];
 		ImGui::PushID(static_cast<int>(issueIndex));
 		if (issue.entityId != 0 && document.FindEntity(issue.entityId)) {
-			if (ImGui::SmallButton("Select")) {
+			if (ImGui::SmallButton((issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
 				prefabSelectedEntityId_ = issue.entityId;
 			}
 			ImGui::SameLine();
@@ -16543,8 +19289,9 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 				? ImVec4(0.95f, 0.35f, 0.3f, 1.0f)
 				: ImVec4(0.95f, 0.65f, 0.25f, 1.0f),
 			"[%s] %s",
-			isError ? "Error" : "Warning",
-			issue.message.c_str()
+			(issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
+			(issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
+			((issue.message.starts_with("Menu runtime:") || issue.message.starts_with("MenuItem marker") || issue.message.starts_with("MenuItem selection marker")) ? LocalizeMenuIssue(issue.message) : issue.message)).c_str()
 		);
 		ImGui::PopID();
 	}
@@ -17043,6 +19790,58 @@ void ImGuiManager::DrawPrefabPreview() {
 	}
 
 	const SceneDocument& document = prefabEditorSession_->GetDocument();
+	const SceneEntity* uiSelection=document.FindEntity(prefabSelectedEntityId_);
+	const bool uiStage=uiSelection && SceneUILayout::IsUIEntity(document,*uiSelection);
+	if (uiStage) {
+		ImGui::SeparatorText(SelectEditorText(editorLanguage_, "UI Preview", "UI Preview"));
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "部品の仮画面はPreview専用です。Sceneへ配置した際は親のUI画面と枠を使用します。", "The temporary canvas is preview-only. A placed part inherits its scene canvas and parent bounds."));
+		const bool detached = std::any_of(document.GetEntities().begin(), document.GetEntities().end(),
+			[](const SceneEntity& e){return e.parentId==0 && FindComponent(e,"UITransform");});
+		if (detached) {
+			int size[2] = {static_cast<int>(prefabUIReferenceSize_.x),static_cast<int>(prefabUIReferenceSize_.y)};
+			if (ImGui::InputInt2(SelectEditorText(editorLanguage_, "仮の親枠サイズ（保存しない）", "Temporary Parent Size (not saved)"), size) && size[0]>0 && size[1]>0) {
+				prefabUIReferenceSize_={static_cast<float>(size[0]),static_cast<float>(size[1])}; ++prefabPreviewFramingSerial_;
+			}
+		}
+		const char* modes[]={SelectEditorText(editorLanguage_,"移動","Move"),SelectEditorText(editorLanguage_,"回転","Rotate"),SelectEditorText(editorLanguage_,"拡縮","Scale")};
+		ImGui::Combo(SelectEditorText(editorLanguage_, "配置操作", "Layout Tool"), &gizmoOperation_, modes, 3);
+		const ImVec2 viewSize((std::max)(ImGui::GetContentRegionAvail().x,240.0f),std::clamp(ImGui::GetContentRegionAvail().y,180.0f,500.0f));
+		prefabPreviewRequestedWidth_=static_cast<uint32_t>(std::clamp(viewSize.x,320.0f,1600.0f));
+		prefabPreviewRequestedHeight_=static_cast<uint32_t>(std::clamp(viewSize.y,180.0f,900.0f));
+		const ImVec2 origin=ImGui::GetCursorScreenPos();
+		if(prefabPreviewTexture_.ptr && prefabPreviewRenderedPath_==prefabPreviewRequestedPath_ && prefabPreviewRenderedRevision_==prefabPreviewRequestedRevision_) {
+			ImGui::Image(ImTextureRef(static_cast<ImTextureID>(prefabPreviewTexture_.ptr)),viewSize);
+			const bool hovered=ImGui::IsItemHovered();
+			if((!editorSession_ || editorSession_->IsEditing()) && ImGui::BeginDragDropTarget()) {
+				if(const auto* payload=ImGui::AcceptDragDropPayload("PROJECT_TEXTURE_PATH")) {
+					const auto* path=static_cast<const char*>(payload->Data);
+					const uint64_t parentId=prefabSelectedEntityId_;
+					if(path && path[0]) {
+						auto& source=prefabEditorSession_->GetDocument();
+						SceneDocument preview; BuildUIEditorDocument(source,preview,prefabUIReferenceSize_);
+						SceneUILayout::Layout parent; Matrix4x4 inverse;
+						if(SceneUILayout::Resolve(preview,parentId,parent) && parent.visible && UIEditorInverse(parent.localToCanvas,inverse)) {
+							ApplyUIAuthoringRequest(source,{parentId,"CreateImage"},true);
+							const uint64_t imageId=prefabSelectedEntityId_;
+							if(imageId!=parentId) {
+								auto* child=source.FindEntity(imageId);
+								FindComponent(*child,"SpriteRenderer")->texturePath=GetProjectResourcePath(path);
+								auto* placement=FindComponent(*child,"UITransform");
+								const auto mouse=ImGui::GetMousePos();
+								placement->uiPosition=UIEditorPoint({(mouse.x-origin.x)*parent.referenceSize.x/viewSize.x,(mouse.y-origin.y)*parent.referenceSize.y/viewSize.y},inverse);
+								placement->uiPivot={0.5f,0.5f};
+								ApplyUIAuthoringRequest(source,{imageId,"FitImage"},true);source.MarkDirty();
+							}
+						}
+					}
+				}
+				ImGui::EndDragDropTarget();
+			}
+			DrawUILayoutGizmo(prefabEditorSession_->GetDocument(),prefabSelectedEntityId_,true,origin.x,origin.y,viewSize.x,viewSize.y);
+			if(hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) PickUILayoutEntity(prefabEditorSession_->GetDocument(),true,origin.x,origin.y,viewSize.x,viewSize.y);
+		} else ImGui::Dummy(viewSize);
+		return;
+	}
 	ImGui::SeparatorText("Stage");
 	if (
 		ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
@@ -19169,6 +21968,7 @@ void ImGuiManager::DrawPrefabGizmo(
 	}
 
 	SceneDocument& sourceDocument = prefabEditorSession_->GetDocument();
+	if (DrawUILayoutGizmo(sourceDocument, prefabSelectedEntityId_, true, x, y, width, height)) return;
 	const SceneDocument& stageDocument = GetPrefabStageDocument();
 	SceneEntity* sourceEntity = sourceDocument.FindEntity(prefabSelectedEntityId_);
 	const SceneEntity* stageEntity = stageDocument.FindEntity(
@@ -20087,8 +22887,12 @@ void ImGuiManager::DrawPrefabInspector() {
 		std::to_string(entity->id) + "/";
 	if (DrawPersistentInspectorHeader(
 		prefabInspectorKey + "Transform",
-		"Transform###PrefabTransformSection"
+		SceneUILayout::IsUIEntity(document,*entity) ? SelectEditorText(editorLanguage_,"旧方式の設定（読取専用）###PrefabTransformSection","Legacy Settings (read only)###PrefabTransformSection") : "Transform###PrefabTransformSection"
 	)) {
+	if (SceneUILayout::IsUIEntity(document, *entity)) {
+		ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "旧方式の設定（読取専用）。位置はUI配置で編集します。", "Legacy settings (read only). Edit position in UI Layout."));
+		ImGui::Text("Position %.1f, %.1f / Scale %.2f, %.2f", entity->transform.translate.x, entity->transform.translate.y, entity->transform.scale.x, entity->transform.scale.y);
+	} else {
 	entityChanged |= ImGui::DragFloat3(
 		SelectEditorText(editorLanguage_, "位置###PrefabTransformPosition", "Position###PrefabTransformPosition"),
 		&entity->transform.translate.x,
@@ -20108,6 +22912,7 @@ void ImGuiManager::DrawPrefabInspector() {
 		&entity->transform.scale.x,
 		0.01f
 	);
+	}
 	}
 	if (entityChanged) {
 		document.MarkDirty();
@@ -20129,7 +22934,7 @@ void ImGuiManager::DrawPrefabInspector() {
 	}
 	const bool simpleComponentInspector =
 		componentInspectorMode_ == ComponentInspectorMode::Simple;
-	DrawPrefabTransformPoseInspector(*entity);
+	if (!SceneUILayout::IsUIEntity(document,*entity)) DrawPrefabTransformPoseInspector(*entity);
 
 	if (const SceneComponent* meshRenderer =
 		FindEnabledComponent(*entity, "MeshRenderer")) {
@@ -20170,6 +22975,8 @@ void ImGuiManager::DrawPrefabInspector() {
 		}
 	}
 
+	MenuAuthoringRequest menuAuthoringRequest;
+	UIAuthoringRequest uiRequest;
 	int removeComponentIndex = -1;
 	for (size_t componentIndex = 0;
 		componentIndex < entity->components.size();
@@ -20200,7 +23007,7 @@ void ImGuiManager::DrawPrefabInspector() {
 			: savedFoldout->second;
 		ImGui::SetNextItemOpen(wasComponentOpen, ImGuiCond_Always);
 		const bool open = ImGui::CollapsingHeader(
-			component.type.c_str(),
+			component.type == "UICanvas" ? SelectEditorText(editorLanguage_,"UI画面 (UICanvas)","UI Canvas (UICanvas)") : component.type == "UITransform" ? SelectEditorText(editorLanguage_,"UI配置 (UITransform)","UI Layout (UITransform)") : component.type.c_str(),
 			ImGuiTreeNodeFlags_SpanAvailWidth
 		);
 		if (open != wasComponentOpen) {
@@ -20211,12 +23018,30 @@ void ImGuiManager::DrawPrefabInspector() {
 			ImGui::PopID();
 			continue;
 		}
+		const bool menuAuthoringComponent = component.type == "MenuPanel" || component.type == "MenuItem" ||
+			component.type == "GamePause" || component.type == "EventTrigger" || component.type == "TextRenderer" ||
+			component.type == "UICanvas" || component.type == "UITransform" || component.type == "SpriteRenderer" || component.type == "TextMotion";
+		const bool menuEditingAllowed = !entity->folder && !entity->locked &&
+			(!editorSession_ || editorSession_->IsEditing());
+		ImGui::BeginDisabled((menuAuthoringComponent || component.type == "EnemySpawner") && !menuEditingAllowed);
 		bool changed = ImGui::Checkbox(SelectEditorText(
 			editorLanguage_,
 			"有効###PrefabComponentEnabled",
 			"Enabled###PrefabComponentEnabled"
 		), &component.enabled);
-		if (component.type == "MeshRenderer") {
+		if (component.type == "UICanvas" || component.type == "UITransform") {
+			changed |= DrawUILayoutFields(document, *entity, component, true, uiRequest);
+		} else if (component.type == "SpriteRenderer" || (component.type == "TextRenderer" && SceneUILayout::IsUIEntity(document, *entity))) {
+			changed |= DrawUIVisualFields(document, *entity, component);
+		} else if (component.type == "MenuPanel" || component.type == "MenuItem" || component.type == "GamePause") {
+			changed |= DrawMenuAuthoringComponent(document, *entity, component, true, menuAuthoringRequest);
+		} else if (component.type == "EventTrigger") {
+			changed |= DrawPrefabUiEvents(document, component);
+		} else if (component.type == "TextMotion") {
+			changed |= DrawUITextMotionFields(component);
+		} else if (component.type == "TextRenderer") {
+			changed |= DrawMenuTextFields(component);
+		} else if (component.type == "MeshRenderer") {
 			const char* currentModel = component.modelPath.empty()
 				? "None"
 				: component.modelPath.c_str();
@@ -20524,26 +23349,26 @@ void ImGuiManager::DrawPrefabInspector() {
 			);
 		} else if (component.type == "EnemySpawner") {
 				changed |= InputTextString(
-					"Enemy Prefab", component.enemySpawnerPrefabPath
+					LocalizedComponentWidgetLabel(editorLanguage_, "Enemy Prefab"), component.enemySpawnerPrefabPath
 				);
 				changed |= ImGui::DragInt(
-					"Initial Count", &component.enemySpawnerInitialCount,
+					LocalizedComponentWidgetLabel(editorLanguage_, "Initial Count"), &component.enemySpawnerInitialCount,
 					1.0f, 0, 10000
 				);
 				changed |= ImGui::DragInt(
-					"Max Alive", &component.enemySpawnerMaxAlive,
+					LocalizedComponentWidgetLabel(editorLanguage_, "Max Alive"), &component.enemySpawnerMaxAlive,
 					1.0f, 0, 10000
 				);
 				changed |= ImGui::DragFloat(
-					"Respawn Interval", &component.enemySpawnerInterval,
+					LocalizedComponentWidgetLabel(editorLanguage_, "Respawn Interval"), &component.enemySpawnerInterval,
 					0.05f, 0.0f, 3600.0f
 				);
 				changed |= ImGui::DragFloat(
-					"Spawn Radius", &component.enemySpawnerRadius,
+					LocalizedComponentWidgetLabel(editorLanguage_, "Spawn Radius"), &component.enemySpawnerRadius,
 					0.1f, 0.0f, 10000.0f
 				);
 				changed |= ImGui::Checkbox(
-					"Auto Start", &component.enemySpawnerAutoStart
+					LocalizedComponentWidgetLabel(editorLanguage_, "Auto Start"), &component.enemySpawnerAutoStart
 				);
 				component.enemySpawnerInitialCount = (std::max)(
 					component.enemySpawnerInitialCount, 0
@@ -20559,7 +23384,7 @@ void ImGuiManager::DrawPrefabInspector() {
 					component.enemySpawnerRadius, 0.0f
 				);
 				ImGui::TextDisabled(
-					"Runtime-only instances are reset to their prefab baseline before reuse."
+					"%s", SelectEditorText(editorLanguage_, "再出現する敵は元のPrefab設定へ戻してから出現演出を開始します。", "Reused enemies return to their prefab baseline before starting their spawn appearance.")
 				);
 			} else if (component.type == "BoneAttachment") {
 			SceneEntity* targetEntity = component.boneAttachmentTargetEntityId != 0
@@ -21472,19 +24297,30 @@ void ImGuiManager::DrawPrefabInspector() {
 		if (changed) {
 			document.MarkDirty();
 		}
-		if (ImGui::SmallButton(SelectEditorText(
+		const bool removeUI = component.type == "UICanvas" || component.type == "UITransform";
+		if (removeUI && ConfirmUICoordinateChange(document,entity->id,"Remove UI Component")) removeComponentIndex=static_cast<int>(componentIndex);
+		if (!removeUI && ImGui::SmallButton(SelectEditorText(
 			editorLanguage_,
 			"Componentを削除###PrefabComponentRemove",
 			"Remove Component###PrefabComponentRemove"
 		))) {
 			removeComponentIndex = static_cast<int>(componentIndex);
 		}
+		ImGui::EndDisabled();
 		ImGui::Separator();
 		ImGui::PopID();
+	}
+	if (uiRequest.entityId) {
+		const uint64_t id = entity->id; ApplyUIAuthoringRequest(document, uiRequest, true); entity = document.FindEntity(id);
 	}
 	if (removeComponentIndex >= 0) {
 		const std::string type = entity->components[removeComponentIndex].type;
 		document.RemoveComponent(entity->id, type);
+	}
+	if (!entity->locked && !entity->folder && (!editorSession_ || editorSession_->IsEditing())) {
+		const uint64_t inspectedEntityId = entity->id;
+		ApplyMenuAuthoringRequest(document, menuAuthoringRequest, true);
+		entity = document.FindEntity(inspectedEntityId);
 	}
 
 	ImGui::SeparatorText(SelectEditorText(
@@ -21517,6 +24353,7 @@ void ImGuiManager::DrawPrefabInspector() {
 			"Components cannot be added to a folder."
 		));
 	}
+	DrawUIMigration(document, entity->id, true);
 }
 
 void ImGuiManager::DrawConsoleWindow() {

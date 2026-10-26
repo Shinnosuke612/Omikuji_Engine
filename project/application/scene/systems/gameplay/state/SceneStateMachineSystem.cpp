@@ -214,12 +214,11 @@ namespace {
 				context.RequestState(attackState);
 				return;
 			}
-			Input* input = Input::GetInstance();
 			Vector3 move{};
-			if (input && input->PushKey(DIK_W)) move.z += 1.0f;
-			if (input && input->PushKey(DIK_S)) move.z -= 1.0f;
-			if (input && input->PushKey(DIK_A)) move.x -= 1.0f;
-			if (input && input->PushKey(DIK_D)) move.x += 1.0f;
+			if (context.IsKeyDown("W")) move.z += 1.0f;
+			if (context.IsKeyDown("S")) move.z -= 1.0f;
+			if (context.IsKeyDown("A")) move.x -= 1.0f;
+			if (context.IsKeyDown("D")) move.x += 1.0f;
 			if (Math::Length(move) <= 0.0001f) {
 				context.StopHorizontalMovement();
 				context.RequestState(context.GetString("IdleState", "Idle"));
@@ -695,7 +694,8 @@ StateContext::StateContext(
 	ScenePrefabAnimationSystem& prefabAnimationSystem,
 	const SceneStateDefinition& state,
 	float stateTime,
-	std::string& requestedState
+	std::string& requestedState,
+	bool acceptGameplayInput
 ) :
 	document_(document),
 	entity_(entity),
@@ -705,7 +705,8 @@ StateContext::StateContext(
 	prefabAnimationSystem_(prefabAnimationSystem),
 	state_(state),
 	stateTime_(stateTime),
-	requestedState_(requestedState) {}
+	requestedState_(requestedState),
+	acceptGameplayInput_(acceptGameplayInput) {}
 
 SceneEntity& StateContext::GetEntity() const { return entity_; }
 
@@ -755,18 +756,21 @@ SceneEntity* StateContext::ResolveEntityReference(
 }
 
 bool StateContext::IsKeyDown(const std::string& keyName) const {
+	if (!acceptGameplayInput_) return false;
 	Input* input = Input::GetInstance();
 	const BYTE key = ResolveKey(keyName);
 	return input && key != 0 && input->PushKey(key);
 }
 
 bool StateContext::IsKeyTriggered(const std::string& keyName) const {
+	if (!acceptGameplayInput_) return false;
 	Input* input = Input::GetInstance();
 	const BYTE key = ResolveKey(keyName);
 	return input && key != 0 && input->TriggerKey(key);
 }
 
 bool StateContext::IsInputDown(const std::string& inputName) const {
+	if (!acceptGameplayInput_) return false;
 	Input* input = Input::GetInstance();
 	if (!input) {
 		return false;
@@ -780,6 +784,7 @@ bool StateContext::IsInputDown(const std::string& inputName) const {
 }
 
 bool StateContext::IsInputTriggered(const std::string& inputName) const {
+	if (!acceptGameplayInput_) return false;
 	Input* input = Input::GetInstance();
 	if (!input) {
 		return false;
@@ -793,6 +798,7 @@ bool StateContext::IsInputTriggered(const std::string& inputName) const {
 }
 
 bool StateContext::HasMoveInput() const {
+	if (!acceptGameplayInput_) return false;
 	Input* input = Input::GetInstance();
 	return input && (
 		input->PushKey(DIK_W) || input->PushKey(DIK_A) ||
@@ -908,7 +914,9 @@ void SceneStateMachineSystem::Update(
 	Player* player,
 	SceneAttackRunnerSystem& attackRunnerSystem,
 	ScenePrefabAnimationSystem& prefabAnimationSystem,
-	float deltaTime
+	float deltaTime,
+	const std::unordered_set<uint64_t>& blockedEntityIds,
+	bool acceptGameplayInput
 ) {
 	auto findBinding = [&](uint64_t entityId) -> const SceneRuntimeObjectBinding* {
 		const auto found = std::find_if(
@@ -933,7 +941,7 @@ void SceneStateMachineSystem::Update(
 		}
 		return StateContext(
 			document, entity, object, body, attackRunnerSystem, prefabAnimationSystem,
-			state, stateTime, requestedState
+			state, stateTime, requestedState, acceptGameplayInput
 		);
 	};
 	auto transition = [&] (
@@ -976,6 +984,7 @@ void SceneStateMachineSystem::Update(
 			continue;
 		}
 		requiredEntities.insert(entity.id);
+		if (blockedEntityIds.contains(entity.id)) continue;
 		Runtime& runtime = runtimes_[entity.id];
 		const bool active = machine->enabled &&
 			SceneEntityQuery::IsEntityActiveInHierarchy(document, entity);

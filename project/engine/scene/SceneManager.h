@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "SceneInstance.h"
+#include "SceneUIEditorView.h"
 #include "SceneTransitionRequest.h"
+#include "ScenePreparationDiagnostic.h"
 
 class AbstractSceneFactory;
 class BaseScene;
@@ -30,6 +32,8 @@ public:
 	~SceneManager();
 
 	void Update(float deltaTime);
+	// Gameが毎Frame渡す入力許可。Scene側はInput/Editorに依存しない。
+	void SetMenuInputAllowed(bool allowed) { menuInputAllowed_ = allowed; }
 	// 最初の一件を占有。Consume後もFinishまで追加要求を拒否し、Sceneは変更しない。
 	bool RequestPresentedTransition(const PresentedTransitionRequest& request);
 	// false時outは不変。要求の所有をGameへ渡すが、占有は維持する。
@@ -45,6 +49,12 @@ public:
 	// 保持中だけ予約を確定し、描画同期を行う。共有Particleの時間は進めない。
 	void UpdateTransitionHold();
 
+	// Editor Edit状態かつActive Document一致時だけ有効。Monitorには渡さない。
+	void SetEditorUIView(const SceneUIEditorView& view) { editorUIView_ = view; }
+	const SceneUIEditorView* GetEditorUIView() const;
+	// UI編集RTをBindしたcallerだけが呼ぶ。通常Draw/Monitorへフィルターを持ち越さない。
+	void DrawEditorUIView(const char* renderSpace, uint32_t width = 0, uint32_t height = 0);
+	bool IsDrawingEditorUIView() const { return drawingEditorUIView_; }
 	void Draw();
 	void DrawForegroundEffects();
 	bool HasScreenOverlay() const;
@@ -76,6 +86,13 @@ public:
 	// Persistent InstanceはSingleロードでも破棄しない。明示Unloadは可能。
 	bool SetScenePersistent(SceneInstanceId instanceId, bool persistent);
 	void ReloadCurrentScene();
+	// requestSerial付きUI遷移は受理した予約IDを返す。拒否時は現Scene/選択を保持する。
+	// Panelの生存は発行側、Instance/内容世代はManagerが再確認する。
+	SceneInstanceId RequestUiSceneTransition(const SceneMenuSource& source, const std::string& destination);
+	bool IsUiTransitionSourceValid(const SceneMenuSource& source) const;
+	// 演出の実際の受理/拒否はGameが報告。結果は同じ要求が一回だけ消費する。
+	void ReportUiTransitionOutcome(const SceneMenuSource& source, SceneUiTransitionStatus status, const std::string& diagnostic = {});
+	bool ConsumeUiTransitionOutcome(const SceneMenuSource& source, SceneUiTransitionOutcome& outcome);
 	void SetSceneFactory(AbstractSceneFactory* sceneFactory) {
 		sceneFactory_ = sceneFactory;
 	}
@@ -96,6 +113,8 @@ public:
 	}
 	SceneDocument* GetActiveSceneDocument();
 	const SceneDocument* GetActiveSceneDocument() const;
+	// Active Sceneの準備診断を値で返す。Sceneなしは空診断で、Scene本体や所有権は公開しない。
+	ScenePreparationDiagnostic GetActivePreparationDiagnostic() const;
 	bool TryGetActiveRuntimePostProcessSettings(
 		ScenePostProcessSettings& settings,
 		uint64_t& generation
@@ -117,6 +136,10 @@ public:
 	) const;
 
 private:
+	void PrepareMenuInput(float deltaTime, bool allowed);
+	bool menuInputAllowed_ = false;
+	SceneUIEditorView editorUIView_;
+	bool drawingEditorUIView_ = false;
 	void ActivatePendingScene();
 	void DiscardPendingScene(
 		const std::string& diagnostic = "Scene load cancelled before activation"
@@ -136,6 +159,8 @@ private:
 	SceneLoadMode pendingSceneLoadMode_ = SceneLoadMode::Single;
 	SceneInstanceId pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
 	bool pendingForceUnloadAllSceneInstances_ = false;
+	bool pendingRestartScene_ = false;
+	SceneMenuSource pendingUiTransitionSource_;
 	std::vector<SceneInstanceId> pendingUnloadSceneInstanceIds_;
 	SceneInstanceId activeSceneInstanceId_ = kInvalidSceneInstanceId;
 	SceneInstanceId nextSceneInstanceId_ = 1;
@@ -145,7 +170,9 @@ private:
 	SceneExecutionContext* executionContext_ = nullptr;
 	bool transitionHeld_ = false;
 	bool presentedTransitionBusy_ = false;
+	SceneMenuSource presentedUiTransitionSource_;
 	std::optional<PresentedTransitionRequest> presentedTransitionRequest_;
 	std::optional<SceneLoadOutcome> lastLoadOutcome_;
+	std::optional<SceneUiTransitionOutcome> uiTransitionOutcome_;
 };
 

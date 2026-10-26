@@ -1,23 +1,23 @@
 {
   "artifacts": [
     {
-      "contentHash": "0BCCEAEAF66DE60E",
+      "contentHash": "F4F5F13590D5ED67",
       "path": "intermediate/project-files/WeaponHunter.Common.props"
     },
     {
-      "contentHash": "5CAA5F32E2D6102D",
+      "contentHash": "E4002F05A309FAF8",
       "path": "intermediate/project-files/WeaponHunter.Engine.vcxproj"
     },
     {
-      "contentHash": "74503D4C38EAB1BE",
+      "contentHash": "0473219C97B145F1",
       "path": "intermediate/project-files/WeaponHunter.Engine.vcxproj.filters"
     },
     {
-      "contentHash": "F3111C673BFAFE4B",
+      "contentHash": "2CA5542A29BA2B48",
       "path": "intermediate/project-files/WeaponHunter.Game.vcxproj"
     },
     {
-      "contentHash": "F313EDAECA138845",
+      "contentHash": "E36183C3A84AEA59",
       "path": "intermediate/project-files/WeaponHunter.Game.vcxproj.filters"
     },
     {
@@ -25,7 +25,7 @@
       "path": "intermediate/project-files/WeaponHunter.sln"
     },
     {
-      "contentHash": "00CA76C33360F4D3",
+      "contentHash": "5B11A4859E7CCEA0",
       "path": "intermediate/project-files/WeaponHunter.vcxproj"
     },
     {
@@ -33,6 +33,6 @@
       "path": "intermediate/project-files/WeaponHunter.vcxproj.filters"
     }
   ],
-  "inputIdentity": "B2EFD8C3C80B7424",
+  "inputIdentity": "6129BFBCDC2F9F28",
   "schemaVersion": 1
 }

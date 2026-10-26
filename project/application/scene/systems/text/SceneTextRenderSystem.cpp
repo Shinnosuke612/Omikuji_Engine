@@ -3,7 +3,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <memory>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <unordered_set>
 #include <utility>
@@ -15,6 +18,7 @@
 #include "../../../../engine/scene/SceneDocument.h"
 #include "../../../../engine/scene/SceneEntityQuery.h"
 #include "../../../../engine/scene/SceneTransformResolver.h"
+#include "../../../../engine/scene/SceneUILayout.h"
 #include "../../../../engine/text/TextRasterizer.h"
 
 namespace {
@@ -61,14 +65,15 @@ namespace {
 
 	std::string BuildContentSignature(
 		const SceneComponent& component,
-		const std::string& text
+		const std::string& text, const Vector4& color
 	) {
 		std::ostringstream stream;
+		stream << std::setprecision(std::numeric_limits<float>::max_digits10);
 		stream << text << '\n' << component.textFontFamily << '|'
 			<< component.textFontSize << '|' << component.textFontWeight << '|'
-			<< component.textFontStyle << '|' << component.textColor.x << ','
-			<< component.textColor.y << ',' << component.textColor.z << ','
-			<< component.textColor.w << '|' << component.textOpacity << '|'
+			<< component.textFontStyle << '|' << color.x << ','
+			<< color.y << ',' << color.z << ','
+			<< color.w << '|' << component.textOpacity << '|'
 			<< component.textHorizontalAlignment << '|' << component.textVerticalAlignment << '|'
 			<< component.textWrapMode << '|' << component.textOverflowMode << '|'
 			<< component.textLayoutSize.x << ',' << component.textLayoutSize.y << '|'
@@ -93,7 +98,7 @@ namespace {
 		for (const SceneEntity& entity : document.GetEntities()) {
 			const SceneComponent* text = FindEnabledComponent(entity, "TextRenderer");
 			if (
-				text && text->textRenderSpace == renderSpace &&
+				text && text->textRenderSpace == renderSpace && !SceneUILayout::IsUIEntity(document, entity) &&
 				texts.contains(entity.id) &&
 				IsEntityActiveInHierarchy(document, entity)
 			) {
@@ -170,6 +175,13 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 		if (!component) {
 			continue;
 		}
+		const bool isUI = SceneUILayout::IsUIEntity(*document, entity);
+		SceneUILayout::Layout layout;
+		if (isUI && (!SceneUILayout::Resolve(*document, entity.id, layout) ||
+			!SceneEntityQuery::FindComponent(entity, "UITransform") ||
+			layout.size.x > 4096.0f || layout.size.y > 4096.0f)) {
+			continue;
+		}
 		requiredIds.insert(entity.id);
 		RuntimeText& runtime = texts_[entity.id];
 		if (runtime.textureKey.empty()) {
@@ -181,13 +193,31 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 		const std::string& text = override != textOverrides_.end()
 			? override->second
 			: component->textValue;
-		const std::string signature = BuildContentSignature(*component, text);
+		// Rasterizerとsignatureは同じ実効色を使用し、選択中の毎Frame再生成を避ける。
+		auto settings = ToRasterizerSettings(*component, text);
+		if (const auto found = menuColors_.find(entity.id); found != menuColors_.end()) settings.color = found->second;
+		Vector2 staticOffset{};
+		if (isUI) {
+			settings.layoutSize = layout.size;
+			if (const auto* item = SceneEntityQuery::FindComponent(entity, "MenuItem");
+				item && (!item->menuLabelEntityId || item->menuLabelEntityId == entity.id)) {
+				settings.layoutSize = {layout.size.x - 2 * item->menuTextPadding.x, layout.size.y - 2 * item->menuTextPadding.y};
+				staticOffset = {item->menuTextPadding.x + item->menuTextOffset.x, item->menuTextPadding.y + item->menuTextOffset.y};
+			}
+		}
+		std::ostringstream layoutSignature;
+		layoutSignature << std::setprecision(std::numeric_limits<float>::max_digits10)
+			<< '|' << isUI << '|' << settings.layoutSize.x << ',' << settings.layoutSize.y;
+		const std::string signature = BuildContentSignature(*component, text, settings.color) + layoutSignature.str();
 		if (runtime.contentSignature == signature && runtime.bitmapSize.x > 0.0f) {
+			// offsetだけの変更ではbitmapを再生成せず、描画cacheだけを更新する。
+			runtime.uiTextOffset = staticOffset;
+			runtime.uiLayoutSize = isUI ? layout.size : Vector2{};
 			continue;
 		}
 		TextRasterizer::Bitmap bitmap{};
 		if (!rasterizer.Rasterize(
-			ToRasterizerSettings(*component, text), bitmap
+			settings, bitmap
 		)) {
 			runtime.bitmapSize = {};
 			continue;
@@ -210,6 +240,10 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 			runtime.sprite->SetTextureKey(runtime.textureKey);
 		}
 		runtime.contentSignature = signature;
+		runtime.isUI = isUI;
+		runtime.uiLayoutSize = isUI ? layout.size : Vector2{};
+		runtime.uiTextOffset = staticOffset;
+		runtime.layoutOrigin = bitmap.layoutOrigin;
 		runtime.bitmapSize = {
 			static_cast<float>(bitmap.width),
 			static_cast<float>(bitmap.height)
@@ -230,7 +264,8 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 void SceneTextRenderSystem::DrawScene2D(
 	const SceneDocument& document,
 	uint32_t width,
-	uint32_t height
+	uint32_t height,
+	bool editorView
 ) const {
 	for (const SceneEntity* entity : CollectOrderedEntities(document, texts_, "Scene2D")) {
 		const SceneComponent* component = FindEnabledComponent(*entity, "TextRenderer");
@@ -262,14 +297,15 @@ void SceneTextRenderSystem::DrawScene2D(
 			width,
 			height
 		);
-		found->second.sprite->Draw(TextSprite::OutputTarget::SceneHdr);
+		found->second.sprite->Draw(TextSprite::OutputTarget::SceneHdr, editorView);
 	}
 }
 
 void SceneTextRenderSystem::DrawScreenOverlay(
 	const SceneDocument& document,
 	uint32_t width,
-	uint32_t height
+	uint32_t height,
+	bool editorView
 ) const {
 	for (const SceneEntity* entity : CollectOrderedEntities(document, texts_, "ScreenOverlay")) {
 		const SceneComponent* component = FindEnabledComponent(*entity, "TextRenderer");
@@ -306,8 +342,33 @@ void SceneTextRenderSystem::DrawScreenOverlay(
 			width,
 			height
 		);
-		found->second.sprite->Draw(TextSprite::OutputTarget::Display);
+		found->second.sprite->Draw(TextSprite::OutputTarget::Display, editorView);
 	}
+}
+
+void SceneTextRenderSystem::DrawUIText(uint64_t entityId, const Matrix4x4& layoutToClip,
+	const Vector2& size, const Vector2& pivot, TextSprite::OutputTarget target, bool editorView) const {
+	const auto found = texts_.find(entityId);
+	if (found == texts_.end()) return;
+	const RuntimeText& runtime = found->second;
+	if (!runtime.isUI || !runtime.sprite || !runtime.spriteInitialized || runtime.bitmapSize.x <= 0.0f ||
+		runtime.uiLayoutSize.x != size.x || runtime.uiLayoutSize.y != size.y) return;
+	const PresentationOverride* motion = FindPresentationOverride(entityId);
+	const Vector2 offset = motion ? motion->positionOffset : Vector2{};
+	const Vector2 scale = motion ? motion->scaleMultiplier : Vector2{ 1.0f, 1.0f };
+	const Vector2 pivotPosition{ pivot.x * size.x, pivot.y * size.y };
+	// bitmap余白を枠へ戻し、枠の基点で文字演出を合成してから祖先とCanvasへ写す。
+	const Matrix4x4 bitmapToLayout = Multiply(
+		MakeScaleMatrix({ runtime.bitmapSize.x, runtime.bitmapSize.y, 1.0f }),
+			MakeTranslateMatrix({ -runtime.layoutOrigin.x - pivotPosition.x + runtime.uiTextOffset.x,
+				-runtime.layoutOrigin.y - pivotPosition.y + runtime.uiTextOffset.y, 0.0f }));
+	const Matrix4x4 presentation = MakeAffineMatrix({ scale.x, scale.y, 1.0f },
+		Vector3{ 0.0f, 0.0f, motion ? motion->rotationOffset : 0.0f },
+		{ pivotPosition.x + offset.x, pivotPosition.y + offset.y, 0.0f });
+	const Matrix4x4 matrix = Multiply(Multiply(bitmapToLayout, presentation), layoutToClip);
+	for (const auto& row : matrix.m) for (float value : row) if (!std::isfinite(value)) return;
+	runtime.sprite->UpdateUI(matrix, { 1.0f, 1.0f, 1.0f, motion ? motion->opacityMultiplier : 1.0f });
+	runtime.sprite->Draw(target, editorView);
 }
 
 bool SceneTextRenderSystem::HasScreenOverlay(const SceneDocument& document) const {
@@ -320,6 +381,7 @@ bool SceneTextRenderSystem::HasScreenOverlay(const SceneDocument& document) cons
 }
 
 void SceneTextRenderSystem::Finalize() {
+	menuColors_.clear();
 	for (const auto& entry : texts_) {
 		if (!entry.second.textureKey.empty()) {
 			TextureManager::GetInstance()->ReleaseTexture(entry.second.textureKey);

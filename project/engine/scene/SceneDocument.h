@@ -1,6 +1,7 @@
 // 役割: Entity、Component、Hierarchy、チーム設定を保存可能なシーンデータとして所有する。
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -113,6 +114,9 @@ struct SceneEventAction {
 };
 
 struct SceneEventBinding {
+	// UIは独立した制御段階で評価する。旧JSONはGameplayのまま扱う。
+	std::string executionDomain = "Gameplay";
+	std::string uiInputScope = "WhenNoMenu";
 	std::string triggerType = "OnStart";
 	std::string triggerKey;
 	uint64_t targetEntityId = 0;
@@ -345,6 +349,17 @@ struct SceneComponent {
 	Vector4 spriteColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 	bool spriteFlipX = false;
 	bool spriteFlipY = false;
+	// UI配置は旧Transform/Text配置へ同期せず、Canvasの制作座標で保存する。
+	std::array<uint32_t, 2> uiReferenceSize = { 1280, 720 };
+	std::string uiRenderSpace = "ScreenOverlay";
+	int uiCanvasSortingOrder = 0;
+	Vector2 uiPosition = { 0.0f, 0.0f };
+	Vector2 uiSize = { 100.0f, 100.0f };
+	Vector2 uiAnchor = { 0.0f, 0.0f };
+	Vector2 uiPivot = { 0.0f, 0.0f };
+	float uiRotation = 0.0f;
+	Vector2 uiScale = { 1.0f, 1.0f };
+	int uiSortingOrder = 0;
 	std::string textValue = "Text";
 	std::string textRenderSpace = "ScreenOverlay";
 	std::string textFontFamily = "Yu Gothic UI";
@@ -616,6 +631,25 @@ struct SceneComponent {
 	std::vector<SceneStatDefinition> stats;
 	std::vector<SceneAttackDefinition> attackDefinitions;
 	std::vector<SceneEventBinding> eventBindings;
+	// Menuは設定だけを保存し、開閉・選択・Pause理由はRuntime側が所有する。
+	bool menuInitiallyOpen = false;
+	// 欠落時は旧構成を保持。Editorの標準構成操作だけが新方式を選ぶ。
+	std::string menuLayoutMode = "Hierarchical";
+	std::string menuInputMode = "Events";
+	std::vector<uint64_t> menuItemEntityIds;
+	uint64_t menuInitialItemEntityId = 0;
+	std::string menuNavigationAxis = "Vertical";
+	std::string menuCancelMode = "Close";
+	uint64_t menuCancelItemEntityId = 0;
+	bool menuInteractable = true;
+	uint64_t menuLabelEntityId = 0;
+	Vector2 menuTextPadding{};
+	Vector2 menuTextOffset{};
+	uint64_t menuSelectionMarkerEntityId = 0;
+	bool menuSelectedTextColorEnabled = false;
+	Vector4 menuSelectedTextColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+	uint64_t gamePausePanelEntityId = 0;
+	bool gamePauseBgm = false;
 	std::vector<ScenePrefabAnimationClip> prefabAnimationClips;
 	std::string stateMachineInitialState = "Idle";
 	bool stateMachineResetOnDisable = true;

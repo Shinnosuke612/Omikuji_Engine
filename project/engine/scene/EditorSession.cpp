@@ -13,6 +13,7 @@ bool EditorSession::Initialize(
 	const std::string& sceneName,
 	const std::string& sceneFilePath
 ) {
+	++editSceneEpoch_;
 	editSceneId_ = sceneId;
 	editSceneFilePath_ = sceneFilePath;
 	runtimeSceneId_.clear();
@@ -26,12 +27,14 @@ bool EditorSession::Initialize(
 	lastLoadError_.clear();
 
 	if (editDocument_.Load(editSceneFilePath_)) {
+		menuOrderCache_.Adopt(editDocument_);
 		frameStartDocument_ = editDocument_;
 		return true;
 	}
 
 	lastLoadError_ = editDocument_.GetLastLoadError();
 	editDocument_.Clear(sceneName);
+	menuOrderCache_.Adopt(editDocument_);
 	frameStartDocument_ = editDocument_;
 	return false;
 }
@@ -59,9 +62,11 @@ bool EditorSession::OpenEditScene(
 		loadedDocument.MarkClean();
 	}
 
+	++editSceneEpoch_;
 	editDocument_ = std::move(loadedDocument);
 	editSceneId_ = sceneId;
 	editSceneFilePath_ = sceneFilePath;
+	menuOrderCache_.Adopt(editDocument_);
 	frameStartDocument_ = editDocument_;
 	frameStartRevision_ = editDocument_.GetRevision();
 	editFrameActive_ = false;
@@ -97,6 +102,9 @@ void EditorSession::Play() {
 	if (state_ != EditorPlayState::Edit) {
 		return;
 	}
+	BeginEditFrame();
+	menuOrderCache_.Refresh(editDocument_, true);
+	EndEditFrame(true);
 	runtimeDocument_ = editDocument_;
 	runtimeDocument_.MarkClean();
 	runtimeSceneId_ = editSceneId_;
@@ -132,8 +140,12 @@ bool EditorSession::Save() {
 	if (!IsEditing() || editSceneFilePath_.empty()) {
 		return false;
 	}
+	BeginEditFrame();
+	menuOrderCache_.Refresh(editDocument_, true);
+	EndEditFrame(true);
 	const bool saved = editDocument_.Save(editSceneFilePath_);
 	if (saved) {
+		menuOrderCache_.Adopt(editDocument_);
 		frameStartDocument_ = editDocument_;
 		frameStartRevision_ = editDocument_.GetRevision();
 		editFrameActive_ = false;
@@ -158,6 +170,8 @@ void EditorSession::EndEditFrame(bool commit) {
 		editFrameActive_ = false;
 		return;
 	}
+	// 配置と派生した選択順を同じUndo snapshotへ収める。
+	if (editDocument_.GetRevision() != frameStartRevision_) menuOrderCache_.Refresh(editDocument_);
 	if (editDocument_.GetRevision() == frameStartRevision_) {
 		editFrameActive_ = false;
 		return;
@@ -178,6 +192,7 @@ bool EditorSession::Undo() {
 	editDocument_ = undoStack_.back();
 	undoStack_.pop_back();
 	editDocument_.MarkDirty();
+	menuOrderCache_.Adopt(editDocument_);
 	frameStartDocument_ = editDocument_;
 	frameStartRevision_ = editDocument_.GetRevision();
 	editFrameActive_ = false;
@@ -193,6 +208,7 @@ bool EditorSession::Redo() {
 	editDocument_ = redoStack_.back();
 	redoStack_.pop_back();
 	editDocument_.MarkDirty();
+	menuOrderCache_.Adopt(editDocument_);
 	frameStartDocument_ = editDocument_;
 	frameStartRevision_ = editDocument_.GetRevision();
 	editFrameActive_ = false;

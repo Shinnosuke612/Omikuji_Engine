@@ -12,13 +12,17 @@
 #include "../math/Quaternion.h"
 #include "../math/Matrix4x4.h"
 #include "../math/Transform.h"
+#include "../math/Vector2.h"
 #include "../math/Vector4.h"
 #include "../scene/PrefabAssetRegistry.h"
+#include "../scene/SceneUIEditorView.h"
+#include "../scene/ScenePreparationDiagnostic.h"
 #include "EditorLocalization.h"
 
 #include <d3d12.h>
 #include "../../externals/imgui/imgui.h"
 
+enum class ProjectAccessIssue;
 class WinApp;
 class DirectXCommon;
 class SrvManager;
@@ -30,6 +34,7 @@ class SceneManager;
 class SceneTemplateRegistry;
 struct SceneEntity;
 struct SceneComponent;
+struct SceneEventBinding;
 struct SceneAnimationTrack;
 struct ScenePrefabAnimationClip;
 
@@ -246,6 +251,15 @@ public:
 	void EndFrame(bool deferPlatformWindows = false);
 	// 演出画像のmain送信完了後にだけ呼ぶ。trueなら追加viewportのqueue利用をcallerが待つ。
 	bool RenderDeferredPlatformWindows();
+	// UI編集Viewの次描画へ渡す値。非表示/Play中も編集対象そのものは保持する。
+	SceneUIEditorView GetSceneUIEditorView();
+	bool IsUIEditorViewRenderable() const { return sceneUIEditorRenderable_; }
+	uint32_t GetUIEditorViewWidth() const { return sceneUIEditorWidth_; }
+	uint32_t GetUIEditorViewHeight() const { return sceneUIEditorHeight_; }
+	// 描画済みpacketも保持し、操作後に古い画像をPickingしない。
+	void SetUIEditorViewTexture(D3D12_GPU_DESCRIPTOR_HANDLE texture, const SceneUIEditorView& view) {
+		sceneUIEditorTexture_ = texture; sceneUIEditorRenderedView_ = view;
+	}
 	bool IsSceneViewRenderable() const { return sceneViewRenderable_; }
 	// Runtimeからの一時表示。Scene/Prefab/Editor設定へ保存しない。
 	void SetPresentedTransitionStatus(const std::string& status, bool active = false) {
@@ -301,6 +315,8 @@ public:
 		sceneTemplateRegistry_ = sceneTemplateRegistry;
 	}
 	void SetProjectLauncherView(const ProjectLauncherView& value);
+	// 生成/登録の競合拒否を、選択言語の説明とmodalで通知する。返却値は状態欄用。
+	std::string NotifyProjectAccessFailure(ProjectAccessIssue issue, const std::string& detail);
 	bool ConsumeOpenSceneRequest(
 		std::string& sceneId,
 		bool& discardUnsavedChanges
@@ -516,6 +532,121 @@ private:
 	void BuildDefaultLayout();
 	void DrawHierarchyWindow(const char* sceneName);
 	void DrawInspectorWindow();
+	void DrawSceneUIEditorControls(SceneDocument& document);
+	void DrawSceneUIEditorWindow();
+	void StartSceneUIEditorView(SceneDocument& document, uint64_t entityId);
+	void DrawSceneUIEditorBounds(float x, float y, float width, float height);
+	SceneUIEditorView sceneUIEditorView_;
+	// タブの対象とInspector選択は独立。永続Sceneデータへ保存しない。
+	uint64_t sceneUIEditorEpoch_ = 0;
+	std::string sceneUIEditorSceneId_, sceneUIEditorScenePath_, sceneUIEditorIssue_;
+	bool sceneUIEditorOpen_ = false, sceneUIEditorFocus_ = false;
+	bool sceneUIEditorDocked_ = false, sceneUIEditorRenderable_ = false;
+	bool drawingUIEditorView_ = false;
+	uint32_t sceneUIEditorWidth_ = 1280, sceneUIEditorHeight_ = 720;
+	uint32_t sceneDockId_ = 0;
+	D3D12_GPU_DESCRIPTOR_HANDLE sceneUIEditorTexture_{};
+	SceneUIEditorView sceneUIEditorRenderedView_;
+	struct MenuAuthoringRequest {
+		uint64_t entityId = 0;
+		std::string operation;
+		uint64_t targetEntityId = 0;
+		std::string uiOperation; // 共通UI配置操作を走査後に適用する。
+	};
+	// Scene/Prefab共通の設定UI。Entity/Component追加は走査後へ遅延する。
+	bool DrawMenuAuthoringComponent(SceneDocument& document, SceneEntity& entity,
+		SceneComponent& component, bool prefab, MenuAuthoringRequest& request);
+	// unsetLabelは未指定値の表示だけを置き換え、参照条件と保存値0の意味は維持する。
+	bool DrawMenuEntityField(const char* label, SceneDocument& document, uint64_t& entityId,
+		const char* requiredType, uint64_t rootId = 0, bool includeRoot = true,
+		const std::vector<uint64_t>* allowedIds = nullptr, const char* unsetLabel = nullptr);
+	bool DrawUiEventBinding(SceneDocument& document, SceneEventBinding& binding);
+	// 表示文字はMenuItemへ複製せず、参照先TextRendererの基本設定を編集する。
+	// 呼出し元がLock/Playを制限し、trueなら同じDocumentをDirtyにする。
+	bool DrawMenuTextFields(SceneComponent& text);
+	bool DrawUiEventActions(SceneDocument& document, SceneEventBinding& binding);
+	bool DrawPrefabUiEvents(SceneDocument& document, SceneComponent& component);
+	// 呼出し元のLock/Play制限内で、確認済み要求だけを再解決して適用する。
+	// Entity/Component配列を再配置し得るため、適用後はEntityをIDから再解決する。
+	void ApplyMenuAuthoringRequest(SceneDocument& document, const MenuAuthoringRequest& request, bool prefab);
+	// 候補Documentだけを準備する。失敗時の破棄とUndo境界は呼出し元が担う。
+	bool PrepareMenuUILayout(SceneDocument& candidate, uint64_t ownerId, std::string& error);
+	// 標準構成は候補Documentだけへ追加。移行/本番データの自動修正には使わない。
+	bool PrepareStandardMenuPanel(SceneDocument& candidate, uint64_t ownerId, std::string& error);
+	bool PrepareStandardMenuItem(SceneDocument& candidate, uint64_t itemId, bool withText, bool place, std::string& error);
+	bool legacyMenuPanelAddition_ = false;
+	std::string LocalizeMenuIssue(const std::string& error) const;
+	void DrawMenuAuthoringWarning();
+	void DrawProjectAccessWarning();
+	// 呼出し元がLock/Playを制限する。入力確定時だけ検証し、失敗時は値を戻す。
+	bool DrawEnemySpawnAppearance(SceneDocument& document, uint64_t entityId, SceneComponent& component);
+	// Scene Inspectorの編集枠内で設定だけを変更する。Wave/Phaseの配列操作は走査後へ遅延する。
+	bool DrawGameFlowFields(SceneDocument& document, uint64_t entityId, SceneComponent& component);
+	std::string LocalizeGameFlowIssue(const std::string& issue) const;
+	std::string LocalizeSceneRestartIssue(const std::string& issue) const;
+	std::string LocalizeMenuRuntimeIssue(const std::string& issue) const;
+	std::string gameFlowReferenceSearch_;
+	uint64_t gameFlowValidationGeneration_ = 0, gameFlowValidationRevision_ = 0, gameFlowValidationEntity_ = 0;
+	std::vector<std::string> gameFlowValidationIssues_;
+	std::string LocalizeSpawnIssue(const std::string& issue) const;
+	void DrawSpawnPreparationWarning();
+	bool spawnWarningRequested_ = false;
+	bool spawnWarningRuntime_ = false;
+	uint64_t spawnWarningEntityId_ = 0;
+	std::string spawnWarningIssue_, spawnWarningDetail_;
+	uint64_t spawnDiagnosticInstance_ = 0, spawnDiagnosticGeneration_ = 0, spawnDiagnosticSerial_ = 0;
+	std::string DescribeProjectAccessIssue() const;
+	bool projectAccessWarningRequested_ = false;
+	ProjectAccessIssue projectAccessIssue_{};
+	std::string projectAccessDetail_;
+	bool menuWarningRequested_ = false;
+	std::string menuWarningReason_, menuWarningOperation_, menuWarningTarget_;
+
+
+	struct UIAuthoringRequest {
+		uint64_t entityId = 0;
+		std::string operation;
+	};
+	// Scene/Prefab共通。追加・親付替えはComponent走査後にIDから再解決する。
+	bool DrawUILayoutFields(SceneDocument& document, SceneEntity& entity,
+		SceneComponent& component, bool prefab, UIAuthoringRequest& request);
+	bool DrawUIVisualFields(SceneDocument& document, SceneEntity& entity, SceneComponent& component);
+	// 既存clip編集をScene/Prefabで共有する。再生時計やEventはここから進めない。
+	bool DrawUITextMotionFields(SceneComponent& component);
+	void ApplyUIAuthoringRequest(SceneDocument& document, const UIAuthoringRequest& request, bool prefab);
+	// UIの枠と編集は制作座標で行う。仮Canvasは複製にだけ作り、元Documentへ保存しない。
+	bool DrawUILayoutGizmo(SceneDocument& document, uint64_t entityId, bool prefab,
+		float x, float y, float width, float height);
+	void DrawUIMigration(SceneDocument& document, uint64_t entityId, bool prefab);
+	void ClearUIMigrationSnapshots();
+	bool PickUILayoutEntity(SceneDocument& document, bool prefab, float x, float y, float width, float height);
+	// 座標系の変更を伴う除去/親付替えは影響一覧を確認してから適用する。
+	bool ConfirmUICoordinateChange(const SceneDocument& document, uint64_t entityId, const char* operation);
+	bool QueueUIReparent(const SceneDocument& document, const std::vector<uint64_t>& roots, uint64_t parentId, uint64_t siblingId = 0, bool after = false);
+	void DrawUIReparentConfirmation();
+	std::vector<uint64_t> uiReparentRoots_;
+	uint64_t uiReparentParent_ = 0, uiReparentSibling_ = 0, uiReparentRevision_ = 0;
+	bool uiReparentAfter_ = false, uiReparentPopupRequested_ = false;
+	std::string uiReparentDocumentKey_;
+	std::string uiAuthoringIssue_;
+	Vector2 prefabUIReferenceSize_ = { 1280.0f, 720.0f };
+	SceneDocument* prefabUILayoutPreviewDocument_ = nullptr;
+	// 移行候補はEditor-local snapshot。確認中の原本変更をRevisionとDocument keyで拒否する。
+	SceneDocument* uiMigrationOriginal_ = nullptr;
+	SceneDocument* uiMigrationCandidate_ = nullptr;
+	SceneDocument* uiMigrationPreview_ = nullptr;
+	uint64_t uiMigrationRoot_ = 0;
+	uint64_t uiMigrationRevision_ = 0;
+	std::string uiMigrationDocumentKey_;
+	bool uiMigrationPrefab_ = false;
+	bool uiMigrationOpen_ = false;
+	bool uiMigrationShowAfter_ = false;
+	bool uiMigrationBeforeSeen_ = false, uiMigrationAfterSeen_ = false;
+	uint64_t uiMigrationPreviewSerial_ = 0;
+	uint32_t uiSourceTextureWidth_ = 0, uiSourceTextureHeight_ = 0;
+	Vector2 uiMigrationSourceSize_ = {};
+	Vector2 uiMigrationTargetSize_ = {1280.0f,720.0f};
+	std::string menuReferenceSearch_;
 	void StopAudioPreview();
 	void DrawSceneComponentPicker();
 	void DrawPrefabComponentPicker();

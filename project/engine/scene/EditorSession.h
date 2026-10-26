@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "SceneDocument.h"
+#include "SceneMenuLayout.h"
 #include "SceneExecutionContext.h"
 
 enum class EditorPlayState {
@@ -48,6 +49,8 @@ public:
 	bool IsPaused() const override { return state_ == EditorPlayState::Paused; }
 	bool IsEditing() const override { return state_ == EditorPlayState::Edit; }
 
+	// 明示Open/Reloadの識別。Undo/Redoや候補Documentの反映では変えない。
+	uint64_t GetEditSceneEpoch() const { return editSceneEpoch_; }
 	SceneDocument& GetEditDocument() { return editDocument_; }
 	const SceneDocument& GetEditDocument() const { return editDocument_; }
 	SceneDocument& GetActiveDocument() override;
@@ -65,9 +68,11 @@ public:
 private:
 	void PushUndoSnapshot(const SceneDocument& snapshot);
 
+	uint64_t editSceneEpoch_ = 0;
 	SceneDocument editDocument_;
 	SceneDocument runtimeDocument_;
 	SceneDocument frameStartDocument_;
+	SceneMenuLayout::EditorOrderCache menuOrderCache_;
 	std::string editSceneId_;
 	std::string editSceneFilePath_;
 	std::string runtimeSceneId_;

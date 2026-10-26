@@ -29,7 +29,10 @@ public:
 		uint32_t canvasWidth,
 		uint32_t canvasHeight
 	);
-	void Draw(OutputTarget target) const;
+	// View別snapshotをBindする。Bufferは既存のFrame末Fenceまで保持する。
+	void Draw(OutputTarget target, bool editorView = false) const;
+	// [0,1] quadからclipまでの完全な行列を設定する。viewport寸法を保存値へ混ぜない。
+	void UpdateUI(const Matrix4x4& unitQuadToClip, const Vector4& color);
 
 private:
 	struct VertexData {
@@ -48,6 +51,12 @@ private:
 		Matrix4x4 World;
 	};
 
+
+	struct ViewDrawBuffers {
+		Microsoft::WRL::ComPtr<ID3D12Resource> vertices, material, transform;
+	};
+	// texture所有は共有。Draw時の頂点/定数だけを通常ViewとUI編集Viewで分ける。
+	mutable ViewDrawBuffers viewDrawBuffers_[2];
 	void CreateResources();
 
 	DirectXCommon* dxCommon_ = nullptr;

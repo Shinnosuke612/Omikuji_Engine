@@ -12,6 +12,7 @@
 #include "systems/gameplay/ai/SceneEnemySystem.h"
 #include "systems/gameplay/ai/SceneEnemySpawnerSystem.h"
 #include "systems/events/SceneEventSystem.h"
+#include "systems/menu/SceneMenuSystem.h"
 #include "systems/gameplay/combat/SceneHitReactionSystem.h"
 #include "systems/gameplay/combat/SceneHitStopSystem.h"
 #include "systems/gameplay/flow/SceneGameFlowSystem.h"
@@ -20,6 +21,7 @@
 #include "systems/rendering/SceneLightingSystem.h"
 #include "systems/rendering/SceneMonitorSystem.h"
 #include "systems/rendering/SceneObjectSystem.h"
+#include "systems/rendering/SceneUIRenderSystem.h"
 #include "systems/effects/SceneParticleSystem.h"
 #include "systems/effects/ScenePostProcessProfileSystem.h"
 #include "systems/physics/ScenePhysicsSystem.h"
@@ -48,6 +50,11 @@ public:
 	void Finalize() override;
 	void PrepareForSceneTransition() override;
 	void Update(float deltaTime) override;
+	ScenePreparationDiagnostic GetPreparationDiagnostic() const override { return preparationDiagnostic_; }
+	// 通常更新前にUI Eventを評価。非Active/Editでは状態を破棄し、入力非許可では時計を凍結する。
+	void PrepareMenuInput(float deltaTime, bool allowed) override;
+	SceneUiControlFrame GetUiControlFrame() const override { return uiControl_; }
+	void SetUiGameplayInputBlocked(bool blocked) override { uiGameplayInputBlocked_ = blocked; }
 	void UpdatePaused() override;
 	bool SupportsTransitionHold() const override { return true; }
 	// 保持中は描画同期だけ。Event/Audio autoplay/SimulationのRuntime stateを変更しない。
@@ -62,6 +69,11 @@ public:
 	void DrawPreparedSceneContent(Camera* viewCamera) override;
 	void DrawForegroundEffects() override;
 	void DrawForegroundEffectsWithCamera(Camera* viewCamera) override;
+	// Scene View専用。出所一致を検証し、既存資源を借りて基本配置を描く。
+	void DrawEditorUI(const SceneUIEditorView& view, const char* renderSpace) override;
+	// ゲーム実行中のActive Instanceだけ。通常Overlayの後へ検証済みMenu packetを渡す。
+	bool HasMenuOverlay() const override;
+	void DrawMenuOverlay() override;
 	bool HasScreenOverlay() const override;
 	void DrawScreenOverlay(uint32_t width, uint32_t height) override;
 	void DrawOffscreenViews() override;
@@ -79,6 +91,12 @@ public:
 	) const override;
 
 private:
+	const SceneUIEditorView* GetEditorUIView() const;
+	void SyncMenuPresentation();
+	void ClearUiRuntime();
+	void ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests);
+	void ProcessMenuPulses(const SceneDocument& document, const std::vector<SceneMenuPulse>& pulses);
+	void ReportMenuFailure(const std::string& detail);
 	void DrawSceneView(Camera* viewCamera, uint64_t skipEntityId = 0);
 	void DrawPreparedSceneContentForView(
 		Camera* viewCamera,
@@ -92,6 +110,17 @@ private:
 	Camera* debugCamera_ = nullptr;
 	Player* player_ = nullptr;
 	std::vector<SceneRuntimeObjectBinding> runtimeObjectBindings_;
+	ScenePreparationDiagnostic preparationDiagnostic_;
+	uint64_t preparationDiagnosticSerial_ = 0;
+	SceneUiControlFrame uiControl_;
+	bool uiGameplayInputBlocked_ = false;
+	std::vector<SceneUiActionRequest> pendingMenuRequests_;
+	std::vector<SceneMenuPulse> deferredMenuPulses_;
+	SceneMenuSource uiTransitionSource_;
+	// 拒否された終端要求も、そのprepassでは再試行やCancelの既定Closeへ進めない。
+	bool uiTerminalAttempted_ = false;
+	uint64_t nextUiTransitionSerial_ = 1;
+	SceneInstanceId uiLoadReservation_ = kInvalidSceneInstanceId;
 
 	SceneAgentSystem agentSystem_;
 	SceneAudioSystem audioSystem_;
@@ -104,6 +133,7 @@ private:
 	SceneEnemySpawnerSystem enemySpawnerSystem_;
 	SceneGameFlowSystem gameFlowSystem_;
 	SceneEventSystem eventSystem_;
+	SceneMenuSystem menuSystem_;
 	SceneHitReactionSystem hitReactionSystem_;
 	SceneHitStopSystem hitStopSystem_;
 	SceneEffectRenderSystem effectRenderSystem_;
@@ -126,5 +156,6 @@ private:
 	SceneStateMachineSystem stateMachineSystem_;
 	SceneTextMotionSystem textMotionSystem_;
 	SceneTextRenderSystem textRenderSystem_;
+	SceneUIRenderSystem uiRenderSystem_;
 };
 

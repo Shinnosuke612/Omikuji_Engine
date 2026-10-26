@@ -13,6 +13,7 @@ private:
 	SpriteCommon(const SpriteCommon&) = delete;
 	SpriteCommon& operator=(const SpriteCommon&) = delete;
 public://公開メンバ関数
+	enum class OutputTarget { SceneHdr, Display };
 
 	// インスタンス取得 / 削除
 	static SpriteCommon* GetInstance();
@@ -21,7 +22,8 @@ public://公開メンバ関数
 	//初期化
 	void Initialize(DirectXCommon* dxCommon);
 	//共通描画設定
-	void SetCommonRenderState();
+	// 既存呼出しはHDRを維持。新UIはDisplay/HDRとも深度なしのPSOを選ぶ。
+	void SetCommonRenderState(OutputTarget target = OutputTarget::SceneHdr, bool ui = false);
 
 public://ゲッター
 	DirectXCommon* GetDxCommon() const{ return dxCommon_; }
@@ -43,6 +45,8 @@ private://メンバ変数
 	//ルートシグネチャ
 	Microsoft::WRL::ComPtr < ID3D12RootSignature> rootSignature_ = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> graphicsPipelineState_ = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> uiHdrPipelineState_;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> displayPipelineState_;
 	bool isInitialized_ = false;
 private://メンバクラス
 	enum class BlendMode{

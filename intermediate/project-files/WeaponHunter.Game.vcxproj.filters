@@ -17,6 +17,7 @@
     <Filter Include="Application\scene\systems\gameplay\combat" />
     <Filter Include="Application\scene\systems\gameplay\flow" />
     <Filter Include="Application\scene\systems\gameplay\state" />
+    <Filter Include="Application\scene\systems\menu" />
     <Filter Include="Application\scene\systems\physics" />
     <Filter Include="Application\scene\systems\rendering" />
     <Filter Include="Application\scene\systems\text" />
@@ -40,6 +41,7 @@
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\SceneFactory.cpp"><Filter>Application\scene</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneFactory.h"><Filter>Application\scene</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneRuntimeObjectBinding.h"><Filter>Application\scene</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneSpawnPresentation.h"><Filter>Application\scene</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\SceneStartupErrorScreen.cpp"><Filter>Application\scene</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\SceneStartupErrorScreen.h"><Filter>Application\scene</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\animation\SceneAttachmentSystem.cpp"><Filter>Application\scene\systems\animation</Filter></ClCompile>
@@ -86,6 +88,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\flow\SceneGameFlowSystem.h"><Filter>Application\scene\systems\gameplay\flow</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\state\SceneStateMachineSystem.cpp"><Filter>Application\scene\systems\gameplay\state</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\state\SceneStateMachineSystem.h"><Filter>Application\scene\systems\gameplay\state</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\menu\SceneMenuSystem.cpp"><Filter>Application\scene\systems\menu</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\menu\SceneMenuSystem.h"><Filter>Application\scene\systems\menu</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.cpp"><Filter>Application\scene\systems\physics</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.h"><Filter>Application\scene\systems\physics</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneEnvironmentSystem.cpp"><Filter>Application\scene\systems\rendering</Filter></ClCompile>
@@ -96,6 +100,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneMonitorSystem.h"><Filter>Application\scene\systems\rendering</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.cpp"><Filter>Application\scene\systems\rendering</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.h"><Filter>Application\scene\systems\rendering</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneUIRenderSystem.cpp"><Filter>Application\scene\systems\rendering</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneUIRenderSystem.h"><Filter>Application\scene\systems\rendering</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.cpp"><Filter>Application\scene\systems\text</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.h"><Filter>Application\scene\systems\text</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><Filter>Application\scene\systems\text</Filter></ClCompile>

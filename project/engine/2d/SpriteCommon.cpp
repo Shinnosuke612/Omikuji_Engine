@@ -29,9 +29,10 @@ void SpriteCommon::Initialize(DirectXCommon* dxCommon) {
 	isInitialized_ = true;
 }
 
-void SpriteCommon::SetCommonRenderState(){
+void SpriteCommon::SetCommonRenderState(OutputTarget target, bool ui){
 	dxCommon_->GetCommandList()->SetGraphicsRootSignature(rootSignature_.Get());
-	dxCommon_->GetCommandList()->SetPipelineState(graphicsPipelineState_.Get());
+	dxCommon_->GetCommandList()->SetPipelineState(target == OutputTarget::Display
+		? displayPipelineState_.Get() : (ui ? uiHdrPipelineState_.Get() : graphicsPipelineState_.Get()));
 	dxCommon_->GetCommandList()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
 
@@ -203,6 +204,19 @@ void SpriteCommon::GenerateGraphicsPipeline(){
 	//実際に生成
 	hr = dxCommon_->GetDevice()->CreateGraphicsPipelineState(&graphicsPipelineStateDesc,
 															IID_PPV_ARGS(&graphicsPipelineState_));
+	assert(SUCCEEDED(hr));
+	// UIは重なり順で合成する。HDR/DisplayのRTV形式を一致させ、旧Spriteの深度設定を残す。
+	graphicsPipelineStateDesc.DepthStencilState.DepthEnable = FALSE;
+	graphicsPipelineStateDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+	graphicsPipelineStateDesc.DepthStencilState.StencilEnable = FALSE;
+	graphicsPipelineStateDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+	graphicsPipelineStateDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+	hr = dxCommon_->GetDevice()->CreateGraphicsPipelineState(&graphicsPipelineStateDesc,
+		IID_PPV_ARGS(&uiHdrPipelineState_));
+	assert(SUCCEEDED(hr));
+	graphicsPipelineStateDesc.RTVFormats[0] = RenderFormats::kDisplayFormat;
+	hr = dxCommon_->GetDevice()->CreateGraphicsPipelineState(&graphicsPipelineStateDesc,
+		IID_PPV_ARGS(&displayPipelineState_));
 	assert(SUCCEEDED(hr));
 
 }

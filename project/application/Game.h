@@ -47,6 +47,7 @@ private:
 	struct PresentedTransitionState;
 	std::unique_ptr<PresentedTransitionState> presentedTransition_;
 	// 資源交換/取消は前Frameの全利用完了後。Drawは借用Displayへcommandを記録するだけ。
+	// UI由来の取消は同じInstanceへ失敗を返し、既存の資源解放順は維持する。
 	void CancelPresentedTransition(const std::string& reason = {});
 	void UpdatePresentedTransitionBeforeScene(float delta, bool paused);
 	void UpdatePresentedTransitionAfterScene();
@@ -178,6 +179,13 @@ private:
 	SceneRenderTarget* textOverlayRenderTarget_ = nullptr;
 	SceneRenderTarget* motionBlurHistoryRenderTarget_ = nullptr;
 	SceneRenderTarget* foregroundComposeRenderTarget_ = nullptr;
+	// UI編集View専用。共有Scene/textureを描き、RTとPostEffectの定数領域だけを分離する。
+	SceneRenderTarget* uiEditorSceneTarget_ = nullptr;
+	SceneRenderTarget* uiEditorForegroundTarget_ = nullptr;
+	SceneRenderTarget* uiEditorPostTargets_[2]{};
+	SceneRenderTarget* uiEditorOverlayTarget_ = nullptr;
+	FullscreenCopy* uiEditorCopy_ = nullptr;
+	BloomRenderer* uiEditorBloom_ = nullptr;
 	FullscreenCopy* fullscreenCopy_ = nullptr;
 	BloomRenderer* bloomRenderer_ = nullptr;
 	SceneRenderTarget* modelPreviewRenderTarget_ = nullptr;

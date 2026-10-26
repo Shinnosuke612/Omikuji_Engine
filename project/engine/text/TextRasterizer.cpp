@@ -248,6 +248,8 @@ bool TextRasterizer::Rasterize(const Settings& settings, Bitmap& bitmap) const {
 
 	bitmap.width = static_cast<uint32_t>(width);
 	bitmap.height = static_cast<uint32_t>(height);
+	bitmap.layoutSize = { static_cast<float>(layoutWidth), static_cast<float>(layoutHeight) };
+	bitmap.layoutOrigin = { static_cast<float>(padding), static_cast<float>(padding) };
 	bitmap.bgraPixels = std::move(output);
 	return true;
 }

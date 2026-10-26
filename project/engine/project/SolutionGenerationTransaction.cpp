@@ -1,5 +1,6 @@
 // 役割: journalのowned集合を確定し、旧新manifestを含むcommitと逆順rollbackを行う。
 #include "SolutionGenerationTransaction.h"
+#include "ProjectAccessLock.h"
 
 #include "../utility/StringUtility.h"
 #include "../../externals/nlohmann/json.hpp"
@@ -255,6 +256,19 @@ namespace {
 		return true;
 	}
 
+
+	// 古い画面のoperationからpathを決めても、lease取得後に最新journalを再読込する。
+	bool LockOperation(const std::string& id, ProjectRegistry& registry, ProjectAccessLock& lease, std::string& error, bool* missing = nullptr) {
+		if (!registry.Refresh(error)) return false;
+		const auto* snapshot = registry.FindSolutionGenerationOperation(id);
+		if (!snapshot) { if (missing) *missing = true; ReportProjectAccessIssue(ProjectAccessIssue::RegistryConflict); error = "Generation operation no longer exists."; return false; }
+		const auto root = snapshot->projectRoot;
+		if (!lease.TryProject(root, error) || !registry.Refresh(error)) return false;
+		const auto* current = registry.FindSolutionGenerationOperation(id);
+		if (!current || !SameRelativePath(current->projectRoot, root)) { ReportProjectAccessIssue(ProjectAccessIssue::RegistryConflict); error = "Generation operation owner has changed."; return false; }
+		return true;
+	}
+
 	bool UpdateState(ProjectRegistry& registry, SolutionGenerationOperation operation, SolutionGenerationOperationState state, std::string& errorMessage) {
 		operation.state = state;
 		return registry.UpsertSolutionGenerationOperation(operation, errorMessage) && registry.Save(errorMessage);
@@ -307,6 +321,18 @@ namespace {
 }
 
 bool SolutionGenerationTransaction::Stage(const SolutionGenerationTransactionRequest& request, ProjectRegistry& registry, std::string& errorMessage) const {
+	ProjectAccessLock lease;
+	if (!lease.TryProject(request.projectRoot, errorMessage) || !registry.Refresh(errorMessage)) return false;
+	const auto* previous = registry.FindSolutionGenerationOperation(request.operationId);
+	// 初回作成の再開は、同一ownerで旧集合へ復元済みの場合だけ既存IDを再利用する。
+	const bool reusable = previous && previous->state == SolutionGenerationOperationState::RolledBack &&
+		previous->projectId == request.projectId && SameRelativePath(previous->projectRoot, request.projectRoot) && VerifySet(*previous, false);
+	if ((previous && !reusable) ||
+		std::any_of(registry.GetSolutionGenerationOperations().begin(), registry.GetSolutionGenerationOperations().end(), [&](const auto& current) {
+			return SameRelativePath(current.projectRoot, request.projectRoot) &&
+				current.state != SolutionGenerationOperationState::Complete && current.state != SolutionGenerationOperationState::RolledBack;
+		})) { ReportProjectAccessIssue(ProjectAccessIssue::PendingRecovery); errorMessage = "A generation operation is already staged or requires recovery."; return false; }
+
 	if (request.operationId.empty() || request.projectId.empty() || request.projectRoot.empty() || request.preview.stagingRoot.empty() || request.preview.manifestPath.empty()) {
 		errorMessage = "Generation transaction request is incomplete.";
 		return false;
@@ -439,6 +465,9 @@ bool SolutionGenerationTransaction::Stage(const SolutionGenerationTransactionReq
 }
 
 bool SolutionGenerationTransaction::Commit(const std::string& operationId, ProjectRegistry& registry, std::string& errorMessage) const {
+	ProjectAccessLock lease;
+	if (!LockOperation(operationId, registry, lease, errorMessage)) return false;
+
 	const SolutionGenerationOperation* stored = registry.FindSolutionGenerationOperation(operationId);
 	if (!stored || stored->state != SolutionGenerationOperationState::Staged) { errorMessage = "Generation transaction is not staged."; return false; }
 	const SolutionGenerationOperation operation = *stored;
@@ -454,6 +483,9 @@ bool SolutionGenerationTransaction::CanCommit(const std::string& operationId, co
 }
 
 bool SolutionGenerationTransaction::ResumeCommit(const std::string& operationId, ProjectRegistry& registry, std::string& errorMessage) const {
+	ProjectAccessLock lease;
+	if (!LockOperation(operationId, registry, lease, errorMessage)) return false;
+
 	const SolutionGenerationOperation* stored = registry.FindSolutionGenerationOperation(operationId);
 	if (!stored || (stored->state != SolutionGenerationOperationState::CommitInProgress && stored->state != SolutionGenerationOperationState::RecoveryRequired)) { errorMessage = "Generation transaction cannot resume commit."; return false; }
 	const SolutionGenerationOperation operation = *stored;
@@ -469,6 +501,9 @@ bool SolutionGenerationTransaction::CanResumeCommit(const std::string& operation
 }
 
 bool SolutionGenerationTransaction::RestorePrevious(const std::string& operationId, ProjectRegistry& registry, std::string& errorMessage) const {
+	ProjectAccessLock lease;
+	if (!LockOperation(operationId, registry, lease, errorMessage)) return false;
+
 	const SolutionGenerationOperation* stored = registry.FindSolutionGenerationOperation(operationId);
 	if (!stored) { errorMessage = "Generation transaction was not found."; return false; }
 	const SolutionGenerationOperation operation = *stored;
@@ -506,6 +541,11 @@ bool SolutionGenerationTransaction::CanRestorePrevious(const std::string& operat
 }
 
 SolutionGenerationRecoveryResult SolutionGenerationTransaction::Recover(const std::string& operationId, ProjectRegistry& registry, std::string& errorMessage) const {
+	ProjectAccessLock lease;
+	bool missing = false;
+	if (!LockOperation(operationId, registry, lease, errorMessage, &missing))
+		return missing ? SolutionGenerationRecoveryResult::NoOperation : SolutionGenerationRecoveryResult::RecoveryRequired;
+
 	const SolutionGenerationOperation* stored = registry.FindSolutionGenerationOperation(operationId);
 	if (!stored) return SolutionGenerationRecoveryResult::NoOperation;
 	const SolutionGenerationOperation operation = *stored;

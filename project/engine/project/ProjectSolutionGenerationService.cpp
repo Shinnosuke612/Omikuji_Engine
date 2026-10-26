@@ -1,8 +1,9 @@
-// 役割: Snapshot ProjectのBuild可能なSolution previewをPC local workspaceへ組み立てる。
+// 役割: Snapshot Projectの完全Previewと、必要時だけの生成物更新を検証・接続する。
 #include "ProjectSolutionGenerationService.h"
 
 #include "../utility/StringUtility.h"
 #include "ProjectBuildSpecification.h"
+#include "ProjectAccessLock.h"
 #include "ProjectDescriptor.h"
 #include "SolutionGenerationModel.h"
 #include "SolutionGenerationTransaction.h"
@@ -301,7 +302,7 @@ namespace {
 		return true;
 	}
 
-	// 完成したcopyの後に一度だけ保存する。既存Previewへ所有元を推定して追記しない。
+	// 完全Previewのcopy、または自動経路のartifact出力後に一度だけ保存する。所有元を後から推定しない。
 	bool WritePreviewOrigin(const ProjectSolutionPreviewSnapshot& preview, std::string& errorMessage) {
 		const std::filesystem::path path = preview.stagingRoot / PreviewOriginRelativePath(preview.stagingRoot);
 		std::error_code error;
@@ -614,6 +615,55 @@ namespace {
 		if (modified != 0) { errorMessage = "GeneratedFileModified: canonical generation no longer matches its manifest."; return false; }
 		return VerifyGroupedDirectory(descriptor, errorMessage);
 	}
+
+	bool FailAutomatic(ProjectAutoGenerationResult& result, ProjectAutoGenerationIssue issue, const std::string& detail,
+		ProjectAutoGenerationState state = ProjectAutoGenerationState::NeedsAttention) {
+		result.state = state; result.issue = issue; result.detail = detail;
+		return false;
+	}
+
+	ProjectAutoGenerationResult AccessFailure(const std::string& detail) {
+		ProjectAutoGenerationResult result;
+		const auto access = GetProjectAccessIssue();
+		FailAutomatic(result, access == ProjectAccessIssue::Busy ? ProjectAutoGenerationIssue::Busy :
+			access == ProjectAccessIssue::RegistryConflict ? ProjectAutoGenerationIssue::RegistryConflict : ProjectAutoGenerationIssue::AccessFailure, detail);
+		return result;
+	}
+
+	bool MatchesAutomaticArtifactSet(const ProjectDescriptor& descriptor, const std::vector<SolutionGenerationArtifact>& artifacts) {
+		const auto directory = std::filesystem::path(L"intermediate/project-files");
+		const std::string& id = descriptor.GetProjectId();
+		const std::vector<std::string> names = { id + ".sln", id + ".Common.props", id + ".vcxproj", id + ".vcxproj.filters",
+			id + ".Engine.vcxproj", id + ".Engine.vcxproj.filters", id + ".Game.vcxproj", id + ".Game.vcxproj.filters" };
+		return artifacts.size() == names.size() && std::all_of(names.begin(), names.end(), [&](const std::string& name) {
+			const auto path = directory / StringUtility::ToPath(name);
+			return std::count_if(artifacts.begin(), artifacts.end(), [&](const auto& artifact) { return SameRelativePath(path, artifact.relativePath); }) == 1;
+		});
+	}
+
+	// 完全Previewのsource copyを要求せず、生成元と最終配置のModelへ束縛して検証する。
+	bool VerifyAutomaticStaging(const ProjectSolutionPreviewSnapshot& owner, const SolutionGenerationPreview& emitted,
+		const ProjectDescriptor& descriptor, std::string& error) {
+		std::filesystem::path recordedOwner;
+		if (HasReparsePointInExistingPath(emitted.stagingRoot) || !MatchesPreviewOwner(owner, descriptor) ||
+			!ReadPreviewOrigin(owner, recordedOwner, error) || !SamePath(recordedOwner, descriptor.GetDescriptorPath())) return false;
+		ProjectSolutionPreviewSnapshot disk;
+		if (HasReparsePointInExistingPath(emitted.stagingRoot / emitted.manifestPath) ||
+			!ReadPreviewManifest(emitted.stagingRoot / emitted.manifestPath, disk, error) ||
+			disk.inputIdentity != emitted.inputIdentity || !MatchesAutomaticArtifactSet(descriptor, disk.artifacts)) {
+			error = "Automatic staging manifest no longer matches its owner/model."; return false;
+		}
+		for (const auto& artifact : emitted.artifacts) {
+			const auto staged = emitted.stagingRoot / artifact.relativePath;
+			if (!IsSafeRelativePath(artifact.relativePath) || !IsWithin(staged, emitted.stagingRoot) ||
+				HasReparsePointInExistingPath(staged) || !MatchesHash(staged, artifact.contentHash) ||
+				std::none_of(disk.artifacts.begin(), disk.artifacts.end(), [&](const auto& value) {
+					return SameRelativePath(value.relativePath, artifact.relativePath) && value.contentHash == artifact.contentHash;
+				})) { error = "Automatic staging artifact changed after emission."; return false; }
+		}
+		return MatchesAutomaticArtifactSet(descriptor, emitted.artifacts);
+	}
+
 	bool HasUnknownGroupedTargetFile(const ProjectDescriptor& descriptor, const ProjectSolutionPreviewSnapshot&, std::string& errorMessage) {
 		const std::filesystem::path groupedDirectory = ProjectFilesDirectory(descriptor);
 		std::error_code error;
@@ -648,6 +698,148 @@ namespace {
 }
 
 ProjectSolutionGenerationService::ProjectSolutionGenerationService(ProjectRegistry& registry) : registry_(registry) {
+}
+
+
+bool ProjectSolutionGenerationService::InspectAutomaticInputs(const std::filesystem::path& descriptorPath,
+	ProjectDescriptor& descriptor, SolutionGenerationModel& model, ProjectAutoGenerationResult& result) {
+	std::string error;
+	if (!descriptor.Load(descriptorPath, error))
+		return FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, error);
+	if (!SamePath(descriptorPath, descriptor.GetProjectRoot() / L"game.project.json") || HasReparsePointInExistingPath(descriptorPath) ||
+		descriptor.GetEngineMode() != ProjectEngineMode::Snapshot || !IsProjectFilesLayout(descriptor))
+		return FailAutomatic(result, ProjectAutoGenerationIssue::UnsupportedProject, "Automatic generation requires a canonical Snapshot / Project Files V2 descriptor.");
+	if (std::none_of(registry_.GetProjects().begin(), registry_.GetProjects().end(), [&](const auto& entry) {
+		return SamePath(entry.descriptorPath, descriptorPath);
+	})) return FailAutomatic(result, ProjectAutoGenerationIssue::NotRegistered, "Register this descriptor before using automatic generation.");
+	for (const auto& operation : registry_.GetSolutionGenerationOperations()) {
+		if (SamePath(operation.projectRoot, descriptor.GetProjectRoot()) &&
+			operation.state != SolutionGenerationOperationState::Complete && operation.state != SolutionGenerationOperationState::RolledBack)
+			return FailAutomatic(result, ProjectAutoGenerationIssue::PendingRecovery, "A generation journal is pending. Resolve it in Project Manager.");
+	}
+	for (const auto& operation : registry_.GetCreationOperations()) {
+		if (SamePath(operation.finalProjectRoot, descriptor.GetProjectRoot()) && operation.state != ProjectCreationOperationState::Complete)
+			return FailAutomatic(result, ProjectAutoGenerationIssue::PendingRecovery, "Project creation/finalization is still pending.");
+	}
+	if (!BuildCurrentModel(descriptorPath, descriptor, model, error))
+		return FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, error);
+	// 生成XMLの参照はstagingの仮コピーでなく、最終配置先のsource rootから検証する。
+	for (const auto& path : { model.sourceDirectory / StringUtility::ToPath(model.externals.directXTexProject),
+		model.sourceDirectory / StringUtility::ToPath(model.externals.imguiProject) }) {
+		std::error_code ec;
+		if (!IsWithin(path, model.sourceDirectory) || HasReparsePointInExistingPath(path) || !std::filesystem::is_regular_file(path, ec) || ec)
+			return FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, "A referenced external project is missing or unsafe: " + StringUtility::ToUtf8(path));
+	}
+	std::error_code ec;
+	const auto resources = model.sourceDirectory / StringUtility::ToPath(model.runtime.resourceRoot);
+	if (!IsWithin(resources, model.sourceDirectory) || HasReparsePointInExistingPath(resources) || !std::filesystem::is_directory(resources, ec) || ec)
+		return FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, "The final resource directory is missing or unsafe.");
+	const auto manifestPath = descriptor.GetProjectRoot() / FixedManifestRelativePath();
+	if (HasReparsePointInExistingPath(manifestPath) || !std::filesystem::is_regular_file(manifestPath, ec) || ec)
+		return FailAutomatic(result, ProjectAutoGenerationIssue::MissingManifest, "The canonical generation manifest is missing or unsafe. Use explicit adoption/recovery.");
+	ProjectSolutionPreviewSnapshot manifest;
+	std::string content;
+	if (!ReadPreviewManifest(manifestPath, manifest, error) || !ReadFile(manifestPath, content) || !MatchesAutomaticArtifactSet(descriptor, manifest.artifacts))
+		return FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, error.empty() ? "The manifest does not own the expected eight files." : error);
+	result.canonicalManifestHash = HashContent(content);
+	for (const auto& artifact : manifest.artifacts) {
+		const auto path = model.projectRoot / artifact.relativePath;
+		if (HasReparsePointInExistingPath(path) || !MatchesHash(path, artifact.contentHash)) result.affectedPaths.push_back(artifact.relativePath);
+	}
+	if (!result.affectedPaths.empty())
+		return FailAutomatic(result, ProjectAutoGenerationIssue::ModifiedArtifact, "Generated files differ from their manifest. Review and restore them explicitly.");
+	result.inputIdentity = SolutionGenerationEmitter{}.ComputeInputIdentity(model);
+	result.state = result.inputIdentity == manifest.inputIdentity ? ProjectAutoGenerationState::Latest : ProjectAutoGenerationState::UpdateRequired;
+	result.issue = result.state == ProjectAutoGenerationState::Latest ? ProjectAutoGenerationIssue::None : ProjectAutoGenerationIssue::InputsChanged;
+	result.detail.clear();
+	return true;
+}
+
+ProjectAutoGenerationResult ProjectSolutionGenerationService::InspectFreshness(const std::filesystem::path& descriptorPath) {
+	ClearProjectAccessIssue();
+	ProjectAutoGenerationResult result;
+	try {
+		std::string error;
+		ProjectAccessLock lease;
+		if (!lease.TryProject(descriptorPath.parent_path(), error) || !registry_.Refresh(error)) return AccessFailure(error);
+		ProjectDescriptor descriptor;
+		SolutionGenerationModel model;
+		InspectAutomaticInputs(descriptorPath, descriptor, model, result);
+	} catch (const std::exception& error) {
+		FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, error.what(), ProjectAutoGenerationState::Failed);
+	}
+	return result;
+}
+
+ProjectAutoGenerationResult ProjectSolutionGenerationService::EnsureCurrent(const std::filesystem::path& descriptorPath) {
+	ClearProjectAccessIssue();
+	ProjectAutoGenerationResult result;
+	try {
+		std::string error;
+		ProjectAccessLock lease;
+		if (!lease.TryProject(descriptorPath.parent_path(), error) || !registry_.Refresh(error)) return AccessFailure(error);
+		ProjectDescriptor descriptor;
+		SolutionGenerationModel model;
+		if (!InspectAutomaticInputs(descriptorPath, descriptor, model, result) || result.state == ProjectAutoGenerationState::Latest) return result;
+		// ここより前には、生成物・manifest・Registry・stagingを一切書き込まない。
+		result.operationId = MakeOperationId();
+		const auto stagingRoot = registry_.GetRegistryPath().parent_path() / L"solution-generation/automatic" /
+			StringUtility::ToPath(descriptor.GetProjectId()) / StringUtility::ToPath(result.operationId);
+		if (HasReparsePointInExistingPath(stagingRoot) || std::filesystem::exists(stagingRoot)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::StagingFailed, "Automatic staging path already exists or is unsafe.", ProjectAutoGenerationState::Failed);
+			return result;
+		}
+		std::error_code stagingError;
+		if (!std::filesystem::create_directories(stagingRoot, stagingError) || stagingError || HasReparsePointInExistingPath(stagingRoot)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::StagingFailed, "Automatic staging directory could not be created safely.", ProjectAutoGenerationState::Failed); return result;
+		}
+		SolutionGenerationPreview emitted;
+		if (!SolutionGenerationEmitter{}.EmitPreview(model, stagingRoot, emitted, error)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::StagingFailed, error, ProjectAutoGenerationState::Failed); return result;
+		}
+		ProjectSolutionPreviewSnapshot owner;
+		owner.projectId = descriptor.GetProjectId(); owner.operationId = result.operationId;
+		owner.descriptorPath = descriptor.GetDescriptorPath(); owner.stagingRoot = emitted.stagingRoot;
+		owner.inputIdentity = emitted.inputIdentity; owner.artifacts = emitted.artifacts;
+		if (!WritePreviewOrigin(owner, error) || !VerifyAutomaticStaging(owner, emitted, descriptor, error)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::StagingFailed, error, ProjectAutoGenerationState::Failed); return result;
+		}
+		ProjectSolutionPreviewSnapshot previous;
+		if (!ReadPreviewManifest(model.projectRoot / emitted.manifestPath, previous, error)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::ModifiedArtifact, error); return result;
+		}
+		for (const auto& artifact : emitted.artifacts) {
+			if (std::none_of(previous.artifacts.begin(), previous.artifacts.end(), [&](const auto& old) {
+				return SameRelativePath(artifact.relativePath, old.relativePath) && artifact.contentHash == old.contentHash;
+			})) result.affectedPaths.push_back(artifact.relativePath);
+		}
+		// 書込直前に新規/削除を含む入力を再列挙する。変化した要求を別の内容で勝手に実行しない。
+		ProjectDescriptor recheckedDescriptor;
+		SolutionGenerationModel recheckedModel;
+		ProjectAutoGenerationResult rechecked;
+		if (!registry_.Refresh(error)) return AccessFailure(error);
+		if (!InspectAutomaticInputs(descriptorPath, recheckedDescriptor, recheckedModel, rechecked)) {
+			rechecked.operationId = result.operationId; return rechecked;
+		}
+		if (rechecked.inputIdentity != result.inputIdentity || rechecked.canonicalManifestHash != result.canonicalManifestHash ||
+			emitted.inputIdentity != result.inputIdentity) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::InputChangedDuringGeneration, "Project inputs changed while preparing generation. Retry the request."); return result;
+		}
+		if (!VerifyAutomaticStaging(owner, emitted, recheckedDescriptor, error)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::StagingFailed, error, ProjectAutoGenerationState::Failed); return result;
+		}
+		SolutionGenerationTransaction transaction;
+		if (!transaction.Stage({ result.operationId, descriptor.GetProjectId(), model.projectRoot, emitted }, registry_, error) ||
+			!transaction.Commit(result.operationId, registry_, error)) {
+			FailAutomatic(result, ProjectAutoGenerationIssue::CommitFailed, error, ProjectAutoGenerationState::Failed);
+			RefreshRecoverySnapshots(); return result;
+		}
+		result.state = ProjectAutoGenerationState::Updated; result.issue = ProjectAutoGenerationIssue::None; result.detail.clear();
+		RefreshRecoverySnapshots();
+	} catch (const std::exception& error) {
+		FailAutomatic(result, ProjectAutoGenerationIssue::InvalidInput, error.what(), ProjectAutoGenerationState::Failed);
+	}
+	return result;
 }
 
 bool ProjectSolutionGenerationService::InspectProject(const std::filesystem::path& descriptorPath, ProjectSolutionPreviewSnapshot& output, std::string& errorMessage) const {
@@ -702,6 +894,9 @@ bool ProjectSolutionGenerationService::InspectProject(const std::filesystem::pat
 }
 
 bool ProjectSolutionGenerationService::CreatePreview(const std::filesystem::path& descriptorPath, ProjectSolutionPreviewSnapshot& output, std::string& errorMessage) {
+	ProjectAccessLock lease;
+	if (!lease.TryProject(descriptorPath.parent_path(), errorMessage) || !registry_.Refresh(errorMessage)) return false;
+
 	ProjectSolutionPreviewSnapshot inspected{};
 	if (!InspectProject(descriptorPath, inspected, errorMessage)) return false;
 	if (inspected.state != ProjectSolutionPreviewState::Ready) { output = inspected; return true; }
@@ -766,6 +961,9 @@ bool ProjectSolutionGenerationService::CreateInitialGroupedGeneration(
 	std::string& errorMessage,
 	SolutionGenerationLayout outputLayout
 ) {
+	ProjectAccessLock lease;
+	if (!lease.TryProject(descriptor.GetProjectRoot(), errorMessage) || !registry_.Refresh(errorMessage)) return false;
+
 	if (operationId.empty() || descriptor.GetProjectRoot().empty() || (outputLayout == SolutionGenerationLayout::GroupedV1 ? !IsGroupedLayout(descriptor) : !IsProjectFilesLayout(descriptor)) || !descriptor.Validate(errorMessage)) {
 		if (errorMessage.empty()) errorMessage = "Initial IDE generation request is invalid.";
 		return false;
@@ -1002,6 +1200,9 @@ bool ProjectSolutionGenerationService::CanRegeneratePreview(
 
 bool ProjectSolutionGenerationService::RegeneratePreview(
 	const std::filesystem::path& descriptorPath, const std::string& operationId, std::string& errorMessage) {
+	ProjectAccessLock lease;
+	if (!lease.TryProject(descriptorPath.parent_path(), errorMessage) || !registry_.Refresh(errorMessage)) return false;
+
 	if (!CanRegeneratePreview(descriptorPath, operationId, errorMessage)) return false;
 	ProjectDescriptor descriptor{};
 	SolutionGenerationModel model{};
@@ -1054,6 +1255,9 @@ bool ProjectSolutionGenerationService::CanAdoptPreview(const std::filesystem::pa
 }
 
 bool ProjectSolutionGenerationService::AdoptPreview(const std::filesystem::path& descriptorPath, const std::string& operationId, std::string& errorMessage) {
+	ProjectAccessLock lease;
+	if (!lease.TryProject(descriptorPath.parent_path(), errorMessage) || !registry_.Refresh(errorMessage)) return false;
+
 	if (!CanAdoptPreview(descriptorPath, operationId, errorMessage)) return false;
 	ProjectDescriptor descriptor{};
 	SolutionGenerationModel model{};
@@ -1156,6 +1360,9 @@ bool ProjectSolutionGenerationService::CanMigrateOutputLayout(const std::filesys
 }
 
 bool ProjectSolutionGenerationService::MigrateOutputLayout(const std::filesystem::path& descriptorPath, const std::string& operationId, std::string& errorMessage) {
+	ProjectAccessLock lease;
+	if (!lease.TryProject(descriptorPath.parent_path(), errorMessage) || !registry_.Refresh(errorMessage)) return false;
+
 	if (!CanMigrateOutputLayout(descriptorPath, operationId, errorMessage)) return false;
 	ProjectDescriptor descriptor{};
 	SolutionGenerationModel model{};

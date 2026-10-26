@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "SceneEntityReference.h"
+#include "ScenePreparationDiagnostic.h"
+#include "SceneMenuRuntime.h"
 
 class Camera;
 class Object3d;
@@ -13,6 +15,7 @@ class SceneDocument;
 class SceneInstance;
 class SceneManager;
 struct ScenePostProcessSettings;
+struct SceneUIEditorView;
 
 // SceneInstanceを介してSceneManagerが所有するSceneの共通契約。派生側は各Passの順序を変えない。
 class BaseScene
@@ -27,6 +30,13 @@ public:
 	virtual void PrepareForSceneTransition() {}
 
 	virtual void Update(float deltaTime) = 0;
+	// 診断は値のsnapshot。既定のSceneには準備失敗なし。
+	virtual ScenePreparationDiagnostic GetPreparationDiagnostic() const { return {}; }
+	// Active確定後・通常更新前のUI入力段階。非許可時も離し待ちと旧Instance破棄を処理する。
+	virtual void PrepareMenuInput(float deltaTime, bool allowed) { (void)deltaTime; (void)allowed; }
+	virtual SceneUiControlFrame GetUiControlFrame() const { return {}; }
+	// 入力だけを遮断する。Simulation/Editor Pauseの意味は変えない。
+	virtual void SetUiGameplayInputBlocked(bool blocked) { (void)blocked; }
 	// Pause中はSimulationを進めず、Debug Cameraなど必要な表示状態だけを更新する。
 	virtual void UpdatePaused() {}
 	// 対応Sceneだけが、Simulationや開始Eventを進めずに描画準備できる。
@@ -56,6 +66,11 @@ public:
 		(void)viewCamera;
 		DrawForegroundEffects();
 	}
+	// Scene Viewの単独編集表示だけが呼ぶ。非対応Sceneは何も描かない。
+	virtual void DrawEditorUI(const SceneUIEditorView& view, const char* renderSpace) { (void)view; (void)renderSpace; }
+	// Active SceneのMenuは、全Sceneの通常Overlayが終わってから描く。
+	virtual bool HasMenuOverlay() const { return false; }
+	virtual void DrawMenuOverlay() {}
 	virtual bool HasScreenOverlay() const { return false; }
 	virtual void DrawScreenOverlay(uint32_t width, uint32_t height) {
 		(void)width;

@@ -1,5 +1,6 @@
 // 役割: スプライトの頂点更新と描画コマンド設定を実装する。
 #include "Sprite.h"
+#include <cstring>
 #include "SpriteCommon.h"
 #include "../base/DirectXCommon.h"
 #include "TextureManager.h"
@@ -84,14 +85,57 @@ void Sprite::Update(){
 	transformationMatrixData->World = MakeIdentity4x4();
 }
 
-void Sprite::Draw(){
-	spriteCommon_->GetDxCommon()->GetCommandList()->IASetVertexBuffers(0, 1, &vertexBufferView); // VBVを設定
+void Sprite::UpdateUI(const Matrix4x4& unitQuadToClip, const Vector4& color) {
+	SetPosition({ 0.0f, 0.0f });
+	SetSize({ 1.0f, 1.0f });
+	SetRotation(0.0f);
+	SetAnchorPoint({ 0.0f, 0.0f });
+	SetColor(color);
+	const bool flipX = isFlipX_;
+	const bool flipY = isFlipY_;
+	isFlipX_ = false;
+	isFlipY_ = false;
+	Update();
+	isFlipX_ = flipX;
+	isFlipY_ = flipY;
+	// 旧経路の幾何反転は維持し、新UIだけUVを矩形内で反転する。
+	const auto& metadata = TextureManager::GetInstance()->GetMetaData(textureFilePath_);
+	const float horizontalSum = (2.0f * textureLeftTop_.x + textureSize_.x) / static_cast<float>(metadata.width);
+	const float verticalSum = (2.0f * textureLeftTop_.y + textureSize_.y) / static_cast<float>(metadata.height);
+	for (size_t index = 0; index < 6; ++index) {
+		if (flipX) vertexData[index].texcoord.x = horizontalSum - vertexData[index].texcoord.x;
+		if (flipY) vertexData[index].texcoord.y = verticalSum - vertexData[index].texcoord.y;
+	}
+	transformationMatrixData->WVP = unitQuadToClip;
+}
+
+void Sprite::Draw(bool editorView){
+	// 描画済みのViewが参照するupload領域へ、後のViewのUpdateを書き込まない。
+	auto& buffers = viewDrawBuffers_[editorView ? 1 : 0];
+	if (!buffers.vertices) {
+		buffers.vertices = spriteCommon_->GetDxCommon()->CreateBufferResource(sizeof(VertexData) * 6);
+		buffers.material = spriteCommon_->GetDxCommon()->CreateBufferResource(sizeof(Material));
+		buffers.transform = spriteCommon_->GetDxCommon()->CreateBufferResource(sizeof(TransformationMatrix));
+	}
+	auto snapshot = [](ID3D12Resource* resource, const void* data, size_t bytes) {
+		void* mapped = nullptr;
+		if (FAILED(resource->Map(0, nullptr, &mapped))) return false;
+		std::memcpy(mapped, data, bytes);
+		resource->Unmap(0, nullptr);
+		return true;
+	};
+	if (!snapshot(buffers.vertices.Get(), vertexData, sizeof(VertexData) * 6) ||
+		!snapshot(buffers.material.Get(), materialData, sizeof(Material)) ||
+		!snapshot(buffers.transform.Get(), transformationMatrixData, sizeof(TransformationMatrix))) return;
+	auto viewVertices = vertexBufferView;
+	viewVertices.BufferLocation = buffers.vertices->GetGPUVirtualAddress();
+	spriteCommon_->GetDxCommon()->GetCommandList()->IASetVertexBuffers(0, 1, &viewVertices); // VBVを設定
 	spriteCommon_->GetDxCommon()->GetCommandList()->IASetIndexBuffer(&indexBufferView); // IBVを設定
 
 	//TransformationMatrixCBufferの場所を限定
-	spriteCommon_->GetDxCommon()->GetCommandList()->SetGraphicsRootConstantBufferView(1, transformationMatrixResource->GetGPUVirtualAddress());
+	spriteCommon_->GetDxCommon()->GetCommandList()->SetGraphicsRootConstantBufferView(1, buffers.transform->GetGPUVirtualAddress());
 
-	spriteCommon_->GetDxCommon()->GetCommandList()->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
+	spriteCommon_->GetDxCommon()->GetCommandList()->SetGraphicsRootConstantBufferView(0, buffers.material->GetGPUVirtualAddress());
 
 	spriteCommon_->GetDxCommon()->GetCommandList()->SetGraphicsRootDescriptorTable(2, TextureManager::GetInstance()->GetSrvHandleGPU(textureFilePath_));
 	//描画

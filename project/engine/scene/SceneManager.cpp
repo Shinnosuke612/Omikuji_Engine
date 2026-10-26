@@ -15,6 +15,8 @@
 #include "../utility/Logger.h"
 
 bool SceneManager::RequestPresentedTransition(const PresentedTransitionRequest& request) {
+	if (request.uiSource.requestSerial && (request.uiSource.instanceId != request.sourceInstanceId ||
+		!IsUiTransitionSourceValid(request.uiSource) || (executionContext_ && !executionContext_->IsPlaying()))) return false;
 	if (presentedTransitionBusy_ || pendingSceneInstance_ || transitionHeld_ ||
 		!FindSceneInstance(request.sourceInstanceId) || request.destinationSceneId.empty() ||
 		request.transitionAssetPath.empty() || !sceneCatalog_ || !sceneCatalog_->Find(request.destinationSceneId)) {
@@ -24,6 +26,7 @@ bool SceneManager::RequestPresentedTransition(const PresentedTransitionRequest& 
 		return false;
 	}
 	presentedTransitionRequest_ = request;
+	presentedUiTransitionSource_ = request.uiSource;
 	presentedTransitionBusy_ = true;
 	return true;
 }
@@ -36,6 +39,7 @@ bool SceneManager::ConsumePresentedTransitionRequest(PresentedTransitionRequest&
 }
 
 void SceneManager::FinishPresentedTransitionRequest() {
+	presentedUiTransitionSource_ = {};
 	presentedTransitionRequest_.reset();
 	presentedTransitionBusy_ = false;
 }
@@ -131,6 +135,8 @@ SceneInstanceId SceneManager::LoadScene(
 	));
 	pendingSceneLoadMode_ = loadMode;
 	pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
+	pendingRestartScene_ = false;
+	pendingUiTransitionSource_ = loadMode == SceneLoadMode::Single && presentedTransitionBusy_ ? presentedUiTransitionSource_ : SceneMenuSource{};
 	return instanceId;
 }
 
@@ -185,6 +191,7 @@ bool SceneManager::SetActiveScene(SceneInstanceId instanceId) {
 	if (!instance) {
 		return false;
 	}
+	if (activeSceneInstanceId_ != instanceId) uiTransitionOutcome_.reset();
 	activeSceneInstanceId_ = instanceId;
 	currentSceneName_ = instance->GetSceneId();
 	return true;
@@ -245,6 +252,27 @@ void SceneManager::ReloadCurrentScene() {
 		pendingForceUnloadAllSceneInstances_ =
 			executionContext_ && executionContext_->IsEditing();
 	}
+}
+
+bool SceneManager::IsUiTransitionSourceValid(const SceneMenuSource& source) const {
+	const auto* document = GetActiveSceneDocument();
+	return source.instanceId && source.instanceId == activeSceneInstanceId_ && document &&
+		source.generation == document->GetContentGeneration() && (!executionContext_ || !executionContext_->IsEditing());
+}
+SceneInstanceId SceneManager::RequestUiSceneTransition(const SceneMenuSource& source, const std::string& destination) {
+	if (!source.requestSerial || !IsUiTransitionSourceValid(source) || (executionContext_ && !executionContext_->IsPlaying()) ||
+		pendingSceneInstance_ || transitionHeld_ || presentedTransitionBusy_ || !sceneCatalog_ || !sceneCatalog_->Find(destination)) return kInvalidSceneInstanceId;
+	const auto id = LoadScene(destination, SceneLoadMode::Single);
+	if (id != kInvalidSceneInstanceId) pendingUiTransitionSource_ = source;
+	return id;
+}
+void SceneManager::ReportUiTransitionOutcome(const SceneMenuSource& source, SceneUiTransitionStatus status, const std::string& diagnostic) {
+	if (source.requestSerial && IsUiTransitionSourceValid(source)) uiTransitionOutcome_ = SceneUiTransitionOutcome{source, status, diagnostic};
+}
+bool SceneManager::ConsumeUiTransitionOutcome(const SceneMenuSource& source, SceneUiTransitionOutcome& outcome) {
+	if (!uiTransitionOutcome_ || !IsUiTransitionSourceValid(source) || uiTransitionOutcome_->source.instanceId != source.instanceId ||
+		uiTransitionOutcome_->source.generation != source.generation || uiTransitionOutcome_->source.requestSerial != source.requestSerial) return false;
+	outcome = *uiTransitionOutcome_; uiTransitionOutcome_.reset(); return true;
 }
 
 SceneDocument* SceneManager::GetActiveSceneDocument() {
@@ -382,12 +410,29 @@ BaseScene* SceneManager::GetActiveScene() const {
 	return instance ? instance->GetScene() : nullptr;
 }
 
+ScenePreparationDiagnostic SceneManager::GetActivePreparationDiagnostic() const {
+	const BaseScene* scene = GetActiveScene();
+	return scene ? scene->GetPreparationDiagnostic() : ScenePreparationDiagnostic{};
+}
+
 bool SceneManager::TryGetActiveRuntimePostProcessSettings(
 	ScenePostProcessSettings& settings,
 	uint64_t& generation
 ) const {
 	BaseScene* scene = GetActiveScene();
 	return scene && scene->TryGetRuntimePostProcessSettings(settings, generation);
+}
+
+void SceneManager::PrepareMenuInput(float deltaTime, bool allowed) {
+	const bool running = !executionContext_ || executionContext_->IsPlaying();
+	for (const auto& instance : sceneInstances_) if (auto* scene = instance->GetScene())
+		scene->PrepareMenuInput(deltaTime, allowed && running && scene == GetActiveScene());
+	const auto* active = GetActiveScene();
+	const auto control = active ? active->GetUiControlFrame() : SceneUiControlFrame{};
+	const auto* document = GetActiveSceneDocument();
+	const bool blocked = running && document && control.instanceId == activeSceneInstanceId_ &&
+		control.generation == document->GetContentGeneration() && control.blockGameplayInput;
+	for (const auto& instance : sceneInstances_) if (auto* scene = instance->GetScene()) scene->SetUiGameplayInputBlocked(blocked);
 }
 
 void SceneManager::Update(float deltaTime)
@@ -398,6 +443,7 @@ void SceneManager::Update(float deltaTime)
 	}
 	ProcessPendingSceneUnloads();
 	ActivatePendingScene();
+	PrepareMenuInput(deltaTime, menuInputAllowed_);
 
 	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
 		if (BaseScene* scene = instance->GetScene()) {
@@ -443,10 +489,12 @@ void SceneManager::EndTransitionHold() {
 
 void SceneManager::UpdateTransitionHold() {
 	if (!transitionHeld_ || (executionContext_ && executionContext_->IsPaused())) {
+		PrepareMenuInput(0.0f, false);
 		return;
 	}
 	ProcessPendingSceneUnloads();
 	ActivatePendingScene();
+	PrepareMenuInput(0.0f, false);
 	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
 		if (BaseScene* scene = instance->GetScene()) {
 			scene->UpdateTransitionHold();
@@ -462,9 +510,23 @@ void SceneManager::ActivatePendingScene()
 	if (!pendingSceneInstance_) {
 		return;
 	}
+	if (pendingUiTransitionSource_.requestSerial && !IsUiTransitionSourceValid(pendingUiTransitionSource_)) {
+		DiscardPendingScene("MenuRuntime:InvalidSource"); return;
+	}
+	// 予約後に実行状態/Activeが変わった場合も、編集用Documentを読み替えない。
+	if (pendingRestartScene_ && (transitionHeld_ || presentedTransitionBusy_ ||
+		(executionContext_ && !executionContext_->IsPlaying()) ||
+		activeSceneInstanceId_ != pendingReloadSceneInstanceId_)) {
+		DiscardPendingScene("SceneRestart:Rejected");
+		return;
+	}
 	const SceneDescriptor* descriptor = sceneCatalog_
 		? sceneCatalog_->Find(pendingSceneInstance_->GetSceneId())
 		: nullptr;
+	if ((pendingRestartScene_ || pendingUiTransitionSource_.requestSerial) && !descriptor) {
+		DiscardPendingScene(pendingRestartScene_ ? "SceneRestart:InvalidScene" : "MenuRuntime:InvalidScene");
+		return;
+	}
 	// Editor状態が予約後に変わっていても、異なるDocumentとの組み合わせを許可しない。
 	if (
 		pendingSceneLoadMode_ == SceneLoadMode::Single &&
@@ -482,12 +544,26 @@ void SceneManager::ActivatePendingScene()
 		);
 		return;
 	}
+	// UI遷移/再読込成功後の旧cleanupが、新Documentの同IDを書き換えないよう隔離する。
+	SceneInstance* restartingInstance = nullptr;
+	std::unique_ptr<SceneDocument> restartOldDocument;
+	if ((pendingRestartScene_ || pendingUiTransitionSource_.requestSerial) && executionContext_) {
+		const auto sourceId = pendingRestartScene_ ? pendingReloadSceneInstanceId_ : pendingUiTransitionSource_.instanceId;
+		for (const auto& instance : sceneInstances_) {
+			if (instance->GetId() == sourceId &&
+				instance->GetDocument() == &executionContext_->GetActiveDocument()) {
+				restartingInstance = instance.get();
+				restartOldDocument = instance->GetDocument()->CloneForRuntimeDetach();
+				break;
+			}
+		}
+	}
 	if (
 		pendingSceneLoadMode_ == SceneLoadMode::Single &&
 		descriptor &&
 		executionContext_ &&
 		!executionContext_->IsEditing() &&
-		executionContext_->GetActiveSceneId() != descriptor->id &&
+		(pendingRestartScene_ || executionContext_->GetActiveSceneId() != descriptor->id) &&
 		!executionContext_->LoadRuntimeScene(
 			descriptor->id,
 			descriptor->filePath
@@ -500,6 +576,7 @@ void SceneManager::ActivatePendingScene()
 		DiscardPendingScene("Runtime SceneDocument could not be loaded: " + descriptor->filePath);
 		return;
 	}
+	if (restartingInstance) restartingInstance->OwnDocument(std::move(restartOldDocument));
 	if (pendingSceneLoadMode_ == SceneLoadMode::Additive) {
 		if (!descriptor) {
 			DiscardPendingScene("Additive Scene is not registered");
@@ -575,13 +652,16 @@ void SceneManager::ActivatePendingScene()
 
 	sceneInstances_.back()->Initialize(this);
 	lastLoadOutcome_ = SceneLoadOutcome{ instanceId, SceneLoadStatus::Activated, {} };
+	pendingUiTransitionSource_ = {};
 	pendingSceneLoadMode_ = SceneLoadMode::Single;
 	pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
 	pendingForceUnloadAllSceneInstances_ = false;
+	pendingRestartScene_ = false;
 }
 
 void SceneManager::DiscardPendingScene(const std::string& diagnostic)
 {
+	pendingUiTransitionSource_ = {};
 	if (pendingSceneInstance_) {
 		lastLoadOutcome_ = SceneLoadOutcome{
 			pendingSceneInstance_->GetId(), SceneLoadStatus::Failed, diagnostic
@@ -591,6 +671,7 @@ void SceneManager::DiscardPendingScene(const std::string& diagnostic)
 	pendingSceneLoadMode_ = SceneLoadMode::Single;
 	pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
 	pendingForceUnloadAllSceneInstances_ = false;
+	pendingRestartScene_ = false;
 }
 
 void SceneManager::ProcessPendingSceneUnloads()
@@ -625,6 +706,7 @@ void SceneManager::ProcessPendingSceneUnloads()
 
 void SceneManager::UpdatePaused()
 {
+	PrepareMenuInput(0.0f, false);
 	if (transitionHeld_) {
 		return;
 	}
@@ -633,6 +715,34 @@ void SceneManager::UpdatePaused()
 		if (BaseScene* scene = instance->GetScene()) {
 			scene->UpdatePaused();
 		}
+	}
+}
+
+const SceneUIEditorView* SceneManager::GetEditorUIView() const {
+	const auto* document = GetActiveSceneDocument();
+	return executionContext_ && executionContext_->IsEditing() && document && editorUIView_.Matches(*document)
+		? &editorUIView_ : nullptr;
+}
+
+void SceneManager::DrawEditorUIView(const char* renderSpace, uint32_t width, uint32_t height) {
+	const auto* view = GetEditorUIView();
+	auto* scene = GetActiveScene();
+	if (!view || !scene || !renderSpace) return;
+	// この呼出しの間だけ有効。描画packet保持と描画先の選択を分離する。
+	struct ViewScope {
+		bool& active;
+		~ViewScope() { active = false; }
+	} scope{drawingEditorUIView_};
+	drawingEditorUIView_ = true;
+	const std::string space(renderSpace);
+	if (space == "Scene2D") {
+		if (view->Isolated()) scene->DrawEditorUI(*view, renderSpace);
+		else Draw();
+	} else if (space == "Foreground") {
+		if (!view->Isolated()) DrawForegroundEffects();
+	} else if (space == "ScreenOverlay") {
+		if (view->Isolated()) scene->DrawEditorUI(*view, renderSpace);
+		else DrawScreenOverlay(width, height);
 	}
 }
 
@@ -679,6 +789,7 @@ void SceneManager::DrawForegroundEffects()
 
 bool SceneManager::HasScreenOverlay() const
 {
+	if (const auto* activeScene = GetActiveScene(); activeScene && activeScene->HasMenuOverlay()) return true;
 	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
 		if (const BaseScene* scene = instance->GetScene()) {
 			if (scene->HasScreenOverlay()) {
@@ -703,6 +814,8 @@ void SceneManager::DrawScreenOverlay(uint32_t width, uint32_t height)
 			}
 		}
 	}
+	// Additive HUDの後へActive Menuを重ね、後ろのSceneに覆われないようにする。
+	activeScene->DrawMenuOverlay();
 }
 
 void SceneManager::DrawShadow()
@@ -794,6 +907,8 @@ void SceneManager::ReleaseSceneParticlesIfUnused(const std::string& sceneId)
 
 void SceneManager::UnloadAllSceneInstances()
 {
+	pendingUiTransitionSource_ = {}; presentedUiTransitionSource_ = {};
+	uiTransitionOutcome_.reset();
 	for (const std::unique_ptr<SceneInstance>& instance : sceneInstances_) {
 		instance->Finalize();
 	}

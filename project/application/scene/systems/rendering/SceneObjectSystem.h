@@ -11,6 +11,8 @@
 #include "../../../../engine/collision/OBBCollider.h"
 #include "../../../../engine/collision/SphereCollider.h"
 #include "../../../../engine/math/Vector4.h"
+#include "../../../../engine/math/Matrix4x4.h"
+#include "../../../../engine/2d/SpriteCommon.h"
 #include "../../../../engine/physics/PhysicsBody.h"
 
 class Camera;
@@ -84,6 +86,10 @@ public:
 		bool hidePlayerModel,
 		std::vector<Object3d*>& shadowCasters
 	) const;
+	// SyncSpritesの資源を借用して新UIを一要素描く。所有/Authoring値は変更しない。
+	// editorViewはUI編集RTへの要求だけtrue。textureを複製せず描画定数の寿命を分ける。
+	void DrawUISprite(uint64_t entityId, const Matrix4x4& unitQuadToClip,
+		const Vector4& color, SpriteCommon::OutputTarget target, bool editorView = false) const;
 
 	Object3d* FindObject(uint64_t entityId) const;
 	Object3d* FindObjectByName(

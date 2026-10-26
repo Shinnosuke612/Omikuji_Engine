@@ -1,4 +1,4 @@
-// 役割: Project Manager用のSolution preview workspaceと生成復旧診断を所有する。
+// 役割: 完全Previewと必要時だけの生成更新を接続し、生成結果・復旧診断を所有する。
 #pragma once
 
 #include "ProjectRegistry.h"
@@ -51,10 +51,35 @@ struct ProjectSolutionRecoverySnapshot {
 	std::string detail;
 };
 
+
+// 自動経路は完全Previewとは別の結果を返す。診断原文は表示層で原因/対処を補足する。
+enum class ProjectAutoGenerationState { Latest, UpdateRequired, Updated, NeedsAttention, Failed };
+enum class ProjectAutoGenerationIssue {
+	None, InputsChanged, NotRegistered, UnsupportedProject, MissingManifest, ModifiedArtifact,
+	PendingRecovery, InvalidInput, InputChangedDuringGeneration, StagingFailed, CommitFailed,
+	Busy, AccessFailure, RegistryConflict
+};
+struct ProjectAutoGenerationResult {
+	ProjectAutoGenerationState state = ProjectAutoGenerationState::Failed;
+	ProjectAutoGenerationIssue issue = ProjectAutoGenerationIssue::InvalidInput;
+	std::string detail;
+	std::string operationId;
+	std::string inputIdentity;
+	// 再検証用の生成元manifest hash。ソース本文のhashではない。
+	std::string canonicalManifestHash;
+	std::vector<std::filesystem::path> affectedPaths;
+};
+
 class ProjectSolutionGenerationService {
 public:
 	// Registryは呼び出し側が所有し、service lifetime中は有効でなければならない。
 	explicit ProjectSolutionGenerationService(ProjectRegistry& registry);
+
+	// 読取専用。短いProject lease内で構成と所有hashを確認し、Registryも保存しない。
+	ProjectAutoGenerationResult InspectFreshness(const std::filesystem::path& descriptorPath);
+	// 正常な登録済みSnapshot/V2だけを必要時に更新する。Build/Restore/完全Previewを行わない。
+	// Buildまで排他するcallerは、同じthreadで外側のProjectAccessLockを保持すること。
+	ProjectAutoGenerationResult EnsureCurrent(const std::filesystem::path& descriptorPath);
 
 	// descriptorとbuild specificationをread-onlyで診断する。仕様なしの旧Project／managed-sourceはUnavailableを返す。
 	bool InspectProject(const std::filesystem::path& descriptorPath, ProjectSolutionPreviewSnapshot& output, std::string& errorMessage) const;
@@ -94,6 +119,8 @@ public:
 	const std::vector<ProjectSolutionRecoverySnapshot>& GetRecoverySnapshots() const { return recoveries_; }
 
 private:
+	bool InspectAutomaticInputs(const std::filesystem::path& descriptorPath, ProjectDescriptor& descriptor,
+		SolutionGenerationModel& model, ProjectAutoGenerationResult& result);
 	std::filesystem::path GetPreviewRoot() const;
 	void RefreshRecoverySnapshots();
 	void UpsertPreview(ProjectSolutionPreviewSnapshot value);

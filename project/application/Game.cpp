@@ -47,6 +47,7 @@
 #include "../engine/project/ProjectCreationService.h"
 #include "../engine/project/ProjectDescriptor.h"
 #include "../engine/project/ProjectRegistry.h"
+#include "../engine/project/ProjectAccessLock.h"
 #include "../engine/project/ProjectSolutionGenerationService.h"
 #include "../engine/project/VisualStudioLocator.h"
 #include "../engine/project/WindowsProcess.h"
@@ -280,6 +281,7 @@ namespace {
 
 // PostDrawと切離しWindowの最終利用完了後だけ、この所有状態を更新/破棄する。
 struct Game::PresentedTransitionState {
+	SceneMenuSource uiSource;
 	SceneTransitionController controller;
 	std::unique_ptr<SwordShatterRenderer> renderer;
 	uint64_t frameSerial = 0, completedSerial = 0;
@@ -489,6 +491,30 @@ void Game::Initialize() {
 	)) {
 		return;
 	}
+
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (editorSession_) {
+		SceneRenderTarget::Desc uiDesc = sceneTargetDesc;
+		uiDesc.width = 1; uiDesc.height = 1;
+		uiDesc.clearColor[0] = uiDesc.clearColor[1] = uiDesc.clearColor[2] = 0.12f;
+		uiEditorSceneTarget_ = new SceneRenderTarget();
+		if (!initializeRequiredRenderTarget(uiEditorSceneTarget_, uiDesc, "the UI editing scene target")) return;
+		uiDesc.createDepth = false;
+		uiEditorForegroundTarget_ = new SceneRenderTarget();
+		if (!initializeRequiredRenderTarget(uiEditorForegroundTarget_, uiDesc, "the UI editing foreground target")) return;
+		uiDesc.format = RenderFormats::kDisplayFormat;
+		for (auto*& target : uiEditorPostTargets_) {
+			target = new SceneRenderTarget();
+			if (!initializeRequiredRenderTarget(target, uiDesc, "a UI editing post-process target")) return;
+		}
+		uiEditorOverlayTarget_ = new SceneRenderTarget();
+		if (!initializeRequiredRenderTarget(uiEditorOverlayTarget_, uiDesc, "the UI editing overlay target")) return;
+		uiEditorCopy_ = new FullscreenCopy();
+		uiEditorCopy_->Initialize(dxCommon_);
+		uiEditorBloom_ = new BloomRenderer();
+		if (!uiEditorBloom_->Initialize(dxCommon_, srvManager_)) { delete uiEditorBloom_; uiEditorBloom_ = nullptr; }
+	}
+#endif
 	fullscreenCopy_ = new FullscreenCopy();
 	fullscreenCopy_->Initialize(dxCommon_);
 	bloomRenderer_ = new BloomRenderer();
@@ -782,6 +808,17 @@ void Game::Update() {
 	} else if (pauseEnded) {
 		EndPauseDebugCamera();
 	}
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	sceneManager_->SetEditorUIView(imguiManager_ ? imguiManager_->GetSceneUIEditorView() : SceneUIEditorView{});
+#endif
+	// UI入力許可だけを渡す。既存Gameplayの入力経路/消費規則は変更しない。
+	bool menuInputAllowed = winApp_ && GetForegroundWindow() == winApp_->GetHwnd() && !IsIconic(winApp_->GetHwnd());
+	if (auto* input = Input::GetInstance()) menuInputAllowed = menuInputAllowed && !input->PushKey(DIK_LMENU) && !input->PushKey(DIK_RMENU);
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (editorSession_) menuInputAllowed = menuInputAllowed && imguiManager_ && ImGuiManager::IsSceneViewInputActive() &&
+		!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive();
+#endif
+	sceneManager_->SetMenuInputAllowed(menuInputAllowed);
 	if (!paused) {
 		if (sceneManager_->IsTransitionHeld()) {
 			sceneManager_->UpdateTransitionHold();
@@ -1264,6 +1301,8 @@ void Game::RefreshProjectLauncherView() {
 }
 
 bool Game::ProcessProjectLauncherRequest() {
+	ClearProjectAccessIssue();
+
 	if (!imguiManager_ || !projectRegistry_ || !projectCreationService_ || !projectSolutionGenerationService_) {
 		return false;
 	}
@@ -1356,9 +1395,19 @@ bool Game::ProcessProjectLauncherRequest() {
 		if (!succeeded && errorMessage.empty()) errorMessage = "Preview Solution could not be opened.";
 		break;
 	}
-	case ProjectLauncherRequestOperation::Refresh:
-		succeeded = true;
+	case ProjectLauncherRequestOperation::Refresh: {
+		// 競合で拒否されたローカル編集を捨て、利用者の明示操作で最新の登録内容へ戻す。
+		succeeded = projectRegistry_->Load(errorMessage);
+		if (succeeded && projectRegistry_->GetTemplateSourceRoot().empty()) {
+			// 起動時だけ補っていた未保存の既定Templateも、再読込後に同じ規則で補う。
+			const auto sourceRoot = EditableResourcePath::FindProjectRoot();
+			const auto templateRoot = sourceRoot.empty() ? std::filesystem::path{} : sourceRoot.parent_path();
+			std::error_code filesystemError;
+			if (!templateRoot.empty() && std::filesystem::is_regular_file(templateRoot / L"project/tools/New-GameProject.ps1", filesystemError) && !filesystemError)
+				projectRegistry_->SetTemplateSourceRoot(templateRoot);
+		}
 		break;
+	}
 	case ProjectLauncherRequestOperation::AdoptSolutionPreview:
 		succeeded = projectSolutionGenerationService_->AdoptPreview(StringUtility::ToPath(request.descriptorPath), request.operationId, errorMessage);
 		break;
@@ -1395,6 +1444,8 @@ bool Game::ProcessProjectLauncherRequest() {
 		break;
 	}
 	projectLauncherStatusMessage_ = succeeded ? "Project Launcher request completed." : errorMessage;
+	if (!succeeded && GetProjectAccessIssue() != ProjectAccessIssue::None)
+		projectLauncherStatusMessage_ = imguiManager_->NotifyProjectAccessFailure(GetProjectAccessIssue(), errorMessage);
 	return true;
 }
 
@@ -1571,6 +1622,11 @@ bool Game::IsPresentedTransitionDrawable() const {
 void Game::CancelPresentedTransition(const std::string& reason) {
 	if (!presentedTransition_ || !sceneManager_ || !audio_) return;
 	auto& transition = *presentedTransition_;
+	// 新Scene確定後はManagerが旧Sourceを拒否するため、消滅したMenuを復活させない。
+	if (transition.uiSource.requestSerial) {
+		sceneManager_->ReportUiTransitionOutcome(transition.uiSource, SceneUiTransitionStatus::Failed, reason.empty() ? "MenuRuntime:TransitionCancelled" : reason);
+		transition.uiSource = {};
+	}
 	transition.controller.Cancel(*sceneManager_,*audio_,reason);
 	transition.renderer.reset();
 	transition.drawFailed = false; transition.renderedTextureUsed = false;
@@ -1626,8 +1682,10 @@ void Game::UpdatePresentedTransitionAfterScene() {
 		if (!IsPresentedTransitionDrawable()) return;
 		PresentedTransitionRequest request;
 		if (!sceneManager_->ConsumePresentedTransitionRequest(request)) return;
+		t.uiSource = request.uiSource;
 		SceneTransitionAsset::Diagnostics diagnostics;
 		bool ready = IsPresentedTransitionDrawable() && (!executionContext_ || !executionContext_->IsEditing()) &&
+			(!request.uiSource.requestSerial || (sceneManager_->IsUiTransitionSourceValid(request.uiSource) && (!executionContext_ || executionContext_->IsPlaying()))) &&
 			t.controller.TryPrepareRequest(request,*sceneCatalog_,*audio_,diagnostics);
 		if (ready) {
 			t.renderer = std::make_unique<SwordShatterRenderer>();
@@ -1648,6 +1706,7 @@ void Game::UpdatePresentedTransitionAfterScene() {
 			return;
 		}
 		t.issue.clear();
+		if (t.uiSource.requestSerial) sceneManager_->ReportUiTransitionOutcome(t.uiSource, SceneUiTransitionStatus::Accepted);
 	}
 	if (t.controller.IsActive() && !t.controller.GetDiagnostic().empty() && t.issue != t.controller.GetDiagnostic()) {
 		t.issue = t.controller.GetDiagnostic();
@@ -1746,7 +1805,27 @@ void Game::Draw() {
 #endif
 	sceneRenderTarget_->End();
 
+	bool drawUIEditor = false;
+	uint32_t uiWidth = 1, uiHeight = 1;
+	SceneUIEditorView uiView;
 #if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (editorSession_ && imguiManager_ && uiEditorSceneTarget_ && uiEditorCopy_) {
+		if (const auto* view = sceneManager_->GetEditorUIView()) uiView = *view;
+		drawUIEditor = uiView.generation && imguiManager_->IsUIEditorViewRenderable();
+		if (drawUIEditor) {
+			uiWidth = imguiManager_->GetUIEditorViewWidth(); uiHeight = imguiManager_->GetUIEditorViewHeight();
+			uiEditorSceneTarget_->Resize(uiWidth, uiHeight);
+			uiEditorForegroundTarget_->Resize(uiWidth, uiHeight);
+			for (auto* target : uiEditorPostTargets_) target->Resize(uiWidth, uiHeight);
+			uiEditorOverlayTarget_->Resize(uiWidth, uiHeight);
+			uiEditorCopy_->BeginFrame();
+			uiEditorSceneTarget_->Begin();
+			srvManager_->PreDraw();
+			Object3dCommon::GetInstance()->SetCommonRenderState();
+			sceneManager_->DrawEditorUIView("Scene2D", uiWidth, uiHeight);
+			uiEditorSceneTarget_->End();
+		}
+	}
 	DrawModelPreview();
 	DrawPrefabPreview();
 #endif
@@ -1849,6 +1928,23 @@ void Game::Draw() {
 			waterState.lightNoiseScale;
 	};
 
+
+	// Viewごとにcopy定数とRTを分け、通常SceneのPostEffect資源を再利用して上書きしない。
+	auto applyUIEditorHdrEffect = [&](FullscreenCopy::Effect effect, const FullscreenCopy::Parameters& parameters) {
+		if (!drawUIEditor) return;
+		uiEditorForegroundTarget_->Begin();
+		srvManager_->PreDraw();
+		uiEditorCopy_->SetParameters(parameters);
+		uiEditorCopy_->Draw(uiEditorSceneTarget_->GetSrvGpuHandle(), uiEditorSceneTarget_->GetDepthSrvGpuHandle(),
+			maskHandle, effect, FullscreenCopy::OutputFormat::kSceneHdr);
+		uiEditorForegroundTarget_->End();
+		uiEditorSceneTarget_->Begin(false, false);
+		srvManager_->PreDraw();
+		uiEditorCopy_->SetParameters({});
+		uiEditorCopy_->Draw(uiEditorForegroundTarget_->GetSrvGpuHandle(), maskHandle, maskHandle,
+			FullscreenCopy::Effect::kCopy, FullscreenCopy::OutputFormat::kSceneHdr);
+		uiEditorSceneTarget_->End();
+	};
 	bool waterRefractionAppliedBeforeForeground = false;
 	if (deferForegroundEffects) {
 		if (
@@ -1892,6 +1988,16 @@ void Game::Draw() {
 			sceneRenderTarget_->End();
 		}
 	}
+	if (drawUIEditor && deferForegroundEffects) {
+		if (waterRefractionAppliedBeforeForeground) {
+			FullscreenCopy::Parameters parameters{}; fillWaterParameters(parameters);
+			applyUIEditorHdrEffect(FullscreenCopy::Effect::kWaterRefraction, parameters);
+		}
+		uiEditorSceneTarget_->Begin(false, false);
+		srvManager_->PreDraw();
+		sceneManager_->DrawEditorUIView("Foreground", uiWidth, uiHeight);
+		uiEditorSceneTarget_->End();
+	}
 	sceneManager_->SetDeferForegroundEffects(false);
 
 	auto applySceneHdrEffect = [&](
@@ -1922,6 +2028,7 @@ void Game::Draw() {
 			FullscreenCopy::OutputFormat::kSceneHdr
 		);
 		sceneRenderTarget_->End();
+		applyUIEditorHdrEffect(effect, parameters);
 	};
 
 	if (
@@ -1957,6 +2064,20 @@ void Game::Draw() {
 		);
 		postProcessRenderTargets_[0]->End();
 	}
+	D3D12_GPU_DESCRIPTOR_HANDLE uiSourceHandle{};
+	int uiPassIndex = 1;
+	if (drawUIEditor) {
+		if (uiEditorBloom_) {
+			uiEditorBloom_->BeginFrame(); uiEditorBloom_->SetParameters(bloomParameters_);
+			uiEditorBloom_->Apply(uiEditorSceneTarget_->GetSrvGpuHandle(), uiEditorPostTargets_[0]);
+		} else {
+			uiEditorPostTargets_[0]->Begin(); srvManager_->PreDraw(); uiEditorCopy_->SetParameters({});
+			uiEditorCopy_->Draw(uiEditorSceneTarget_->GetSrvGpuHandle(), uiEditorSceneTarget_->GetDepthSrvGpuHandle(),
+				maskHandle, FullscreenCopy::Effect::kCopy);
+			uiEditorPostTargets_[0]->End();
+		}
+		uiSourceHandle = uiEditorPostTargets_[0]->GetSrvGpuHandle();
+	}
 	D3D12_GPU_DESCRIPTOR_HANDLE sourceHandle =
 		postProcessRenderTargets_[0]->GetSrvGpuHandle();
 	int passIndex = 1;
@@ -1978,6 +2099,13 @@ void Game::Draw() {
 		destination->End();
 		sourceHandle = destination->GetSrvGpuHandle();
 		++passIndex;
+		if (drawUIEditor) {
+			auto* uiDestination = uiEditorPostTargets_[uiPassIndex++ % 2];
+			uiDestination->Begin(); srvManager_->PreDraw();
+			uiEditorCopy_->SetParameters(parameters);
+			uiEditorCopy_->Draw(uiSourceHandle, uiEditorSceneTarget_->GetDepthSrvGpuHandle(), maskHandle, effect);
+			uiDestination->End(); uiSourceHandle = uiDestination->GetSrvGpuHandle();
+		}
 	};
 
 	if (grayscaleEnabled_) {
@@ -2197,12 +2325,20 @@ void Game::Draw() {
 		textOverlayRenderTarget_->End();
 		sourceHandle = textOverlayRenderTarget_->GetSrvGpuHandle();
 	}
+	if (drawUIEditor) {
+		// ScreenOverlayだけはPostEffectの後。同じCanvas/Hierarchy順で一度だけ描く。
+		uiEditorOverlayTarget_->Begin(); srvManager_->PreDraw(); uiEditorCopy_->SetParameters({});
+		uiEditorCopy_->Draw(uiSourceHandle, uiEditorSceneTarget_->GetDepthSrvGpuHandle(), maskHandle, FullscreenCopy::Effect::kCopy);
+		sceneManager_->DrawEditorUIView("ScreenOverlay", uiWidth, uiHeight);
+		uiEditorOverlayTarget_->End();
+	}
 	sourceHandle = DrawPresentedTransition(sourceHandle,sceneRenderTarget_->GetWidth(),sceneRenderTarget_->GetHeight());
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	SceneRenderTarget* const postProcessOutputTarget =
 		postProcessRenderTargets_[(passIndex - 1) % 2];
 	if (editorSession_) {
+		imguiManager_->SetUIEditorViewTexture(drawUIEditor ? uiEditorOverlayTarget_->GetSrvGpuHandle() : D3D12_GPU_DESCRIPTOR_HANDLE{}, drawUIEditor ? uiView : SceneUIEditorView{});
 		imguiManager_->DrawEditorWorkspace(
 			sourceHandle,
 			postProcessOutputTarget->GetWidth(),
@@ -2217,12 +2353,12 @@ void Game::Draw() {
 	srvManager_->PreDraw();
 	fullscreenCopy_->Draw(sourceHandle, depthHandle, maskHandle);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
-	imguiManager_->EndFrame(presentedTransition_ && presentedTransition_->renderedTextureUsed);
+	imguiManager_->EndFrame(drawUIEditor || (presentedTransition_ && presentedTransition_->renderedTextureUsed));
 #endif
 
 	dxCommon_->PostDraw();
 #if defined(_DEBUG) || defined(DEVELOPMENT)
-	// mainで生成済みのRTだけをplatform listへ渡し、最後の利用まで既存Fenceで待つ。
+	// UI編集/演出のRTをmain送信後にplatformへ渡し、最後の利用まで既存Fenceで待つ。
 	if (imguiManager_->RenderDeferredPlatformWindows()) dxCommon_->ExecuteCommandListAndWait();
 #endif
 	if (presentedTransition_) presentedTransition_->completedSerial = presentedTransition_->frameSerial;
@@ -2982,6 +3118,13 @@ void Game::Finalize() {
 	delete modelPreviewRenderTarget_;
 	modelPreviewRenderTarget_ = nullptr;
 
+	// 既存Frame/Platform WindowのFence待機後、Game所有のView資源を破棄する。
+	delete uiEditorBloom_; uiEditorBloom_ = nullptr;
+	delete uiEditorCopy_; uiEditorCopy_ = nullptr;
+	delete uiEditorSceneTarget_; uiEditorSceneTarget_ = nullptr;
+	delete uiEditorForegroundTarget_; uiEditorForegroundTarget_ = nullptr;
+	delete uiEditorOverlayTarget_; uiEditorOverlayTarget_ = nullptr;
+	for (auto*& target : uiEditorPostTargets_) { delete target; target = nullptr; }
 	delete bloomRenderer_;
 	bloomRenderer_ = nullptr;
 

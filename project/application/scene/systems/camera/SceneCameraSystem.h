@@ -19,7 +19,7 @@ struct SceneEntity;
 class SceneCameraSystem {
 public:
 	void Reset();
-	// 入力とCameraPathを先に評価し、Playerが参照する向きを確定する。
+	// 入力とCameraPathを先に評価する。入力非許可でも追従と既存Pathの時計は継続する。
 	void UpdateBeforeSimulation(
 		SceneDocument& document,
 		Camera* camera,
@@ -27,7 +27,8 @@ public:
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		float deltaTime,
 		bool runtimeActive,
-		bool playing
+		bool playing,
+		bool acceptGameplayInput = true
 	);
 	// 移動後のPlayer座標へ追従Cameraを合わせ、最終行列を更新する。
 	void UpdateAfterSimulation(
@@ -37,7 +38,8 @@ public:
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		float deltaTime,
 		bool runtimeActive,
-		bool playing
+		bool playing,
+		bool acceptGameplayInput = true
 	);
 	void UpdatePaused(Camera* camera, Camera* debugCamera);
 	// 遷移中の表示同期。選択/経路/入力を進めず、初回追従位置とCamera行列だけを確定する。

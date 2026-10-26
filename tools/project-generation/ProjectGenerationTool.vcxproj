@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 役割: ゲームの生成Solutionに依存しない固定bootstrap。生成処理の実装はEngineと共用する。 -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{8ED4FB02-F212-4B26-B0CF-E6195E83A21D}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword><RootNamespace>ProjectGenerationTool</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\generated\outputs\ProjectGenerationTool\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\..\generated\obj\ProjectGenerationTool\$(Configuration)\</IntDir>
+    <TargetName>ProjectGenerationTool</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel><SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard><PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles>$(IntDir)InputFingerprint.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><Optimization>MaxSpeed</Optimization>
+      <PreprocessorDefinitions>NDEBUG;NOMINMAX;WIN32_LEAN_AND_MEAN;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/utf-8 /FS %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link><SubSystem>Console</SubSystem></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="ProjectGenerationTool.cpp" />
+    <ClCompile Include="..\..\project\engine\project\ProjectAccessLock.cpp" />
+    <ClCompile Include="..\..\project\engine\project\ProjectBuildSpecification.cpp" />
+    <ClCompile Include="..\..\project\engine\project\ProjectDescriptor.cpp" />
+    <ClCompile Include="..\..\project\engine\project\ProjectRegistry.cpp" />
+    <ClCompile Include="..\..\project\engine\project\ProjectSolutionGenerationService.cpp" />
+    <ClCompile Include="..\..\project\engine\project\SolutionGenerationEmitter.cpp" />
+    <ClCompile Include="..\..\project\engine\project\SolutionGenerationModel.cpp" />
+    <ClCompile Include="..\..\project\engine\project\SolutionGenerationTransaction.cpp" />
+    <ClCompile Include="..\..\project\engine\utility\StringUtility.cpp" />
+    <ClCompile Include="..\..\project\engine\base\EditorLocalization.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\project\engine\project\ProjectAccessLock.h" />
+    <ClInclude Include="..\..\project\engine\project\ProjectBuildSpecification.h" />
+    <ClInclude Include="..\..\project\engine\project\ProjectDescriptor.h" />
+    <ClInclude Include="..\..\project\engine\project\ProjectRegistry.h" />
+    <ClInclude Include="..\..\project\engine\project\ProjectSolutionGenerationService.h" />
+    <ClInclude Include="..\..\project\engine\project\SolutionGenerationEmitter.h" />
+    <ClInclude Include="..\..\project\engine\project\SolutionGenerationModel.h" />
+    <ClInclude Include="..\..\project\engine\project\SolutionGenerationTransaction.h" />
+    <ClInclude Include="..\..\project\engine\utility\StringUtility.h" />
+    <ClInclude Include="..\..\project\engine\base\EditorLocalization.h" />
+    <ClInclude Include="..\..\project\externals\nlohmann\json.hpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

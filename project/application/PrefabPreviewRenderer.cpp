@@ -1,4 +1,4 @@
-// 役割: Prefab DocumentをPreview専用Object3dへ同期し、全階層を描画する。
+// 役割: Prefab DocumentをPreview専用の既存3D/UI描画Systemへ同期し、全階層を描画する。
 #include "PrefabPreviewRenderer.h"
 
 #include "../engine/3d/Camera.h"
@@ -19,6 +19,9 @@
 #include "../engine/scene/SceneDocument.h"
 #include "../engine/scene/SceneEntityQuery.h"
 #include "../engine/scene/SceneTransformResolver.h"
+#include "scene/systems/rendering/SceneObjectSystem.h"
+#include "scene/systems/rendering/SceneUIRenderSystem.h"
+#include "scene/systems/text/SceneTextRenderSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,6 +75,8 @@ namespace {
 	}
 }
 
+PrefabPreviewRenderer::PrefabPreviewRenderer() = default;
+
 PrefabPreviewRenderer::~PrefabPreviewRenderer() {
 	Finalize();
 }
@@ -105,6 +110,10 @@ bool PrefabPreviewRenderer::Initialize(
 		return false;
 	}
 
+	uiObjects_ = std::make_unique<SceneObjectSystem>();
+	uiTexts_ = std::make_unique<SceneTextRenderSystem>();
+	uiTexts_->Initialize(dxCommon_, "PrefabUILayoutPreview");
+	uiRenderer_ = std::make_unique<SceneUIRenderSystem>();
 	camera_ = new Camera();
 	camera_->SetOrbitMode(true);
 	camera_->SetFovY(0.7f);
@@ -172,6 +181,31 @@ void PrefabPreviewRenderer::Render(
 		runtime.object->UpdateForCamera(camera_);
 	}
 
+	// Overlay用Display PSOをHDRへ向けない。複製内のCanvasだけをScene2Dへ写し、
+	// 元の表示先ごとに2段階で描く。元Document/保存値/Runtime描画順は変更しない。
+	SceneDocument uiDocument = document;
+	uint32_t legacyWidth = 1280, legacyHeight = 720;
+	for (const auto& entity : document.GetEntities()) if (const auto* canvas = SceneEntityQuery::FindComponent(entity, "UICanvas")) {
+		if(canvas->uiReferenceSize[0] && canvas->uiReferenceSize[1]) {
+			legacyWidth = canvas->uiReferenceSize[0]; legacyHeight = canvas->uiReferenceSize[1];
+		}
+		break;
+	}
+	for (auto& entity : uiDocument.GetEntities()) {
+		if (auto* text = SceneEntityQuery::FindComponent(entity, "TextRenderer"); text && text->textRenderSpace == "ScreenOverlay") {
+			// Legacy OverlayもHDR Previewに限り同じbitmap/位置規則をScene2D PSOで描く。
+			Text2DPlacement p = text->textHasPlacementProfiles ? text->textOverlayPlacement : Text2DPlacement{};
+			if (!text->textHasPlacementProfiles) {
+				const auto t = SceneTransformResolver::ResolveScene2DTransform(document, entity);
+				p.position={t.translate.x,t.translate.y}; p.rotation=t.rotate.z; p.scale={t.scale.x,t.scale.y};
+				p.pivot=text->textPivot; p.viewportAnchor=text->textViewportAnchor; p.sortingOrder=text->textSortingOrder;
+			}
+			p.position.x += p.viewportAnchor.x * legacyWidth; p.position.y += p.viewportAnchor.y * legacyHeight;
+			text->textScene2DPlacement=p; text->textHasPlacementProfiles=true; text->textRenderSpace="Scene2D";
+		}
+	}
+	uiObjects_->SyncSprites(&uiDocument);
+	uiTexts_->Sync(&uiDocument);
 	renderTarget_->Begin();
 	srvManager_->PreDraw();
 	Object3dCommon::GetInstance()->SetCommonRenderState();
@@ -184,10 +218,23 @@ void PrefabPreviewRenderer::Render(
 		runtime.object->Draw();
 	}
 	DrawEditorOverlays(document, ghostDocument, overlayOptions);
+	uiObjects_->DrawSprites(uiDocument, 0);
+	uiTexts_->DrawScene2D(uiDocument, legacyWidth, legacyHeight);
+	for (const char* space : { "Scene2D", "ScreenOverlay" }) {
+		for (auto& entity : uiDocument.GetEntities()) {
+			auto* canvas = SceneEntityQuery::FindComponent(entity, "UICanvas");
+			const auto* original = document.FindEntity(entity.id);
+			const auto* sourceCanvas = original ? SceneEntityQuery::FindComponent(*original, "UICanvas") : nullptr;
+			if (canvas && sourceCanvas) { canvas->enabled=sourceCanvas->enabled && sourceCanvas->uiRenderSpace==space; canvas->uiRenderSpace="Scene2D"; }
+		}
+		uiRenderer_->Draw(uiDocument, *uiObjects_, *uiTexts_, "Scene2D");
+	}
 	renderTarget_->End();
 }
 
 void PrefabPreviewRenderer::Finalize() {
+	if (uiTexts_) uiTexts_->Finalize();
+	uiRenderer_.reset(); uiTexts_.reset(); uiObjects_.reset();
 	models_.clear();
 	ghostModels_.clear();
 	delete camera_;

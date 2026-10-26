@@ -1,4 +1,4 @@
-// 役割: Prefab全階層を通常Sceneから分離したRenderTargetへ描画する。
+// 役割: Prefab全階層の3D/UIを通常Sceneから分離したRenderTargetへ描画する。
 #pragma once
 
 #include <cstdint>
@@ -17,6 +17,9 @@ class Object3d;
 class SceneDocument;
 class SceneRenderTarget;
 class SrvManager;
+class SceneObjectSystem;
+class SceneTextRenderSystem;
+class SceneUIRenderSystem;
 
 class PrefabPreviewRenderer final {
 public:
@@ -30,10 +33,12 @@ public:
 		bool showGrid = true;
 	};
 
-	PrefabPreviewRenderer() = default;
+	PrefabPreviewRenderer();
 	~PrefabPreviewRenderer();
 
 	bool Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
+	// Documentはこの呼出し中だけ借用する。既存描画SystemのPreview専用資源へ同期し、
+	// UIは制作座標で描く。Event/Simulation/演出時計を進めず、原本へ書き戻さない。
 	void Render(
 		const std::string& assetPath,
 		const SceneDocument& document,
@@ -72,6 +77,10 @@ private:
 		const OverlayOptions& options
 	);
 
+	// Preview専用の既存描画System。Simulationは持たず、FinalizeでGPU借用元より先に破棄する。
+	std::unique_ptr<SceneObjectSystem> uiObjects_;
+	std::unique_ptr<SceneTextRenderSystem> uiTexts_;
+	std::unique_ptr<SceneUIRenderSystem> uiRenderer_;
 	DirectXCommon* dxCommon_ = nullptr;
 	SrvManager* srvManager_ = nullptr;
 	SceneRenderTarget* renderTarget_ = nullptr;

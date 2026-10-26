@@ -1137,6 +1137,8 @@ namespace {
 		json result = json::array();
 		for (const SceneEventBinding& binding : bindings) {
 			result.push_back({
+				{ "executionDomain", binding.executionDomain },
+				{ "uiInputScope", binding.uiInputScope },
 				{ "triggerType", binding.triggerType },
 				{ "triggerKey", binding.triggerKey },
 				{ "targetEntityId", binding.targetEntityId },
@@ -1404,6 +1406,18 @@ namespace {
 			result["skyboxIntensity"] = component.environmentSkyboxIntensity;
 			result["reflectionIntensity"] =
 				component.environmentReflectionIntensity;
+		} else if (component.type == "UICanvas") {
+			result["referenceSize"] = component.uiReferenceSize;
+			result["renderSpace"] = component.uiRenderSpace;
+			result["sortingOrder"] = component.uiCanvasSortingOrder;
+		} else if (component.type == "UITransform") {
+			result["position"] = VectorToJson(component.uiPosition);
+			result["size"] = VectorToJson(component.uiSize);
+			result["anchor"] = VectorToJson(component.uiAnchor);
+			result["pivot"] = VectorToJson(component.uiPivot);
+			result["rotation"] = component.uiRotation;
+			result["scale"] = VectorToJson(component.uiScale);
+			result["sortingOrder"] = component.uiSortingOrder;
 		} else if (component.type == "SpriteRenderer") {
 			result["texturePath"] = component.texturePath;
 			result["size"] = VectorToJson(component.spriteSize);
@@ -1797,6 +1811,26 @@ namespace {
 			result["stats"] = StatsToJson(component.stats);
 		} else if (component.type == "EventTrigger") {
 			result["bindings"] = EventsToJson(component.eventBindings);
+		} else if (component.type == "MenuPanel") {
+			result["initiallyOpen"] = component.menuInitiallyOpen;
+			result["layoutMode"] = component.menuLayoutMode;
+			result["inputMode"] = component.menuInputMode;
+			result["itemEntityIds"] = component.menuItemEntityIds;
+			result["initialItemEntityId"] = component.menuInitialItemEntityId;
+			result["navigationAxis"] = component.menuNavigationAxis;
+			result["cancelMode"] = component.menuCancelMode;
+			result["cancelItemEntityId"] = component.menuCancelItemEntityId;
+		} else if (component.type == "MenuItem") {
+			result["interactable"] = component.menuInteractable;
+			result["labelEntityId"] = component.menuLabelEntityId;
+			result["textPadding"] = VectorToJson(component.menuTextPadding);
+			result["textOffset"] = VectorToJson(component.menuTextOffset);
+			result["selectionMarkerEntityId"] = component.menuSelectionMarkerEntityId;
+			result["selectedTextColorEnabled"] = component.menuSelectedTextColorEnabled;
+			result["selectedTextColor"] = VectorToJson(component.menuSelectedTextColor);
+		} else if (component.type == "GamePause") {
+			result["pausePanelEntityId"] = component.gamePausePanelEntityId;
+			result["pauseBgm"] = component.gamePauseBgm;
 		} else if (component.type == "PostProcessProfileManager") {
 			result["profiles"] = PostProcessProfilesToJson(
 				component.postProcessProfiles
@@ -1937,6 +1971,19 @@ namespace {
 		}
 	}
 
+	// 新Menu/UI参照は小数や負数を既存Entity IDへ変換しない。
+	// json例外は既存Load経路で診断され、旧Gameplay参照の読込規則は維持する。
+	uint64_t ReadMenuEntityId(const json& value) {
+		if (value.is_number_unsigned()) return value.get<uint64_t>();
+		if (value.is_number_integer() && value.get<int64_t>() >= 0) return value.get<uint64_t>();
+		throw json::type_error::create(302, "Menu/UI Entity ID must be a non-negative integer", &value);
+	}
+
+	uint64_t ReadMenuEntityId(const json& value, const char* key, uint64_t fallback) {
+		const auto found = value.find(key);
+		return found == value.end() ? fallback : ReadMenuEntityId(*found);
+	}
+
 	SceneEventAction ReadEventAction(const json& value) {
 		SceneEventAction action{};
 		if (!value.is_object()) {
@@ -1946,6 +1993,12 @@ namespace {
 		action.targetEntityId = value.value(
 			"targetEntityId", action.targetEntityId
 		);
+		if (action.type == "OpenMenu" || action.type == "CloseMenu" ||
+			action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" ||
+			action.type == "ConfirmMenuItem" || action.type == "CancelMenu" ||
+			action.type == "PauseGame" || action.type == "ResumeGame") {
+			action.targetEntityId = ReadMenuEntityId(value, "targetEntityId", action.targetEntityId);
+		}
 		action.targetEntityName = value.value(
 			"targetEntityName", action.targetEntityName
 		);
@@ -1995,6 +2048,8 @@ namespace {
 				continue;
 			}
 			SceneEventBinding binding{};
+			binding.executionDomain = value.value("executionDomain", binding.executionDomain);
+			binding.uiInputScope = value.value("uiInputScope", binding.uiInputScope);
 			binding.triggerType = value.value(
 				"triggerType", binding.triggerType
 			);
@@ -2002,6 +2057,9 @@ namespace {
 			binding.targetEntityId = value.value(
 				"targetEntityId", binding.targetEntityId
 			);
+			if (binding.executionDomain == "UI") {
+				binding.targetEntityId = ReadMenuEntityId(value, "targetEntityId", binding.targetEntityId);
+			}
 			binding.targetEntityName = value.value(
 				"targetEntityName", binding.targetEntityName
 			);
@@ -2030,10 +2088,18 @@ namespace {
 			binding.presentationClipName = value.value(
 				"presentationClipName", binding.presentationClipName
 			);
+			if (binding.executionDomain == "UI" && value.contains("actions") && !value.at("actions").is_array()) {
+				throw json::type_error::create(302, "UI actions must be an array", &value.at("actions"));
+			}
 			if (const auto actions = value.find("actions");
 				actions != value.end() && actions->is_array()) {
 				for (const json& action : *actions) {
-					binding.actions.push_back(ReadEventAction(action));
+					SceneEventAction parsedAction = ReadEventAction(action);
+					if (binding.executionDomain == "UI") {
+						if (!action.is_object()) throw json::type_error::create(302, "UI action must be an object", &action);
+						parsedAction.targetEntityId = ReadMenuEntityId(action, "targetEntityId", parsedAction.targetEntityId);
+					}
+					binding.actions.push_back(std::move(parsedAction));
 				}
 			}
 			destination.push_back(std::move(binding));
@@ -2443,6 +2509,15 @@ namespace {
 				);
 			}
 		}
+		// Scene複製/Prefab往復の全入口で、Menu内部参照も同じID mapへ追従する。
+		for (uint64_t& itemId : component.menuItemEntityIds) {
+			itemId = RemapEntityId(itemId, idMap, preserveUnmappedIds);
+		}
+		component.menuInitialItemEntityId = RemapEntityId(component.menuInitialItemEntityId, idMap, preserveUnmappedIds);
+		component.menuCancelItemEntityId = RemapEntityId(component.menuCancelItemEntityId, idMap, preserveUnmappedIds);
+		component.menuLabelEntityId = RemapEntityId(component.menuLabelEntityId, idMap, preserveUnmappedIds);
+		component.menuSelectionMarkerEntityId = RemapEntityId(component.menuSelectionMarkerEntityId, idMap, preserveUnmappedIds);
+		component.gamePausePanelEntityId = RemapEntityId(component.gamePausePanelEntityId, idMap, preserveUnmappedIds);
 		for (ScenePrefabAnimationClip& clip : component.prefabAnimationClips) {
 			for (SceneAnimationTrack& track : clip.tracks) {
 				track.targetEntityId = RemapEntityId(
@@ -2473,6 +2548,65 @@ namespace {
 		}
 	}
 
+	// 新UI値は不正な型/桁落ちを旧Vector fallbackへ隠さず、読込エラーとして返す。
+	Vector2 ReadUIVector(const json& value, const char* key, const Vector2& fallback) {
+		const auto found = value.find(key);
+		if (found == value.end()) return fallback;
+		if (!found->is_array() || found->size() != 2 ||
+			!(*found)[0].is_number() || !(*found)[1].is_number()) {
+			throw json::type_error::create(302, std::string("UI field requires a numeric pair: ") + key, &value);
+		}
+		const Vector2 result{ (*found)[0].get<float>(), (*found)[1].get<float>() };
+		if (!std::isfinite(result.x) || !std::isfinite(result.y)) {
+			throw json::type_error::create(302, std::string("UI field must be finite: ") + key, &value);
+		}
+		return result;
+	}
+
+	int ReadUIOrder(const json& value, int fallback) {
+		const auto found = value.find("sortingOrder");
+		if (found == value.end()) return fallback;
+		if (!found->is_number_integer() ||
+			(found->is_number_unsigned() && found->get<uint64_t>() > static_cast<uint64_t>((std::numeric_limits<int>::max)())) ||
+			(!found->is_number_unsigned() && (found->get<int64_t>() < (std::numeric_limits<int>::min)() ||
+				found->get<int64_t>() > (std::numeric_limits<int>::max)()))) {
+			throw json::type_error::create(302, "UI sortingOrder requires an int", &value);
+		}
+		return found->get<int>();
+	}
+
+	void ReadUIFields(const json& value, SceneComponent& component) {
+		if (component.type == "UICanvas") {
+			if (const auto found = value.find("referenceSize"); found != value.end()) {
+				if (!found->is_array() || found->size() != 2) {
+					throw json::type_error::create(302, "UICanvas referenceSize requires two positive integers", &value);
+				}
+				for (size_t index = 0; index < 2; ++index) {
+					const json& dimension = (*found)[index];
+					if (!dimension.is_number_integer() ||
+						(!dimension.is_number_unsigned() && dimension.get<int64_t>() <= 0) ||
+						dimension.get<uint64_t>() == 0 || dimension.get<uint64_t>() > (std::numeric_limits<uint32_t>::max)()) {
+						throw json::type_error::create(302, "UICanvas referenceSize is outside positive uint32 range", &value);
+					}
+					component.uiReferenceSize[index] = dimension.get<uint32_t>();
+				}
+			}
+			component.uiRenderSpace = value.value("renderSpace", component.uiRenderSpace);
+			component.uiCanvasSortingOrder = ReadUIOrder(value, component.uiCanvasSortingOrder);
+		} else if (component.type == "UITransform") {
+			component.uiPosition = ReadUIVector(value, "position", component.uiPosition);
+			component.uiSize = ReadUIVector(value, "size", component.uiSize);
+			component.uiAnchor = ReadUIVector(value, "anchor", component.uiAnchor);
+			component.uiPivot = ReadUIVector(value, "pivot", component.uiPivot);
+			component.uiScale = ReadUIVector(value, "scale", component.uiScale);
+			component.uiRotation = value.value("rotation", component.uiRotation);
+			if (!std::isfinite(component.uiRotation)) {
+				throw json::type_error::create(302, "UITransform rotation must be finite", &value);
+			}
+			component.uiSortingOrder = ReadUIOrder(value, component.uiSortingOrder);
+		}
+	}
+
 	std::vector<SceneComponent> ComponentsFromJson(const json& source) {
 		std::vector<SceneComponent> components;
 		if (!source.is_array()) {
@@ -2486,6 +2620,7 @@ namespace {
 				component.localId = value.value("localId", uint64_t{});
 				component.type = value.value("type", std::string{});
 				component.enabled = value.value("enabled", true);
+				ReadUIFields(value, component);
 				component.modelPath = value.value("modelPath", std::string{});
 				component.meshCullMode = value.value(
 					"cullMode",
@@ -3711,6 +3846,47 @@ namespace {
 				}
 				if (component.type == "EventTrigger" && value.contains("bindings")) {
 					ReadEvents(value.at("bindings"), component.eventBindings);
+				}
+				if (component.type == "MenuPanel") {
+					component.menuInitiallyOpen = value.value("initiallyOpen", component.menuInitiallyOpen);
+					component.menuLayoutMode = value.value("layoutMode", component.menuLayoutMode);
+					component.menuInputMode = value.value("inputMode", component.menuInputMode);
+					if (value.contains("itemEntityIds")) {
+						const json& ids = value.at("itemEntityIds");
+						if (!ids.is_array()) throw json::type_error::create(302, "MenuPanel itemEntityIds must be an array", &ids);
+						component.menuItemEntityIds.clear();
+						for (const json& id : ids) component.menuItemEntityIds.push_back(ReadMenuEntityId(id));
+					}
+					component.menuInitialItemEntityId = ReadMenuEntityId(value, "initialItemEntityId", component.menuInitialItemEntityId);
+					component.menuNavigationAxis = value.value("navigationAxis", component.menuNavigationAxis);
+					component.menuCancelMode = value.value("cancelMode", component.menuCancelMode);
+					component.menuCancelItemEntityId = ReadMenuEntityId(value, "cancelItemEntityId", component.menuCancelItemEntityId);
+				}
+				if (component.type == "MenuItem") {
+					component.menuInteractable = value.value("interactable", component.menuInteractable);
+					component.menuLabelEntityId = ReadMenuEntityId(value, "labelEntityId", component.menuLabelEntityId);
+					for (const char* key : {"textPadding", "textOffset"}) {
+						if (!value.contains(key)) continue;
+						const auto& pair = value.at(key);
+						if (!pair.is_array() || pair.size() != 2 || !pair[0].is_number() || !pair[1].is_number())
+							throw json::type_error::create(302, "MenuItem text placement requires two numbers", &pair);
+						const Vector2 vector{pair[0].get<float>(), pair[1].get<float>()};
+						if (std::string(key) == "textPadding") component.menuTextPadding = vector;
+						else component.menuTextOffset = vector;
+					}
+					component.menuSelectionMarkerEntityId = ReadMenuEntityId(value, "selectionMarkerEntityId", component.menuSelectionMarkerEntityId);
+					component.menuSelectedTextColorEnabled = value.value("selectedTextColorEnabled", component.menuSelectedTextColorEnabled);
+					if (value.contains("selectedTextColor")) {
+						const json& color = value.at("selectedTextColor");
+						if (!color.is_array() || color.size() != 4 || !std::all_of(color.begin(), color.end(), [](const json& channel) { return channel.is_number(); })) {
+							throw json::type_error::create(302, "MenuItem selectedTextColor must contain four numbers", &color);
+						}
+						component.menuSelectedTextColor = JsonToVector(value.at("selectedTextColor"), component.menuSelectedTextColor);
+					}
+				}
+				if (component.type == "GamePause") {
+					component.gamePausePanelEntityId = ReadMenuEntityId(value, "pausePanelEntityId", component.gamePausePanelEntityId);
+					component.gamePauseBgm = value.value("pauseBgm", component.gamePauseBgm);
 				}
 				if (component.type == "AudioSource") {
 					component.audioClipPath = value.value("clipPath", component.audioClipPath);

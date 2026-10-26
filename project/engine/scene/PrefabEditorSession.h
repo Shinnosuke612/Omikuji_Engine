@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "SceneDocument.h"
+#include "SceneMenuLayout.h"
 
 class PrefabEditorSession final {
 public:
@@ -33,6 +34,7 @@ private:
 
 	SceneDocument document_;
 	SceneDocument frameStartDocument_;
+	SceneMenuLayout::EditorOrderCache menuOrderCache_;
 	std::string filePath_;
 	std::string lastError_;
 	bool open_ = false;

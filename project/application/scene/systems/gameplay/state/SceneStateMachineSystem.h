@@ -1,5 +1,6 @@
 // 役割: StateMachine ComponentとC++で登録された行動をEntity単位で実行する。
 #pragma once
+#include <unordered_set>
 
 #include <cstdint>
 #include <functional>
@@ -73,7 +74,8 @@ private:
 		ScenePrefabAnimationSystem& prefabAnimationSystem,
 		const SceneStateDefinition& state,
 		float stateTime,
-		std::string& requestedState
+		std::string& requestedState,
+		bool acceptGameplayInput
 	);
 
 	SceneDocument& document_;
@@ -85,6 +87,7 @@ private:
 	const SceneStateDefinition& state_;
 	float stateTime_ = 0.0f;
 	std::string& requestedState_;
+	bool acceptGameplayInput_ = true;
 };
 
 class IEntityStateAction {
@@ -118,13 +121,16 @@ private:
 class SceneStateMachineSystem {
 public:
 	SceneStateMachineSystem();
+	// blocked ownerはEnter/時刻更新を保留。acceptGameplayInput=falseは入力queryだけを遮断し時計は継続する。
 	void Update(
 		SceneDocument& document,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		Player* player,
 		SceneAttackRunnerSystem& attackRunnerSystem,
 		ScenePrefabAnimationSystem& prefabAnimationSystem,
-		float deltaTime
+		float deltaTime,
+		const std::unordered_set<uint64_t>& blockedEntityIds = {},
+		bool acceptGameplayInput = true
 	);
 	bool RequestState(uint64_t entityId, const std::string& stateName);
 	const std::string* GetCurrentState(uint64_t entityId) const;

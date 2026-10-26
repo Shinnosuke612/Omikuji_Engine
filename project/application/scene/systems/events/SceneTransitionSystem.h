@@ -8,5 +8,6 @@ class SceneDocument;
 // 状態を保持せず、入力条件を満たした遷移先Scene IDだけを返す。
 class SceneTransitionSystem {
 public:
-	std::string Update(const SceneDocument& document) const;
+	// 入力遮断中はKey遷移だけを評価しない。旧callerの既定動作は維持する。
+	std::string Update(const SceneDocument& document, bool acceptGameplayInput = true) const;
 };

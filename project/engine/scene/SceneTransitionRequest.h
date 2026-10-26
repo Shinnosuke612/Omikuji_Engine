@@ -4,11 +4,20 @@
 #include <string>
 
 #include "SceneEntityReference.h"
+#include "SceneMenuRuntime.h"
 
 struct PresentedTransitionRequest {
 	SceneInstanceId sourceInstanceId = kInvalidSceneInstanceId;
 	std::string destinationSceneId;
 	std::string transitionAssetPath;
+	SceneMenuSource uiSource; // 既定無効。従来のGameplay遷移には結果を返さない。
+};
+
+enum class SceneUiTransitionStatus { Accepted, Failed };
+struct SceneUiTransitionOutcome {
+	SceneMenuSource source;
+	SceneUiTransitionStatus status = SceneUiTransitionStatus::Failed;
+	std::string diagnostic;
 };
 
 enum class SceneLoadStatus {

@@ -393,7 +393,8 @@ bool SolutionGenerationEmitter::EmitPreview(const SolutionGenerationModel& model
 
 std::string SolutionGenerationEmitter::ComputeInputIdentity(const SolutionGenerationModel& model) const {
 	std::ostringstream input;
-	input << (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? "cg3.solution-generation/input/v10\nlayout=project-files-v2\n" : "cg3.solution-generation/input/v9\nlayout=grouped-v1\n");
+	input << (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? "cg3.solution-generation/input/v11\nlayout=project-files-v2\n" : "cg3.solution-generation/input/v9\nlayout=grouped-v1\n");
+	if (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2) input << "policy=" << kPolicyRevision << '\n';
 	std::error_code relativeError;
 	const std::filesystem::path artifactRelativeDirectory = std::filesystem::relative(model.artifactDirectory, model.projectRoot, relativeError).lexically_normal();
 	if (!relativeError) {

@@ -47,8 +47,10 @@ namespace {
 }
 
 std::string SceneTransitionSystem::Update(
-	const SceneDocument& document
+	const SceneDocument& document,
+	bool acceptGameplayInput
 ) const {
+	if (!acceptGameplayInput) return {};
 	Input* input = Input::GetInstance();
 	if (!input) {
 		return {};

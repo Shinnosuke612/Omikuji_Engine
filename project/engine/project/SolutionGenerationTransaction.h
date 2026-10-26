@@ -25,11 +25,12 @@ enum class SolutionGenerationRecoveryResult {
 	RecoveryRequired
 };
 
+// 変更操作は内部でもProject leaseを取得する。ServiceはStage～Commit全体の外側leaseを保持する。
 class SolutionGenerationTransaction {
 public:
 	// previewと既存manifestを照合し、commit前のjournalだけをLocal Registryへ保存する。
 	bool Stage(const SolutionGenerationTransactionRequest& request, ProjectRegistry& registry, std::string& errorMessage) const;
-	// journal済みowned artifactだけをfinal pathへ移動する。Launcherが明示採用を許可した時だけ呼び出す。
+	// journal済みowned artifactだけを移動する。明示手動操作か、検証済み自動要求から呼ぶ。
 	bool Commit(const std::string& operationId, ProjectRegistry& registry, std::string& errorMessage) const;
 	bool CanCommit(const std::string& operationId, const ProjectRegistry& registry, std::string& errorMessage) const;
 	bool ResumeCommit(const std::string& operationId, ProjectRegistry& registry, std::string& errorMessage) const;

@@ -37,6 +37,9 @@ public:
 		uint32_t width = 0;
 		uint32_t height = 0;
 		std::vector<uint8_t> bgraPixels;
+		// 制作座標での文章枠とbitmap内原点。UI配置の基点へ輪郭/影の余白を混ぜない。
+		Vector2 layoutSize{};
+		Vector2 layoutOrigin{};
 
 		bool IsValid() const {
 			return width > 0 && height > 0 && !bgraPixels.empty();

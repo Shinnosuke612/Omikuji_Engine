@@ -1,5 +1,6 @@
 // 役割: Project登録と生成・作成journalの保存互換と検証を管理する。
 #include "ProjectRegistry.h"
+#include "ProjectAccessLock.h"
 #include "../utility/StringUtility.h"
 
 #include "../../externals/nlohmann/json.hpp"
@@ -10,11 +11,73 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <map>
+#include <stdexcept>
 #include <set>
 #include <vector>
+#include <utility>
 
 namespace {
 	using json = nlohmann::json;
+
+
+	// 配列の順序は最新Registryを優先し、新規項目だけ末尾へ追加する。
+	std::string EntryKey(const std::string& field, const json& entry) {
+		if (field == "operations" || field == "solutionGenerationOperations") return entry.at("operationId").get<std::string>();
+		if (field == "dependencyOverrides") return json::array({ entry.at("projectId"), entry.at("dependencyId") }).dump();
+		const auto path = StringUtility::ToPath(field == "projects" ? entry.at("descriptorPath").get<std::string>() : entry.get<std::string>()).lexically_normal();
+		const auto native = path.native();
+		const int size = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, native.data(), static_cast<int>(native.size()), nullptr, 0, nullptr, nullptr, 0);
+		if (size <= 0) throw std::runtime_error("Registry path identity could not be normalized.");
+		std::wstring normalized(static_cast<size_t>(size), L'\0');
+		if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, native.data(), static_cast<int>(native.size()), normalized.data(), size, nullptr, nullptr, 0) != size)
+			throw std::runtime_error("Registry path identity could not be normalized.");
+		return StringUtility::ConvertString(normalized);
+	}
+
+	bool MergeRegistry(const json& baseline, const json& local, const json& disk, json& merged, std::string& error) {
+		merged = disk;
+		for (const auto& item : local.items()) {
+			const auto& field = item.key();
+			const json& before = baseline.at(field);
+			const json& ours = item.value();
+			const json& theirs = disk.at(field);
+			if (ours == before) continue;
+			if (!ours.is_array()) {
+				if (theirs != before && theirs != ours) {
+					ReportProjectAccessIssue(ProjectAccessIssue::RegistryConflict);
+					error = "Project Registry field changed in another process: " + field + ". Refresh before retrying.";
+					return false;
+				}
+				merged[field] = ours;
+				continue;
+			}
+			std::map<std::string, json> oldEntries, ourEntries, diskEntries;
+			std::vector<std::string> order;
+			for (const auto& entry : before) oldEntries.emplace(EntryKey(field, entry), entry);
+			for (const auto& entry : theirs) { const auto key = EntryKey(field, entry); diskEntries.emplace(key, entry); order.push_back(key); }
+			for (const auto& entry : ours) {
+				const auto key = EntryKey(field, entry); ourEntries.emplace(key, entry);
+				if (!diskEntries.contains(key)) order.push_back(key);
+			}
+			json values = json::array();
+			for (const auto& key : order) {
+				const json old = oldEntries.contains(key) ? oldEntries.at(key) : json();
+				const json own = ourEntries.contains(key) ? ourEntries.at(key) : json();
+				const json current = diskEntries.contains(key) ? diskEntries.at(key) : json();
+				const bool changed = own != old;
+				if (changed && current != old && current != own) {
+					ReportProjectAccessIssue(ProjectAccessIssue::RegistryConflict);
+					error = "Project Registry entry changed in another process: " + field + ". Refresh before retrying.";
+					return false;
+				}
+				const json& chosen = changed ? own : current;
+				if (!chosen.is_null()) values.push_back(chosen);
+			}
+			merged[field] = std::move(values);
+		}
+		return true;
+	}
 
 	bool ReadUtf8File(const std::filesystem::path& path, std::string& output) {
 		std::ifstream input(path, std::ios::binary);
@@ -57,6 +120,12 @@ namespace {
 		}
 		std::filesystem::path temporary = target;
 		temporary += L".tmp";
+		const DWORD temporaryAttributes = GetFileAttributesW(temporary.c_str());
+		if (temporaryAttributes != INVALID_FILE_ATTRIBUTES && (temporaryAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+			ReportProjectAccessIssue(ProjectAccessIssue::UnsafePath);
+			errorMessage = "Project Registry temporary path is unsafe.";
+			return false;
+		}
 		{
 			std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
 			if (!output.is_open()) {
@@ -123,6 +192,7 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 		dependencyOverrides_.clear();
 		creationOperations_.clear();
 		solutionGenerationOperations_.clear();
+		baseline_ = Serialize();
 		return true;
 	}
 	std::string text;
@@ -130,6 +200,12 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 		errorMessage = "Project Registry could not be read.";
 		return false;
 	}
+	if (!LoadSnapshot(text, errorMessage)) return false;
+	baseline_ = Serialize();
+	return true;
+}
+
+bool ProjectRegistry::LoadSnapshot(const std::string& text, std::string& errorMessage) {
 	try {
 		const json root = json::parse(text);
 		if (!HasOnlyFields(root, { "dependencyOverrides", "operations", "preferredVisualStudioInstanceId", "projects", "schemaVersion", "solutionGenerationOperations", "templateSourceRoot", "workspaceRoots" }) ||
@@ -325,10 +401,7 @@ bool ProjectRegistry::Load(const std::filesystem::path& registryPath, std::strin
 	}
 }
 
-bool ProjectRegistry::Save(std::string& errorMessage) const {
-	if (!Validate(errorMessage)) {
-		return false;
-	}
+std::string ProjectRegistry::Serialize() const {
 	json projects = json::array();
 	for (const ProjectRegistryEntry& entry : projects_) {
 		projects.push_back({ { "descriptorPath", StringUtility::ToUtf8(entry.descriptorPath) }, { "lastOpenedUtc", entry.lastOpenedUtc }, { "pinned", entry.pinned } });
@@ -389,7 +462,54 @@ bool ProjectRegistry::Save(std::string& errorMessage) const {
 		{ "templateSourceRoot", StringUtility::ToUtf8(templateSourceRoot_) },
 		{ "workspaceRoots", workspaceRoots }
 	};
-	return WriteUtf8Atomically(registryPath_, root.dump(2) + "\n", errorMessage);
+	return root.dump(2) + "\n";
+}
+
+
+bool ProjectRegistry::Save(std::string& errorMessage) const {
+	if (!Validate(errorMessage)) return false;
+	if (baseline_.empty()) { ReportProjectAccessIssue(ProjectAccessIssue::InvalidRegistry); errorMessage = "Project Registry must be loaded before saving."; return false; }
+	ProjectAccessLock lock;
+	if (!lock.TryRegistry(registryPath_, errorMessage)) return false;
+	ProjectRegistry latest;
+	if (!latest.Load(registryPath_, errorMessage)) return false;
+	try {
+		const std::string local = Serialize();
+		json merged;
+		if (!MergeRegistry(json::parse(baseline_), json::parse(local), json::parse(latest.baseline_), merged, errorMessage)) return false;
+		ProjectRegistry checked = latest;
+		const std::string next = merged.dump(2) + "\n";
+		if (!checked.LoadSnapshot(next, errorMessage)) return false;
+		// 他writerから取り込んでいない値を、次回Saveでローカルの削除扱いにしない。
+		if (merged != json::parse(latest.baseline_) && !WriteUtf8Atomically(registryPath_, next, errorMessage)) return false;
+		baseline_ = local;
+		return true;
+	} catch (const std::exception&) {
+		ReportProjectAccessIssue(ProjectAccessIssue::InvalidRegistry);
+		errorMessage = "Project Registry merge could not be validated.";
+		return false;
+	}
+}
+
+bool ProjectRegistry::Refresh(std::string& errorMessage) {
+	if (baseline_.empty()) return Load(registryPath_, errorMessage);
+	ProjectAccessLock lock;
+	if (!lock.TryRegistry(registryPath_, errorMessage)) return false;
+	ProjectRegistry latest;
+	if (!latest.Load(registryPath_, errorMessage)) return false;
+	try {
+		json merged;
+		if (!MergeRegistry(json::parse(baseline_), json::parse(Serialize()), json::parse(latest.baseline_), merged, errorMessage)) return false;
+		ProjectRegistry refreshed = latest;
+		if (!refreshed.LoadSnapshot(merged.dump(), errorMessage)) return false;
+		// baselineはdisk値。未保存の変更は次のSaveでもローカル差分として残る。
+		*this = std::move(refreshed);
+		return true;
+	} catch (const std::exception&) {
+		ReportProjectAccessIssue(ProjectAccessIssue::InvalidRegistry);
+		errorMessage = "Project Registry refresh could not be validated.";
+		return false;
+	}
 }
 
 bool ProjectRegistry::Validate(std::string& errorMessage) const {

@@ -4,8 +4,10 @@
 #include "../../engine/scene/SceneManager.h"
 #include "../../engine/scene/SceneExecutionContext.h"
 #include "../../engine/scene/SceneDocument.h"
+#include "../../engine/scene/SceneEntityQuery.h"
 #include "../../engine/3d/SrvManager.h"
 #include "../../engine/base/DirectXCommon.h"
+#include "../../engine/utility/Logger.h"
 
 #include "../../engine/3d/Camera.h"
 #include "../../engine/3d/Object3dCommon.h"
@@ -13,8 +15,18 @@
 #include "../../engine/math/Math.h"
 #include "../../engine/particle/ParticleManager.h"
 #include "../player/Player.h"
+#include <algorithm>
+#include <utility>
 
 namespace {
+	bool UiEntityActive(const SceneDocument& document, const SceneEntity* entity) {
+		for (size_t depth = 0; entity && entity->active && depth <= document.GetEntities().size(); ++depth) {
+			if (!entity->parentId) return true;
+			entity = document.FindEntity(entity->parentId);
+		}
+		return false;
+	}
+
 	Transform MakeRuntimeTransform(const QuaternionTransform& source) {
 		Transform result{};
 		result.scale = source.scale;
@@ -119,8 +131,15 @@ void RuntimeScene::DrawPreparedSceneContentForView(
 		textRenderSystem_.DrawScene2D(
 			*document,
 			dxCommon->GetClientWidth(),
-			dxCommon->GetClientHeight()
+			dxCommon->GetClientHeight(),
+			sceneManager_ && sceneManager_->IsDrawingEditorUIView()
 		);
+		// UI投影は制作サイズを使い、現在のRenderTarget viewportが画面/Monitorへ拡縮する。
+		// 編集packetは明示されたUI編集Viewの描画中だけ使用する。
+		const auto* view = sceneManager_ && sceneManager_->IsDrawingEditorUIView() && skipEntityId == 0 &&
+			viewCamera == GetSceneViewCamera() ? GetEditorUIView() : nullptr;
+		if (view) DrawEditorUI(*view, "Scene2D");
+		else uiRenderSystem_.Draw(*document, objectSystem_, textRenderSystem_, "Scene2D", skipEntityId);
 	}
 }
 
@@ -217,6 +236,156 @@ void RuntimeScene::Initialize()
 
 }
 
+void RuntimeScene::ClearUiRuntime() {
+	menuSystem_.Clear(); eventSystem_.ClearMenuInput(); pendingMenuRequests_.clear(); deferredMenuPulses_.clear();
+	uiTransitionSource_ = {}; uiLoadReservation_ = kInvalidSceneInstanceId; uiControl_ = {};
+	uiTerminalAttempted_ = false;
+}
+void RuntimeScene::ReportMenuFailure(const std::string& detail) {
+	const auto* document = GetSceneDocument();
+	preparationDiagnostic_ = {ScenePreparationDiagnosticCode::InvalidReference, document ? document->GetContentGeneration() : 0,
+		menuSystem_.GetFrame().panelId, ++preparationDiagnosticSerial_, detail};
+	Logger::Log("[MenuRuntime] " + detail + "\n");
+}
+void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests) {
+	for (const auto& request : requests) {
+		if (uiTransitionSource_.requestSerial || uiTerminalAttempted_) break;
+		if (!menuSystem_.IsSourceValid(document, request.source)) continue;
+		const auto* owner = document.FindEntity(request.ownerEntityId);
+		if (!owner) continue;
+		if (request.origin == SceneUiActionRequest::Origin::PanelStandard) {
+			const auto* panel = SceneEntityQuery::FindEnabledComponent(*owner, "MenuPanel");
+			const auto& action = request.action;
+			if (!panel || panel->menuInputMode != "Standard" || owner->id != menuSystem_.GetFrame().panelId ||
+				request.source.panelId != owner->id || request.source.openSerial != menuSystem_.GetFrame().openSerial ||
+				action.targetEntityId != owner->id || (action.type != "SelectPreviousMenuItem" && action.type != "SelectNextMenuItem" &&
+					action.type != "ConfirmMenuItem" && action.type != "CancelMenu")) continue;
+		} else if (!SceneEntityQuery::FindEnabledComponent(*owner, "EventTrigger")) continue;
+		if (!UiEntityActive(document, owner)) continue;
+		uiControl_.blockGameplayInput = true;
+		const auto& action = request.action;
+		const auto before = menuSystem_.GetSource();
+		SceneMenuCommandType type{};
+		bool menuCommand = true;
+		if (action.type == "OpenMenu") type = SceneMenuCommandType::Open;
+		else if (action.type == "CloseMenu") type = SceneMenuCommandType::Close;
+		else if (action.type == "SelectPreviousMenuItem") type = SceneMenuCommandType::Previous;
+		else if (action.type == "SelectNextMenuItem") type = SceneMenuCommandType::Next;
+		else if (action.type == "ConfirmMenuItem") type = SceneMenuCommandType::Confirm;
+		else if (action.type == "CancelMenu") type = SceneMenuCommandType::Cancel;
+		else menuCommand = false;
+		if (menuCommand) {
+			if (!menuSystem_.Apply(document, SceneMenuCommand{request.source, type, action.targetEntityId})) {
+				const auto issue = menuSystem_.ConsumeDiagnostic();
+				ReportMenuFailure(issue.empty() ? "MenuRuntime:InvalidPanel" : issue);
+			}
+		} else if (action.type == "SceneTransition") {
+			uiTerminalAttempted_ = true;
+			auto source = request.source; source.requestSerial = nextUiTransitionSerial_++;
+			bool accepted = false;
+			if (!action.sceneId.empty() && action.transitionAssetPath.empty()) {
+				uiLoadReservation_ = sceneManager_->RequestUiSceneTransition(source, action.sceneId);
+				accepted = uiLoadReservation_ != kInvalidSceneInstanceId;
+			} else if (!action.sceneId.empty()) {
+				accepted = sceneManager_->RequestPresentedTransition({GetSceneInstanceId(), action.sceneId, action.transitionAssetPath, source});
+			}
+			if (accepted) { uiTransitionSource_ = source; eventSystem_.RearmMenuKeys(); }
+			else { eventSystem_.RearmMenuKeys(); ReportMenuFailure("MenuRuntime:TransitionFailed"); break; }
+		} else {
+			const auto* target = document.FindEntity(action.targetEntityId);
+			if (action.type == "PlayAudio" || action.type == "StopAudio" || action.type == "PauseAudio" || action.type == "ResumeAudio") {
+				if (!UiEntityActive(document, target) || !SceneEntityQuery::FindEnabledComponent(*target, "AudioSource")) { ReportMenuFailure("MenuRuntime:InvalidTarget"); continue; }
+				const auto kind = action.type == "PlayAudio" ? SceneAudioRequestType::Play : action.type == "StopAudio" ? SceneAudioRequestType::Stop :
+					action.type == "PauseAudio" ? SceneAudioRequestType::Pause : SceneAudioRequestType::Resume;
+				audioSystem_.ApplyRequests(document, {{kind, target->id}});
+			} else if (action.type == "PlayTextMotion" || action.type == "StopTextMotion" || action.type == "ResetTextMotion") {
+				if (!UiEntityActive(document, target) || !SceneEntityQuery::FindEnabledComponent(*target, "TextMotion")) { ReportMenuFailure("MenuRuntime:InvalidTarget"); continue; }
+				if (action.type == "PlayTextMotion") {
+					if (!textMotionSystem_.Play(document, target->id, action.textMotionClipId)) ReportMenuFailure("MenuRuntime:InvalidTarget");
+				} else if (action.type == "StopTextMotion") textMotionSystem_.Stop(target->id);
+				else textMotionSystem_.Reset(target->id);
+			} else ReportMenuFailure("MenuRuntime:UnsupportedAction " + action.type);
+		}
+		const auto after = menuSystem_.GetSource();
+		if (before.panelId != after.panelId || before.openSerial != after.openSerial) eventSystem_.RearmMenuKeys();
+	}
+}
+void RuntimeScene::ProcessMenuPulses(const SceneDocument& document, const std::vector<SceneMenuPulse>& pulses) {
+	// pulse順を固定し、Cancel通知が閉じたPanelの後続Confirmedを失効させる。
+	for (const auto& pulse : pulses) {
+		if (uiTransitionSource_.requestSerial || uiTerminalAttempted_ || !menuSystem_.IsSourceValid(document, pulse.source)) continue;
+		ApplyUiRequests(document, eventSystem_.EvaluateUiNotifications(document, {pulse}, 0.0f));
+		const auto before = menuSystem_.GetSource();
+		if (!uiTransitionSource_.requestSerial && !uiTerminalAttempted_) menuSystem_.CompleteCancel(document, pulse);
+		const auto after = menuSystem_.GetSource();
+		if (before.panelId != after.panelId || before.openSerial != after.openSerial) eventSystem_.RearmMenuKeys();
+	}
+	// 通知Actionが作った通知は次Frame。一つの出所/種類/Itemは一回に畳み、再帰を作らない。
+	for (const auto& pulse : menuSystem_.ConsumePulses()) {
+		const bool duplicate = std::any_of(deferredMenuPulses_.begin(), deferredMenuPulses_.end(), [&](const auto& old) {
+			return old.type == pulse.type && old.itemId == pulse.itemId && old.source.panelId == pulse.source.panelId &&
+				old.source.openSerial == pulse.source.openSerial && old.source.generation == pulse.source.generation;
+		});
+		if (!duplicate) deferredMenuPulses_.push_back(pulse);
+	}
+}
+void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
+	uiTerminalAttempted_ = false;
+	const auto* context = sceneManager_ ? sceneManager_->GetExecutionContext() : nullptr;
+	auto* document = GetSceneDocument();
+	const bool active = sceneManager_ && GetSceneInstanceId() == sceneManager_->GetActiveSceneInstanceId();
+	if (!document || !active || (context && context->IsEditing())) {
+		ClearUiRuntime(); textRenderSystem_.SetMenuColorOverrides({}); return;
+	}
+	if (menuSystem_.GetFrame().instanceId != GetSceneInstanceId() || menuSystem_.GetFrame().generation != document->GetContentGeneration()) ClearUiRuntime();
+	const auto oldTop = menuSystem_.GetSource();
+	menuSystem_.Sync(*document, GetSceneInstanceId());
+	uiControl_ = {GetSceneInstanceId(), document->GetContentGeneration(), oldTop.panelId != 0 || menuSystem_.GetFrame().panelId != 0 || uiTransitionSource_.requestSerial != 0};
+	const auto top = menuSystem_.GetSource();
+	if (oldTop.panelId != top.panelId || oldTop.openSerial != top.openSerial) eventSystem_.RearmMenuKeys();
+	if ((context && context->IsPaused()) || sceneManager_->IsTransitionHeld()) { eventSystem_.RearmMenuKeys(); return; }
+	if (uiTransitionSource_.requestSerial) {
+		bool failed = false; std::string diagnostic;
+		if (uiLoadReservation_ != kInvalidSceneInstanceId) {
+			SceneLoadOutcome outcome;
+			if (sceneManager_->ConsumeLoadOutcome(uiLoadReservation_, outcome)) { failed = outcome.status == SceneLoadStatus::Failed; diagnostic = outcome.diagnostic; }
+		} else {
+			SceneUiTransitionOutcome outcome;
+			if (sceneManager_->ConsumeUiTransitionOutcome(uiTransitionSource_, outcome)) { failed = outcome.status == SceneUiTransitionStatus::Failed; diagnostic = outcome.diagnostic; }
+		}
+		if (failed) {
+			uiTerminalAttempted_ = true;
+			uiTransitionSource_ = {}; uiLoadReservation_ = kInvalidSceneInstanceId; eventSystem_.RearmMenuKeys();
+			ReportMenuFailure("MenuRuntime:TransitionFailed " + diagnostic);
+		}
+	}
+	// 通知clockは一Frame一回。入力非許可中はUIのonce/cooldownを進めない。
+	eventSystem_.EvaluateUiNotifications(*document, {}, allowed ? deltaTime : 0.0f);
+	auto pending = std::exchange(pendingMenuRequests_, {});
+	ApplyUiRequests(*document, pending);
+	auto deferred = std::exchange(deferredMenuPulses_, {});
+	// Gameplay要求が生成した通知も、このprepassの一回評価へ含める。
+	auto pendingPulses = menuSystem_.ConsumePulses();
+	deferred.insert(deferred.end(), pendingPulses.begin(), pendingPulses.end());
+	ProcessMenuPulses(*document, deferred);
+	const auto input = eventSystem_.EvaluateUiInput(*document, menuSystem_.GetFrame(), deltaTime, allowed && !uiTransitionSource_.requestSerial && !uiTerminalAttempted_);
+	ApplyUiRequests(*document, input);
+	ProcessMenuPulses(*document, menuSystem_.ConsumePulses());
+	uiControl_.blockGameplayInput |= menuSystem_.GetFrame().panelId != 0 || uiTransitionSource_.requestSerial != 0;
+	if (const auto issue = menuSystem_.ConsumeDiagnostic(); !issue.empty()) ReportMenuFailure(issue);
+}
+void RuntimeScene::SyncMenuPresentation() {
+	const auto* context = sceneManager_ ? sceneManager_->GetExecutionContext() : nullptr;
+	auto* document = GetSceneDocument();
+	if (!document || !sceneManager_ || GetSceneInstanceId() != sceneManager_->GetActiveSceneInstanceId() || (context && context->IsEditing())) {
+		ClearUiRuntime(); textRenderSystem_.SetMenuColorOverrides({}); return;
+	}
+	// 通常Eventがactive/参照を変更した後、文字cache同期前に再検証する。キーは再評価しない。
+	menuSystem_.Sync(*document, GetSceneInstanceId());
+	textRenderSystem_.SetMenuColorOverrides(menuSystem_.GetFrame().textColors);
+	if (const auto issue = menuSystem_.ConsumeDiagnostic(); !issue.empty()) ReportMenuFailure(issue);
+}
+
 void RuntimeScene::Update(float deltaTime)
 {
 	SceneExecutionContext* executionContext = sceneManager_
@@ -245,10 +414,13 @@ void RuntimeScene::Update(float deltaTime)
 	// 遷移が成立したフレームは旧Sceneの状態をこれ以上変更しない。
 	if (playing && gameplayDeltaTime > 0.0f && activeDocument) {
 		const std::string targetSceneId =
-			transitionSystem_.Update(*activeDocument);
+			transitionSystem_.Update(*activeDocument, !uiGameplayInputBlocked_);
 		if (!targetSceneId.empty()) {
 			pendingPresentationRequests_.clear();
 			pendingPresentationDocumentGeneration_ = 0;
+			SyncMenuPresentation();
+			objectSystem_.SyncSprites(activeDocument);
+			textRenderSystem_.Sync(activeDocument);
 			sceneManager_->ChangeScene(targetSceneId);
 			return;
 		}
@@ -472,12 +644,13 @@ void RuntimeScene::Update(float deltaTime)
 			runtimeObjectBindings_,
 			deltaTime,
 			playing,
-			playing
+			playing,
+			!uiGameplayInputBlocked_
 		);
 	}
 	Vector3 playerAttackInputDirection{};
 	if (player_ && playing) {
-		player_->Update(camera_, gameFlowResult.gameplayAllowed);
+		player_->Update(camera_, gameFlowResult.gameplayAllowed && !uiGameplayInputBlocked_);
 		const Vector3& playerVelocity = player_->GetPhysicsBody().velocity;
 		playerAttackInputDirection = { playerVelocity.x, 0.0f, playerVelocity.z };
 		if (Math::Length(playerAttackInputDirection) > 0.0001f) {
@@ -492,7 +665,9 @@ void RuntimeScene::Update(float deltaTime)
 			player_,
 			attackRunnerSystem_,
 			prefabAnimationSystem_,
-			gameplayDeltaTime
+			gameplayDeltaTime,
+			{},
+			!uiGameplayInputBlocked_
 		);
 		attackRunnerSystem_.ApplyMotion(
 			*activeDocument,
@@ -559,7 +734,14 @@ void RuntimeScene::Update(float deltaTime)
 			hitReactionSystem_.ConsumeDeathEffectRequests()
 		);
 	}
-	objectSystem_.SyncSprites(activeDocument);
+	// 有効化は資源同期用の複製だけに行う。保存DocumentやRuntime overrideは変更しない。
+	SceneDocument editorResourceDocument;
+	SceneDocument* resourceDocument = activeDocument;
+	if (const auto* view = GetEditorUIView(); view && activeDocument) {
+		editorResourceDocument = *activeDocument;
+		view->PrepareDisplay(editorResourceDocument);
+		resourceDocument = &editorResourceDocument;
+	}
 	if (activeDocument) {
 		cameraSystem_.UpdateAfterSimulation(
 			*activeDocument,
@@ -568,7 +750,8 @@ void RuntimeScene::Update(float deltaTime)
 			runtimeObjectBindings_,
 			deltaTime,
 			playing,
-			playing
+			playing,
+			!uiGameplayInputBlocked_
 		);
 	} else if (camera_) {
 		camera_->Update();
@@ -607,7 +790,9 @@ void RuntimeScene::Update(float deltaTime)
 			statSystem_,
 			stateMachineSystem_,
 			gameplayDeltaTime,
-			eventSignals
+			eventSignals,
+			{},
+			!uiGameplayInputBlocked_
 		);
 		if (!eventResult.sceneTransitionId.empty()) {
 			// Capture前は現在のPose/Profileを保持する。拒否でも即時遷移へ落とさない。
@@ -619,10 +804,19 @@ void RuntimeScene::Update(float deltaTime)
 			pendingPresentationRequests_.clear();
 			pendingPresentationDocumentGeneration_ = 0;
 			postProcessProfileSystem_.Reset(activeDocument);
+			SyncMenuPresentation();
+			objectSystem_.SyncSprites(activeDocument);
+			textRenderSystem_.Sync(activeDocument);
 			sceneManager_->ChangeScene(eventResult.sceneTransitionId);
 			return;
 		}
 		pendingPresentationRequests_ = eventResult.presentationRequests;
+		if (sceneManager_ && GetSceneInstanceId() == sceneManager_->GetActiveSceneInstanceId()) {
+			for (auto request : eventResult.menuRequests) {
+				request.source = {GetSceneInstanceId(), activeDocument->GetContentGeneration(), activeDocument->GetRevision()};
+				pendingMenuRequests_.push_back(std::move(request));
+			}
+		}
 		pendingPresentationDocumentGeneration_ = activeDocument->GetContentGeneration();
 		for (const SceneTextMotionRequest& request : eventResult.textMotionRequests) {
 			if (request.type == SceneTextMotionRequestType::Play) {
@@ -690,7 +884,9 @@ void RuntimeScene::Update(float deltaTime)
 			presentation.opacityMultiplier
 		);
 	}
-	textRenderSystem_.Sync(activeDocument);
+	SyncMenuPresentation();
+	objectSystem_.SyncSprites(resourceDocument);
+	textRenderSystem_.Sync(resourceDocument);
 }
 
 void RuntimeScene::UpdateTransitionHold()
@@ -708,12 +904,17 @@ void RuntimeScene::UpdateTransitionHold()
 	lightingSystem_.Sync(document);
 	environmentSystem_.Sync(document, runtimeObjectBindings_);
 	// TextMotion/GameFlowの既存overrideは消さず、新Sceneだけauthoring表示を準備する。
+	SyncMenuPresentation();
 	textRenderSystem_.Sync(document);
 }
 
 void RuntimeScene::UpdatePaused()
 {
+	const auto* source = GetSceneDocument();
 	cameraSystem_.UpdatePaused(camera_, debugCamera_);
+	// UI時計はprepassで凍結済み。参照と文字cacheだけ同期し、内容置換後の旧色を残さない。
+	SyncMenuPresentation();
+	textRenderSystem_.Sync(GetSceneDocument());
 	SceneDocument* document = GetSceneDocument();
 	lightingSystem_.Sync(document);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -801,17 +1002,49 @@ void RuntimeScene::DrawForegroundEffectsWithCamera(Camera* viewCamera)
 	);
 }
 
+const SceneUIEditorView* RuntimeScene::GetEditorUIView() const {
+	// 同じSceneアセットの別Instanceへ編集表示を渡さない。未所属の無効IDも拒否する。
+	const SceneInstanceId instanceId = GetSceneInstanceId();
+	return sceneManager_ && instanceId != kInvalidSceneInstanceId &&
+		instanceId == sceneManager_->GetActiveSceneInstanceId() ? sceneManager_->GetEditorUIView() : nullptr;
+}
+
+void RuntimeScene::DrawEditorUI(const SceneUIEditorView& view, const char* renderSpace) {
+	const auto* source = GetSceneDocument();
+	if (!source || !GetEditorUIView() || !view.Matches(*source)) return;
+	SceneDocument display = *source;
+	view.PrepareDisplay(display);
+	uiRenderSystem_.Draw(display, objectSystem_, textRenderSystem_, renderSpace, 0, &view);
+}
+
+bool RuntimeScene::HasMenuOverlay() const {
+	// 公開済みInstance IDでActiveを照合する。Editorの一時表示経路とは混在させない。
+	if (!sceneManager_ || GetSceneInstanceId() == kInvalidSceneInstanceId ||
+		GetSceneInstanceId() != sceneManager_->GetActiveSceneInstanceId()) return false;
+	const auto* context = sceneManager_->GetExecutionContext();
+	if (context && context->IsEditing()) return false;
+	const auto* document = GetSceneDocument();
+	return document && menuSystem_.Matches(*document, GetSceneInstanceId()) && uiRenderSystem_.HasMenu(*document, menuSystem_.GetFrame());
+}
+
+void RuntimeScene::DrawMenuOverlay() {
+	if (!HasMenuOverlay()) return;
+	uiRenderSystem_.DrawMenu(*GetSceneDocument(), objectSystem_, textRenderSystem_, menuSystem_.GetFrame());
+}
+
 bool RuntimeScene::HasScreenOverlay() const
 {
 	const SceneDocument* document = GetSceneDocument();
-	return document && textRenderSystem_.HasScreenOverlay(*document);
+	return document && (textRenderSystem_.HasScreenOverlay(*document) || uiRenderSystem_.HasScreenOverlay(*document));
 }
 
 void RuntimeScene::DrawScreenOverlay(uint32_t width, uint32_t height)
 {
 	SceneDocument* document = GetSceneDocument();
 	if (document) {
-		textRenderSystem_.DrawScreenOverlay(*document, width, height);
+		textRenderSystem_.DrawScreenOverlay(*document, width, height, sceneManager_ && sceneManager_->IsDrawingEditorUIView());
+		if (const auto* view = sceneManager_ && sceneManager_->IsDrawingEditorUIView() ? GetEditorUIView() : nullptr) DrawEditorUI(*view, "ScreenOverlay");
+		else uiRenderSystem_.Draw(*document, objectSystem_, textRenderSystem_, "ScreenOverlay");
 	}
 }
 
@@ -890,6 +1123,8 @@ void RuntimeScene::Finalize()
 	}
 
 	runtimeObjectBindings_.clear();
+	ClearUiRuntime();
+	uiGameplayInputBlocked_ = false;
 	textRenderSystem_.Finalize();
 	objectSystem_.Finalize();
 

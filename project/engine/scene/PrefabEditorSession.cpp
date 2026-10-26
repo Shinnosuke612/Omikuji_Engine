@@ -39,6 +39,7 @@ bool PrefabEditorSession::Open(const std::string& filePath) {
 	}
 	document_ = std::move(loaded);
 	document_.MarkClean();
+	menuOrderCache_.Adopt(document_);
 	frameStartDocument_ = document_;
 	frameStartRevision_ = document_.GetRevision();
 	filePath_ = filePath;
@@ -59,12 +60,16 @@ bool PrefabEditorSession::Save() {
 		lastError_ = "A Prefab must contain exactly one root Entity.";
 		return false;
 	}
+	BeginEditFrame();
+	menuOrderCache_.Refresh(document_, true);
+	EndEditFrame(true);
 	if (!document_.Save(filePath_)) {
 		lastError_ = document_.GetLastSaveError().empty()
 			? "Failed to save Prefab: " + filePath_
 			: document_.GetLastSaveError();
 		return false;
 	}
+	menuOrderCache_.Adopt(document_);
 	frameStartDocument_ = document_;
 	frameStartRevision_ = document_.GetRevision();
 	editFrameActive_ = false;
@@ -94,6 +99,7 @@ bool PrefabEditorSession::Close(bool discardUnsavedChanges) {
 		return false;
 	}
 	document_.Clear();
+	menuOrderCache_.Adopt(document_);
 	frameStartDocument_.Clear();
 	filePath_.clear();
 	lastError_.clear();
@@ -118,6 +124,8 @@ void PrefabEditorSession::EndEditFrame(bool commit) {
 	if (!editFrameActive_) {
 		return;
 	}
+	// 配置と派生した選択順を同じUndo snapshotへ収める。
+	if (document_.GetRevision() != frameStartRevision_) menuOrderCache_.Refresh(document_);
 	if (document_.GetRevision() == frameStartRevision_) {
 		editFrameActive_ = false;
 		return;
@@ -137,6 +145,7 @@ bool PrefabEditorSession::Undo() {
 	redoStack_.push_back(document_);
 	document_ = undoStack_.back();
 	undoStack_.pop_back();
+	menuOrderCache_.Adopt(document_);
 	frameStartDocument_ = document_;
 	frameStartRevision_ = document_.GetRevision();
 	editFrameActive_ = false;
@@ -150,6 +159,7 @@ bool PrefabEditorSession::Redo() {
 	undoStack_.push_back(document_);
 	document_ = redoStack_.back();
 	redoStack_.pop_back();
+	menuOrderCache_.Adopt(document_);
 	frameStartDocument_ = document_;
 	frameStartRevision_ = document_.GetRevision();
 	editFrameActive_ = false;
