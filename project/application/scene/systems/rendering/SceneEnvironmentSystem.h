@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "../../../../engine/effect/WaterSurfaceRenderer.h"
 
 #include "../../SceneRuntimeObjectBinding.h"
 #include "../../../../engine/3d/StarFieldGenerator.h"
@@ -27,7 +28,12 @@ public:
 		const SceneDocument* document,
 		const std::vector<SceneRuntimeObjectBinding>& bindings
 	);
+    struct ReplayWater { Vector3 center{}, halfSize{}; WaterSurfaceRenderer::Settings settings; };
+    struct ReplaySnapshot { std::string skyboxKey; Vector4 skyboxColor{}; std::vector<ReplayWater> waters; };
+    // 呼出中だけSceneを参照し、GPU資源/Entity参照を含まない値を返す。
+    ReplaySnapshot CaptureReplayEnvironment(const SceneDocument&) const;
 	void Update(float deltaTime);
+	bool TryGetWaterTime(const SceneDocument& document, float& out) const; // 描画対象の水面がなければout不変。
 	void ApplyRenderCamera(Camera* camera);
 	void DrawSkybox();
 	void DrawWaterSurfaces(

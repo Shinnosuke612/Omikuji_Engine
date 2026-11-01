@@ -1,5 +1,6 @@
 // 役割: SceneDocumentのJSON入出力、Hierarchy操作、Component検証を実装する。
 #include "SceneDocument.h"
+#include "SceneEnemyChargeEvaluator.h"
 #include "PrefabAssetRegistry.h"
 #include "SceneDocumentMigrator.h"
 #include "SceneEntityQuery.h"
@@ -320,6 +321,35 @@ namespace {
 		};
 	}
 
+
+	constexpr const char* kEnemyInterruptTypes[] = {"SingleHpDamage", "AccumulatedHpDamage", "HitCount", "HorizontalKnockback", "VerticalKnockback", "PoiseDepleted"};
+	json EnemyRuleToJson(const SceneEnemyInterruptRule& rule) {
+		json rows = json::array();
+		for (const auto& row : rule.conditions) {
+			const auto index = static_cast<size_t>(row.type);
+			rows.push_back({{"type", index < 6 ? kEnemyInterruptTypes[index] : "Invalid"}, {"threshold", row.threshold}});
+		}
+		return {{"combine", !rule.validCombination ? "Invalid" : rule.all ? "All" : "Any"}, {"conditions", rows}};
+	}
+	SceneEnemyInterruptRule EnemyRuleFromJson(const json& source) {
+		if (!source.is_object()) throw json::type_error::create(302, "EnemyCharge:Settings", &source);
+		SceneEnemyInterruptRule rule;
+		const auto combine = source.value("combine", std::string("Any"));
+		rule.validCombination = combine == "Any" || combine == "All";
+		rule.all = combine == "All";
+		if (source.contains("conditions")) {
+			const auto& rows = source.at("conditions");
+			if (!rows.is_array() || rows.size() > 6) throw json::type_error::create(302, "EnemyCharge:Settings", &rows);
+			rule.conditions.clear();
+			for (const auto& row : rows) {
+				const auto name = row.at("type").get<std::string>();
+				size_t index = 0; while (index < 6 && name != kEnemyInterruptTypes[index]) ++index;
+				// 未知型はInvalidとして保持し、保存設定のValidatorで通知する。
+				rule.conditions.push_back({static_cast<SceneEnemyInterruptConditionType>(index), row.value("threshold", 3.0f)});
+			}
+		}
+		return rule;
+	}
 	json PostProcessToJson(const ScenePostProcessSettings& settings) {
 		return {
 			{ "bloomEnabled", settings.bloomEnabled },
@@ -1106,6 +1136,25 @@ namespace {
 		return result;
 	}
 
+	json FlagsToJson(const std::vector<SceneFlagDefinition>& flags) {
+		json result = json::array();
+		for (const auto& flag : flags)
+			result.push_back({ { "id", flag.id }, { "displayName", flag.displayName }, { "initial", flag.initialValue } });
+		return result;
+	}
+
+	// bool以外を数値から暗黙変換しない。既存Loadの例外診断へ返す。
+	void ReadFlags(const json& source, std::vector<SceneFlagDefinition>& flags) {
+		if (!source.is_array()) throw json::type_error::create(302, "StatFlags:InvalidArray", &source);
+		for (const auto& value : source) {
+			if (!value.is_object() || !value.contains("id") || !value.at("id").is_string() ||
+				(value.contains("displayName") && !value.at("displayName").is_string()) ||
+				(value.contains("initial") && !value.at("initial").is_boolean()))
+				throw json::type_error::create(302, "StatFlags:InvalidDefinition", &value);
+			flags.push_back({value.at("id").get<std::string>(), value.value("displayName", std::string{}), value.value("initial", false)});
+		}
+	}
+
 	json EventActionsToJson(const std::vector<SceneEventAction>& actions) {
 		json result = json::array();
 		for (const SceneEventAction& action : actions) {
@@ -1115,6 +1164,8 @@ namespace {
 				{ "targetEntityName", action.targetEntityName },
 				{ "statId", action.statId },
 				{ "statOperation", action.statOperation },
+				{ "flagId", action.flagId },
+				{ "flagValue", action.flagValue },
 				{ "value", action.value },
 				{ "active", action.active },
 				{ "sceneId", action.sceneId },
@@ -1141,10 +1192,13 @@ namespace {
 				{ "uiInputScope", binding.uiInputScope },
 				{ "triggerType", binding.triggerType },
 				{ "triggerKey", binding.triggerKey },
+				{ "additionalTriggerKeys", binding.additionalTriggerKeys },
 				{ "targetEntityId", binding.targetEntityId },
 				{ "targetEntityName", binding.targetEntityName },
 				{ "statId", binding.statId },
 				{ "statComparison", binding.statComparison },
+				{ "flagId", binding.flagId },
+				{ "flagValue", binding.flagValue },
 				{ "statValue", binding.statValue },
 				{ "targetPosition", VectorToJson(binding.targetPosition) },
 				{ "radius", binding.radius },
@@ -1812,14 +1866,48 @@ namespace {
 				component.cameraPathPointDurationToNext;
 			result["easingToNext"] =
 				component.cameraPathPointEasingToNext;
+		} else if (component.type == "DeathReplay") {
+			result["replayEnabled"] = component.deathReplayEnabled;
+            result["replaySpeed"] = component.deathReplaySpeed;
+            result["replayViews"] = json::array();
+            for (const auto& v : component.deathReplayViews) {
+                result["replayViews"].push_back({{"mode",v.mode},{"yaw",v.yaw},
+                    {"distanceInHeights",v.distanceInHeights},{"cameraHeightInHeights",v.cameraHeightInHeights},
+                    {"lookHeightInHeights",v.lookHeightInHeights},{"fovYDegrees",v.fovYDegrees},
+                    {"localOffset",VectorToJson(v.localOffset)},{"targetHeight",v.targetHeight}});
+            }
+			result["captureHz"] = component.deathReplayCaptureHz;
+			result["historyBudgetMiB"] = component.deathReplayHistoryBudgetMiB;
+			result["slowScale"] = component.deathReplaySlowScale;
+			result["slowDuration"] = component.deathReplaySlowDuration;
+		} else if (component.type == "DeathResponse") {
+			result["flagId"] = component.deathResponseFlagId;
+			result["scope"] = component.deathResponseScope;
+		} else if (component.type == "StatTextDisplay") {
+			result["statsEntityId"] = component.statTextStatsEntityId;
+			result["statsEntityName"] = component.statTextStatsEntityName;
+			result["statId"] = component.statTextStatId;
+			result["displayMode"] = component.statTextDisplayMode;
+			result["prefix"] = component.statTextPrefix;
+			result["suffix"] = component.statTextSuffix;
+			result["decimalPlaces"] = component.statTextDecimalPlaces;
+		} else if (component.type == "Health") {
+			result["statsEntityId"] = component.healthStatsEntityId;
+			result["statsEntityName"] = component.healthStatsEntityName;
+			result["healthStatId"] = component.healthStatId;
+			result["invulnerabilityDuration"] = component.healthInvulnerabilityDuration;
 		} else if (component.type == "StatSet") {
 			result["stats"] = StatsToJson(component.stats);
+			result["flags"] = FlagsToJson(component.flags);
 		} else if (component.type == "EventTrigger") {
 			result["bindings"] = EventsToJson(component.eventBindings);
 		} else if (component.type == "MenuPanel") {
 			result["initiallyOpen"] = component.menuInitiallyOpen;
 			result["layoutMode"] = component.menuLayoutMode;
 			result["inputMode"] = component.menuInputMode;
+			const auto groups = component.MenuStandardKeyGroups();
+			const char* fields[] = {"upKeys", "downKeys", "leftKeys", "rightKeys", "confirmKeys", "cancelKeys"};
+			for (size_t i = 0; i < groups.size(); ++i) result["standardInput"][fields[i]] = *groups[i];
 			result["itemEntityIds"] = component.menuItemEntityIds;
 			result["initialItemEntityId"] = component.menuInitialItemEntityId;
 			result["navigationAxis"] = component.menuNavigationAxis;
@@ -1905,8 +1993,59 @@ namespace {
 			result["sourceJointName"] = component.boneAttachmentSourceJointName;
 			result["inheritScale"] = component.boneAttachmentInheritScale;
 		} else if (component.type == "EnemyBehavior") {
-			result["targetEntityId"] = component.enemyTargetEntityId;
-			result["targetEntityName"] = component.enemyTargetEntityName;
+			result["movementMode"] = component.enemyMovementMode;
+			switch (component.enemyTargetMode) {
+			case SceneEnemyTargetMode::LegacyReference: result["targetMode"] = "LegacyReference"; break;
+			case SceneEnemyTargetMode::AutoPlayer: result["targetMode"] = "AutoPlayer"; break;
+			case SceneEnemyTargetMode::Entity: result["targetMode"] = "Entity"; break;
+			case SceneEnemyTargetMode::Name: result["targetMode"] = "Name"; break;
+			default: result["targetMode"] = component.enemyTargetModeUnknown; break;
+			}
+			const auto& charge = component.enemyCharge;
+			result["charge"] = {
+				{"startDistance", charge.startDistance},
+				{"movementEasing", charge.movementEasing},
+				{"aimSeconds", charge.aimSeconds},
+				{"lockedSeconds", charge.lockedSeconds},
+				{"speed", charge.speed},
+				{"distance", charge.distance},
+				{"recoverySeconds", charge.recoverySeconds},
+				{"returnSeconds", charge.returnSeconds},
+				{"cooldownSeconds", charge.cooldownSeconds},
+				{"firstWaitSeconds", charge.firstWaitSeconds},
+				{"aimVariation", charge.aimVariation},
+				{"lockedVariation", charge.lockedVariation},
+				{"cooldownVariation", charge.cooldownVariation},
+				{"firstWaitVariation", charge.firstWaitVariation},
+				{"poseEnabled", charge.poseEnabled},
+				{"poseEntityId", charge.poseEntityId},
+				{"backAngle", charge.backAngle},
+				{"forwardAngle", charge.forwardAngle},
+				{"leanSeconds", charge.leanSeconds},
+				{"axis", VectorToJson(charge.axis)},
+				{"pivot", VectorToJson(charge.pivot)},
+				{"aimOffset", VectorToJson(charge.aimOffset)},
+				{"chargeOffset", VectorToJson(charge.chargeOffset)}
+			};
+			const auto& interruption = component.enemyInterruption;
+			json overrides = json::array();
+			for (size_t i = 0; i < 3; ++i) overrides.push_back({{"enabled", interruption.overrideEnabled[i]}, {"rule", EnemyRuleToJson(interruption.overrides[i])}});
+			result["interruption"] = {{"enabled", interruption.enabled}, {"phases", interruption.phases},
+				{"countWindows", interruption.countWindows}, {"idleResetSeconds", interruption.idleResetSeconds},
+				{"common", EnemyRuleToJson(interruption.common)}, {"overrides", overrides}};
+
+			const auto& positioning = component.enemyPositioning;
+			result["positioning"] = {
+				{"distance", positioning.distance}, {"tolerance", positioning.tolerance}, {"spacing", positioning.spacing},
+				{"retreatRatio", positioning.retreatRatio}, {"orbitRatio", positioning.orbitRatio}, {"acceleration", positioning.acceleration},
+				{"variation", positioning.variation}, {"randomizeOnPlay", positioning.randomizeOnPlay},
+				{"distanceVariation", positioning.distanceVariation}, {"spacingVariation", positioning.spacingVariation},
+				{"speedVariation", positioning.speedVariation}, {"seed", positioning.seed}
+			};
+			result["targetEntityId"] = (component.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer ||
+				component.enemyTargetMode == SceneEnemyTargetMode::Name) ? uint64_t(0) : component.enemyTargetEntityId;
+			result["targetEntityName"] = (component.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer ||
+				component.enemyTargetMode == SceneEnemyTargetMode::Entity) ? std::string{} : component.enemyTargetEntityName;
 			result["healthStatId"] = component.enemyHealthStatId;
 			result["detectionRange"] = component.enemyDetectionRange;
 			result["loseRange"] = component.enemyLoseRange;
@@ -2012,6 +2151,10 @@ namespace {
 			"targetEntityName", action.targetEntityName
 		);
 		action.statId = value.value("statId", action.statId);
+		action.flagId = value.value("flagId", action.flagId);
+		if (value.contains("flagValue") && !value.at("flagValue").is_boolean())
+			throw json::type_error::create(302, "StatFlags:InvalidValue", &value);
+		action.flagValue = value.value("flagValue", action.flagValue);
 		action.statOperation = value.value(
 			"statOperation", action.statOperation
 		);
@@ -2063,6 +2206,10 @@ namespace {
 				"triggerType", binding.triggerType
 			);
 			binding.triggerKey = value.value("triggerKey", binding.triggerKey);
+			if (value.contains("additionalTriggerKeys")) {
+				// 型の不正は既存のJSON例外経路へ返し、入力を空配列へ黙って補正しない。
+				binding.additionalTriggerKeys = value.at("additionalTriggerKeys").get<std::vector<std::string>>();
+			}
 			binding.targetEntityId = value.value(
 				"targetEntityId", binding.targetEntityId
 			);
@@ -2073,6 +2220,10 @@ namespace {
 				"targetEntityName", binding.targetEntityName
 			);
 			binding.statId = value.value("statId", binding.statId);
+			binding.flagId = value.value("flagId", binding.flagId);
+			if (value.contains("flagValue") && !value.at("flagValue").is_boolean())
+				throw json::type_error::create(302, "StatFlags:InvalidValue", &value);
+			binding.flagValue = value.value("flagValue", binding.flagValue);
 			binding.statComparison = value.value(
 				"statComparison", binding.statComparison
 			);
@@ -2496,6 +2647,8 @@ namespace {
 		component.hitBoxOwnerEntityId = RemapEntityId(
 			component.hitBoxOwnerEntityId, idMap, preserveUnmappedIds
 		);
+		component.statTextStatsEntityId = RemapEntityId(component.statTextStatsEntityId, idMap, preserveUnmappedIds);
+		component.healthStatsEntityId = RemapEntityId(component.healthStatsEntityId, idMap, preserveUnmappedIds);
 		component.hurtBoxStatsEntityId = RemapEntityId(
 			component.hurtBoxStatsEntityId, idMap, preserveUnmappedIds
 		);
@@ -2509,9 +2662,10 @@ namespace {
 		component.boneAttachmentTargetEntityId = RemapEntityId(
 			component.boneAttachmentTargetEntityId, idMap, preserveUnmappedIds
 		);
-		component.enemyTargetEntityId = RemapEntityId(
-			component.enemyTargetEntityId, idMap, preserveUnmappedIds
-		);
+		component.enemyTargetEntityId = (component.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer ||
+			component.enemyTargetMode == SceneEnemyTargetMode::Name) ? 0 :
+			RemapEntityId(component.enemyTargetEntityId, idMap, preserveUnmappedIds);
+		component.enemyCharge.poseEntityId = RemapEntityId(component.enemyCharge.poseEntityId, idMap, preserveUnmappedIds);
 		component.enemyAttackHitBoxEntityId = RemapEntityId(
 			component.enemyAttackHitBoxEntityId, idMap, preserveUnmappedIds
 		);
@@ -3865,6 +4019,64 @@ namespace {
 					"easingToNext",
 					component.cameraPathPointEasingToNext
 				);
+				if (component.type == "DeathReplay") {
+					component.deathReplayEnabled = value.value("replayEnabled", false);
+                    component.deathReplaySpeed = value.value("replaySpeed", 1.0f);
+                    component.deathReplayViews = DefaultReplayViews();
+                    if (value.contains("replayViews")) {
+                        // 不正件数を既定3件へ黙って戻さず、Validatorへ渡す。
+                        component.deathReplayViews.clear();
+                        if (value["replayViews"].is_array()) for (const auto& item : value["replayViews"]) {
+                            SceneReplayViewSettings view;
+                            if (!item.is_object()) { view.mode = "Invalid"; }
+                            else {
+                                view.mode = item.value("mode", std::string{"Auto"});
+                                view.yaw = item.value("yaw", 45.0f + 45.0f * static_cast<float>(component.deathReplayViews.size()));
+                                view.distanceInHeights = item.value("distanceInHeights", 3.0f);
+                                view.cameraHeightInHeights = item.value("cameraHeightInHeights", 1.2f);
+                                view.lookHeightInHeights = item.value("lookHeightInHeights", 0.5f);
+                                view.fovYDegrees = item.value("fovYDegrees", 45.0f);
+                                if (item.contains("localOffset")) {
+                                    const auto& offset=item["localOffset"];
+                                    if (!offset.is_array() || offset.size()!=3) view.mode="Invalid";
+                                    else view.localOffset=JsonToVector(offset,Vector3{});
+                                }
+                                view.targetHeight = item.value("targetHeight", 0.0f);
+                            }
+                            component.deathReplayViews.push_back(std::move(view));
+                        }
+                    }
+					component.deathReplayCaptureHz = value.value("captureHz", 30.0f);
+					// 負値/小数をunsignedへ丸めず、不正値0としてValidatorへ渡す。
+					component.deathReplayHistoryBudgetMiB = 256;
+					if (value.contains("historyBudgetMiB")) {
+						const auto& budget = value["historyBudgetMiB"];
+						component.deathReplayHistoryBudgetMiB = budget.is_number_unsigned() ? budget.get<uint64_t>() :
+							budget.is_number_integer() && budget.get<int64_t>() > 0 ? static_cast<uint64_t>(budget.get<int64_t>()) : 0;
+					}
+					component.deathReplaySlowScale = value.value("slowScale", 0.2f);
+					component.deathReplaySlowDuration = value.value("slowDuration", 1.5f);
+				}
+				if (component.type == "DeathResponse") {
+					component.deathResponseFlagId = value.value("flagId", std::string{});
+					component.deathResponseScope = value.value("scope", std::string{"Target"});
+				}
+				if (component.type == "StatTextDisplay") {
+					component.statTextStatsEntityId = value.value("statsEntityId", uint64_t{0});
+					component.statTextStatsEntityName = value.value("statsEntityName", std::string{});
+					component.statTextStatId = value.value("statId", std::string{"hp"});
+					component.statTextDisplayMode = value.value("displayMode", std::string{"CurrentAndMax"});
+					component.statTextPrefix = value.value("prefix", std::string{"HP "});
+					component.statTextSuffix = value.value("suffix", std::string{});
+					component.statTextDecimalPlaces = value.value("decimalPlaces", 0);
+				}
+				if (component.type == "Health") {
+					component.healthStatsEntityId = value.value("statsEntityId", uint64_t{0});
+					component.healthStatsEntityName = value.value("statsEntityName", std::string{});
+					component.healthStatId = value.value("healthStatId", std::string{"hp"});
+					component.healthInvulnerabilityDuration = value.value("invulnerabilityDuration", 0.5f);
+				}
+				if (component.type == "StatSet" && value.contains("flags")) ReadFlags(value.at("flags"), component.flags);
 				if (component.type == "StatSet" && value.contains("stats")) {
 					ReadStats(value.at("stats"), component.stats);
 				}
@@ -3875,6 +4087,18 @@ namespace {
 					component.menuInitiallyOpen = value.value("initiallyOpen", component.menuInitiallyOpen);
 					component.menuLayoutMode = value.value("layoutMode", component.menuLayoutMode);
 					component.menuInputMode = value.value("inputMode", component.menuInputMode);
+					// 欠落fieldだけ旧固定キーへ戻す。不正な型や未知キーは補正しない。
+					if (value.contains("standardInput")) {
+						const json& input = value.at("standardInput");
+						if (!input.is_object()) throw json::type_error::create(302, "MenuPanel standardInput must be an object", &input);
+						const auto groups = component.MenuStandardKeyGroups();
+						const char* fields[] = {"upKeys", "downKeys", "leftKeys", "rightKeys", "confirmKeys", "cancelKeys"};
+						for (size_t i = 0; i < groups.size(); ++i) if (input.contains(fields[i])) {
+							const json& keys = input.at(fields[i]);
+							if (!keys.is_array()) throw json::type_error::create(302, "MenuPanel standardInput keys must be an array", &keys);
+							*groups[i] = keys.get<std::vector<std::string>>();
+						}
+					}
 					if (value.contains("itemEntityIds")) {
 						const json& ids = value.at("itemEntityIds");
 						if (!ids.is_array()) throw json::type_error::create(302, "MenuPanel itemEntityIds must be an array", &ids);
@@ -4127,12 +4351,114 @@ namespace {
 					);
 				}
 				if (component.type == "EnemyBehavior") {
+					component.enemyMovementMode = value.value("movementMode", std::string("Legacy"));
+					const std::string targetMode = value.value("targetMode", std::string("LegacyReference"));
+					if (targetMode == "LegacyReference") component.enemyTargetMode = SceneEnemyTargetMode::LegacyReference;
+					else if (targetMode == "AutoPlayer") component.enemyTargetMode = SceneEnemyTargetMode::AutoPlayer;
+					else if (targetMode == "Entity") component.enemyTargetMode = SceneEnemyTargetMode::Entity;
+					else if (targetMode == "Name") component.enemyTargetMode = SceneEnemyTargetMode::Name;
+					else { component.enemyTargetMode = SceneEnemyTargetMode::Unknown; component.enemyTargetModeUnknown = targetMode; }
+					if (value.contains("charge")) {
+						const auto& source = value.at("charge");
+						if (!source.is_object()) throw json::type_error::create(302, "EnemyCharge:Settings", &source);
+						auto& charge = component.enemyCharge;
+						charge.startDistance = source.value("startDistance", 0.0f);
+						charge.movementEasing = source.value("movementEasing", charge.movementEasing);
+						charge.poseEnabled = source.value("poseEnabled", true);
+						charge.aimSeconds = source.value("aimSeconds", charge.aimSeconds);
+						charge.lockedSeconds = source.value("lockedSeconds", charge.lockedSeconds);
+						charge.speed = source.value("speed", charge.speed);
+						charge.distance = source.value("distance", charge.distance);
+						charge.recoverySeconds = source.value("recoverySeconds", charge.recoverySeconds);
+						charge.returnSeconds = source.value("returnSeconds", charge.returnSeconds);
+						charge.cooldownSeconds = source.value("cooldownSeconds", charge.cooldownSeconds);
+						charge.firstWaitSeconds = source.value("firstWaitSeconds", charge.firstWaitSeconds);
+						charge.aimVariation = source.value("aimVariation", charge.aimVariation);
+						charge.lockedVariation = source.value("lockedVariation", charge.lockedVariation);
+						charge.cooldownVariation = source.value("cooldownVariation", charge.cooldownVariation);
+						charge.firstWaitVariation = source.value("firstWaitVariation", charge.firstWaitVariation);
+						if(source.contains("poseEntityId")) {
+							const auto& id=source.at("poseEntityId");
+							if(!id.is_number_integer() || (!id.is_number_unsigned() && id.get<int64_t>()<0)) throw json::type_error::create(302,"EnemyCharge:Pose",&id);
+							charge.poseEntityId=id.get<uint64_t>();
+						}
+						charge.backAngle = source.value("backAngle", charge.backAngle);
+						charge.forwardAngle = source.value("forwardAngle", charge.forwardAngle);
+						charge.leanSeconds = source.value("leanSeconds", charge.leanSeconds);
+						if (source.contains("axis")) {
+							const auto& v = source.at("axis");
+							if (!v.is_array() || v.size() != 3) throw json::type_error::create(302, "EnemyCharge:Settings", &v);
+							charge.axis = JsonToVector(v, charge.axis);
+						}
+						if (source.contains("pivot")) {
+							const auto& v = source.at("pivot");
+							if (!v.is_array() || v.size() != 3) throw json::type_error::create(302, "EnemyCharge:Settings", &v);
+							charge.pivot = JsonToVector(v, charge.pivot);
+						}
+						if (source.contains("aimOffset")) {
+							const auto& v = source.at("aimOffset");
+							if (!v.is_array() || v.size() != 3) throw json::type_error::create(302, "EnemyCharge:Settings", &v);
+							charge.aimOffset = JsonToVector(v, charge.aimOffset);
+						}
+						if (source.contains("chargeOffset")) {
+							const auto& v = source.at("chargeOffset");
+							if (!v.is_array() || v.size() != 3) throw json::type_error::create(302, "EnemyCharge:Settings", &v);
+							charge.chargeOffset = JsonToVector(v, charge.chargeOffset);
+						}
+					}
+					if (value.contains("interruption")) {
+						const auto& source = value.at("interruption");
+						if (!source.is_object()) throw json::type_error::create(302, "EnemyCharge:Settings", &source);
+						auto& setting = component.enemyInterruption;
+						setting.enabled = source.value("enabled", false);
+						const auto phases = source.value("phases", 7);
+						if (phases < 0 || phases > 7) throw json::out_of_range::create(406, "EnemyCharge:Settings", &source);
+						setting.phases = static_cast<uint8_t>(phases);
+						setting.countWindows = source.value("countWindows", false);
+						setting.idleResetSeconds = source.value("idleResetSeconds", 0.0f);
+						if (source.contains("common")) setting.common = EnemyRuleFromJson(source.at("common"));
+						if (source.contains("overrides")) {
+							const auto& rows = source.at("overrides");
+							if (!rows.is_array() || rows.size() != 3) throw json::type_error::create(302, "EnemyCharge:Settings", &rows);
+							for (size_t i = 0; i < 3; ++i) {
+								setting.overrideEnabled[i] = rows[i].value("enabled", false);
+								if (rows[i].contains("rule")) setting.overrides[i] = EnemyRuleFromJson(rows[i].at("rule"));
+							}
+						}
+					}
+
+					if (value.contains("positioning")) {
+						const auto& source = value.at("positioning");
+						if (!source.is_object()) throw json::type_error::create(302, "EnemyPositioning:Settings", &source);
+						auto& settings = component.enemyPositioning;
+						settings.distance = source.value("distance", settings.distance);
+						settings.tolerance = source.value("tolerance", settings.tolerance);
+						settings.spacing = source.value("spacing", settings.spacing);
+						settings.retreatRatio = source.value("retreatRatio", settings.retreatRatio);
+						settings.orbitRatio = source.value("orbitRatio", settings.orbitRatio);
+						settings.acceleration = source.value("acceleration", settings.acceleration);
+						settings.variation = source.value("variation", settings.variation);
+						settings.randomizeOnPlay = source.value("randomizeOnPlay", settings.randomizeOnPlay);
+						settings.distanceVariation = source.value("distanceVariation", settings.distanceVariation);
+						settings.spacingVariation = source.value("spacingVariation", settings.spacingVariation);
+						settings.speedVariation = source.value("speedVariation", settings.speedVariation);
+						if (source.contains("seed")) {
+							const auto& seed = source.at("seed");
+							if (!seed.is_number_integer() || seed.get<double>() < 0.0 || seed.get<double>() > 4294967295.0)
+								throw json::out_of_range::create(406, "EnemyPositioning:Settings", &source);
+							settings.seed = seed.get<uint32_t>();
+						}
+					}
 					component.enemyTargetEntityId = value.value(
 						"targetEntityId", component.enemyTargetEntityId
 					);
 					component.enemyTargetEntityName = value.value(
 						"targetEntityName", component.enemyTargetEntityName
 					);
+					if (component.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer || component.enemyTargetMode == SceneEnemyTargetMode::Name)
+						component.enemyTargetEntityId = 0;
+					if (component.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer || component.enemyTargetMode == SceneEnemyTargetMode::Entity)
+						component.enemyTargetEntityName.clear();
 					component.enemyHealthStatId = value.value(
 						"healthStatId", component.enemyHealthStatId
 					);
@@ -5134,6 +5460,15 @@ SceneDocument::ContentGeneration& SceneDocument::ContentGeneration::operator=(Co
 	if (this != &source) source.Renew();
 	return *this;
 }
+bool SceneEnemyPositioningSettings::IsValid(float baseSpeed) const {
+	const float values[] = {distance, tolerance, spacing, retreatRatio, orbitRatio, acceleration,
+		distanceVariation, spacingVariation, speedVariation, baseSpeed};
+	for (float value : values) if (!std::isfinite(value) || value < 0.0f) return false;
+	return acceleration > 0.0f && baseSpeed > 0.0f && retreatRatio <= 1.0f && orbitRatio <= 1.0f && speedVariation < 1.0f &&
+		std::isfinite(baseSpeed * (1.0f + speedVariation)) && std::isfinite(distance + tolerance + distanceVariation) &&
+		distance >= tolerance + (variation ? distanceVariation : 0.0f) && spacing >= (variation ? spacingVariation : 0.0f);
+}
+
 void SceneDocument::ContentGeneration::Renew() { value = AllocateContentGeneration(); }
 
 std::unique_ptr<SceneDocument> SceneDocument::CloneForRuntimeDetach() const {
@@ -8830,7 +9165,9 @@ bool SceneDocument::AddComponent(uint64_t id, const std::string& type) {
 		component.deathPresentationStateName = "Dead";
 		component.deathPresentationDeactivateDelay = 2.0f;
 	} else if (type == "EnemyBehavior") {
-		component.enemyTargetEntityName = "Player";
+		component.enemyTargetMode = SceneEnemyTargetMode::AutoPlayer;
+		component.enemyTargetEntityName.clear();
+		component.enemyCharge.poseEnabled = false;
 	} else if (type == "EnemySpawner") {
 		component.enemySpawnerMaxAlive = 10;
 		component.enemySpawnerInterval = 1.0f;
@@ -9631,4 +9968,180 @@ void SceneDocument::ValidateHierarchy() {
 			parent = FindEntity(parent->parentId);
 		}
 	}
+}
+
+
+bool SceneEnemyInterruptRule::IsValid() const {
+	if (!validCombination || conditions.empty() || conditions.size() > 6) return false;
+	uint8_t seen = 0;
+	for (const auto& row : conditions) {
+		const unsigned type = static_cast<unsigned>(row.type);
+		if (type >= 6 || (seen & (1u << type))) return false;
+		seen |= static_cast<uint8_t>(1u << type);
+		if (!std::isfinite(row.threshold) || row.threshold <= 0.0f) return false;
+		if (row.type == SceneEnemyInterruptConditionType::HitCount &&
+			(std::floor(row.threshold) != row.threshold || double(row.threshold) > 4294967295.0)) return false;
+	}
+	return true;
+}
+bool SceneEnemyInterruptSettings::IsValid() const {
+	if (phases == 0 || phases > 7 || !std::isfinite(idleResetSeconds) || idleResetSeconds < 0 || !common.IsValid()) return false;
+	for (size_t i = 0; i < 3; ++i) if (overrideEnabled[i] && !overrides[i].IsValid()) return false;
+	return true;
+}
+bool SceneEnemyChargeSettings::IsValid(bool variation) const {
+	if (!std::isfinite(startDistance) || startDistance < 0 || (startDistance > 0 && startDistance > distance)) return false;
+	Easing::Curve curve;
+	if (!Easing::TryParse(movementEasing, curve)) return false;
+	float duration;
+	if (curve != Easing::Curve::Linear && !SceneEnemyChargeEvaluator::TryGetDuration(*this, duration)) return false;
+	for (float value : {aimSeconds, lockedSeconds, speed, distance, recoverySeconds, returnSeconds,
+		cooldownSeconds, firstWaitSeconds, aimVariation, lockedVariation, cooldownVariation, firstWaitVariation})
+		if (!std::isfinite(value) || value < 0) return false;
+	if (speed <= 0 || distance <= 0 || !std::isfinite(distance / speed)) return false;
+	if (!std::isfinite(aimSeconds + aimVariation) || !std::isfinite(lockedSeconds + lockedVariation) ||
+		!std::isfinite(cooldownSeconds + cooldownVariation) || !std::isfinite(firstWaitSeconds + firstWaitVariation)) return false;
+	if (variation && (aimSeconds < aimVariation || lockedSeconds < lockedVariation ||
+		cooldownSeconds < cooldownVariation || firstWaitSeconds < firstWaitVariation)) return false;
+	if (!poseEnabled) return true;
+	if (!std::isfinite(leanSeconds) || leanSeconds < 0 || !std::isfinite(backAngle) || !std::isfinite(forwardAngle)) return false;
+	for (const auto& v : {axis, pivot, aimOffset, chargeOffset})
+		if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) return false;
+	const double length = double(axis.x)*axis.x + double(axis.y)*axis.y + double(axis.z)*axis.z;
+	return length > 1e-12 && std::isfinite(length);
+}
+
+const char* ValidateEnemyChargeConfiguration(const SceneDocument& document, const SceneEntity& owner, const SceneComponent& behavior) {
+	if (!std::isfinite(behavior.enemyCharge.startDistance) || behavior.enemyCharge.startDistance < 0 ||
+		(std::isfinite(behavior.enemyCharge.distance) && behavior.enemyCharge.distance > 0 &&
+			behavior.enemyCharge.startDistance > behavior.enemyCharge.distance)) return "EnemyCharge:StartDistance";
+	Easing::Curve curve;
+	if (!Easing::TryParse(behavior.enemyCharge.movementEasing, curve)) return "EnemyCharge:Easing";
+	if (!behavior.enemyCharge.IsValid(behavior.enemyPositioning.variation) ||
+		!behavior.enemyInterruption.IsValid()) return "EnemyCharge:Settings";
+	const auto* body = SceneEntityQuery::FindEnabledComponent(owner, "PhysicsBody");
+	const auto* rootCollider = SceneEntityQuery::FindEnabledComponent(owner, "OBBCollider");
+	if (!body || body->physicsBodyType != "Dynamic" || body->physicsFreezePositionX || body->physicsFreezePositionZ ||
+		!rootCollider || !rootCollider->colliderActive || rootCollider->colliderIsTrigger) return "EnemyPositioning:Body";
+	if(owner.parentId) {
+		const auto* parent=document.FindEntity(owner.parentId);
+		if(!parent)return "EnemyCharge:Parent";
+		const auto matrix=SceneTransformResolver::ResolveSceneWorldMatrix(document,*parent);
+		const float determinant=Determinant(matrix);
+		if(!std::isfinite(determinant)||std::abs(determinant)<=1e-8f)return "EnemyCharge:Parent";
+	}
+	// 対象の準備状態は攻撃/姿勢の構成と独立して検査し、両方の不足を同時に表示する。
+	const auto* pose = behavior.enemyCharge.poseEnabled ? document.FindEntity(behavior.enemyCharge.poseEntityId) : nullptr;
+	if (behavior.enemyCharge.poseEnabled && (!pose || pose->id == owner.id || !document.IsDescendantOf(pose->id, owner.id))) return "EnemyCharge:Pose";
+	const auto* hit = behavior.enemyAttackHitBoxEntityId ? document.FindEntity(behavior.enemyAttackHitBoxEntityId)
+		: document.FindEntityByName(behavior.enemyAttackHitBoxEntityName);
+	if ((!hit && (behavior.enemyAttackHitBoxEntityId || !behavior.enemyAttackHitBoxEntityName.empty())) ||
+		(hit && (hit->id==owner.id || !document.IsDescendantOf(hit->id,owner.id) || !SceneEntityQuery::FindEnabledComponent(*hit,"HitBox")))) return "EnemyCharge:HitBox";
+	if(hit) {
+		const auto* attackCollider = SceneEntityQuery::FindEnabledComponent(*hit, "OBBCollider");
+		const auto* attack = SceneEntityQuery::FindEnabledComponent(*hit, "HitBox");
+		if (!attackCollider || !attackCollider->colliderActive || !attackCollider->colliderIsTrigger) return "EnemyCharge:HitBox";
+		const SceneEntity* attackOwner = attack->hitBoxOwnerEntityId ? document.FindEntity(attack->hitBoxOwnerEntityId) :
+			(!attack->hitBoxOwnerEntityName.empty() ? document.FindEntityByName(attack->hitBoxOwnerEntityName) : nullptr);
+		if (!attackOwner && (attack->hitBoxOwnerEntityId || !attack->hitBoxOwnerEntityName.empty())) return "EnemyCharge:HitOwner";
+		if (!attackOwner) {
+			std::unordered_set<uint64_t> visited;
+			for (const SceneEntity* e=hit;e&&visited.insert(e->id).second;e=document.FindEntity(e->parentId))
+				if(SceneEntityQuery::FindEnabledComponent(*e,"Faction")){attackOwner=e;break;}
+		}
+		if (!attackOwner || attackOwner->id != owner.id) return "EnemyCharge:HitOwner";
+	}
+	for (const auto& entity : document.GetEntities()) if (pose && (entity.id == pose->id || document.IsDescendantOf(entity.id, pose->id))) {
+		for (const char* type : {"OBBCollider", "HitBox", "HurtBox", "PhysicsBody", "BoneAttachment", "StateMachine", "AttackSet", "EnemyBehavior", "AgentBehavior", "PlayerBehavior"})
+			if (SceneEntityQuery::FindComponent(entity, type)) return "EnemyCharge:PoseConflict";
+	}
+	// 無効Componentも後のEvent有効化で競合するため、存在するTransform writerは構成段階で拒否する。
+	// 実行中Presentationの所有照合はAnimation側に残す。
+	for (const auto& entity : document.GetEntities()) {
+		const auto* animator = SceneEntityQuery::FindComponent(entity, "PrefabAnimator");
+		if (!animator) continue;
+		for (const auto& clip : animator->prefabAnimationClips) for (const auto& track : clip.tracks) {
+			if (track.property != "LocalPosition" && track.property != "LocalRotation" && track.property != "LocalScale") continue;
+			const SceneEntity* target=track.targetEntityId?document.FindEntity(track.targetEntityId):nullptr;
+			if(!target && !track.targetEntityName.empty())target=document.FindEntityByName(track.targetEntityName);
+			if(!target)target=&entity;
+			if (pose && target && (target->id == pose->id || document.IsDescendantOf(target->id, pose->id))) return "EnemyCharge:PoseConflict";
+		}
+	}
+	if (behavior.enemyCharge.poseEnabled && !pose) return "EnemyCharge:Pose";
+	if (!hit) return "EnemyCharge:HitBox";
+	if (behavior.enemyInterruption.enabled) {
+		const auto* reaction = SceneEntityQuery::FindEnabledComponent(owner, "HitReaction");
+		if (!reaction) return "EnemyCharge:Reaction";
+		if (!std::isfinite(reaction->hitReactionStateDuration) || reaction->hitReactionStateDuration < 0 ||
+			!std::isfinite(reaction->hitReactionKnockbackMultiplier) || reaction->hitReactionKnockbackMultiplier < 0 ||
+			!std::isfinite(reaction->hitReactionPoiseRecoveryDelay) || reaction->hitReactionPoiseRecoveryDelay < 0) return "EnemyCharge:Reaction";
+		const auto* machine = SceneEntityQuery::FindEnabledComponent(owner, "StateMachine");
+		if (machine && !reaction->hitReactionStateName.empty() && std::none_of(machine->stateMachineStates.begin(), machine->stateMachineStates.end(),
+			[&](const auto& state) { return state.name == reaction->hitReactionStateName; })) return "EnemyCharge:HitState";
+		const auto* stats = SceneEntityQuery::FindEnabledComponent(owner, "StatSet");
+		const auto* health = SceneEntityQuery::FindEnabledComponent(owner, "Health");
+		auto statExists = [&](const std::string& id) { return stats && std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& stat) { return stat.id == id; }); };
+		if (!health || !statExists(behavior.enemyHealthStatId) || health->healthStatId != behavior.enemyHealthStatId ||
+			(health->healthStatsEntityId && health->healthStatsEntityId != owner.id) ||
+			(!health->healthStatsEntityId && !health->healthStatsEntityName.empty() && health->healthStatsEntityName != owner.name)) return "EnemyCharge:Health";
+		bool hurtFound = false;
+		for (const auto& e : document.GetEntities()) if (e.id == owner.id || document.IsDescendantOf(e.id, owner.id)) {
+			const auto* hurt = SceneEntityQuery::FindEnabledComponent(e, "HurtBox");
+			if (!hurt) continue;
+			const auto* hurtCollider=SceneEntityQuery::FindEnabledComponent(e,"OBBCollider");
+			if(!hurtCollider || !hurtCollider->colliderActive || !hurtCollider->colliderIsTrigger) return "EnemyCharge:Health";
+			if(!hurt->hurtBoxHealthStatId.empty() && hurt->hurtBoxHealthStatId!=behavior.enemyHealthStatId) return "EnemyCharge:Health";
+			const SceneEntity* target = hurt->hurtBoxStatsEntityId ? document.FindEntity(hurt->hurtBoxStatsEntityId) :
+				(!hurt->hurtBoxStatsEntityName.empty() ? document.FindEntityByName(hurt->hurtBoxStatsEntityName) : nullptr);
+			if (!target && (hurt->hurtBoxStatsEntityId || !hurt->hurtBoxStatsEntityName.empty())) return "EnemyCharge:Health";
+			if (!target) {
+				std::unordered_set<uint64_t> visited;
+				for(const SceneEntity* a=&e;a&&visited.insert(a->id).second;a=document.FindEntity(a->parentId))
+					if(SceneEntityQuery::FindEnabledComponent(*a,"StatSet")){target=a;break;}
+			}
+			if (!target || target->id != owner.id) return "EnemyCharge:Health";
+			hurtFound = true;
+		}
+		if (!hurtFound) return "EnemyCharge:Health";
+		auto usesPoise = [](const SceneEnemyInterruptRule& rule) { return std::any_of(rule.conditions.begin(), rule.conditions.end(), [](const auto& row) { return row.type == SceneEnemyInterruptConditionType::PoiseDepleted; }); };
+		bool poise = usesPoise(behavior.enemyInterruption.common);
+		for (size_t i=0; i<3; ++i) if (behavior.enemyInterruption.overrideEnabled[i]) poise |= usesPoise(behavior.enemyInterruption.overrides[i]);
+		if (poise && !statExists(reaction->hitReactionPoiseStatId)) return "EnemyCharge:Poise";
+	}
+	return "";
+}
+
+SceneEnemyTargetResolution ResolveEnemyTarget(const SceneDocument& document, const SceneEntity& owner,
+	const SceneComponent& behavior, uint64_t runtimePlayerEntityId) {
+	const SceneEntity* target = nullptr;
+	switch (behavior.enemyTargetMode) {
+	case SceneEnemyTargetMode::LegacyReference:
+		target = document.FindEntity(behavior.enemyTargetEntityId);
+		if (!target && !behavior.enemyTargetEntityName.empty()) target = document.FindEntityByName(behavior.enemyTargetEntityName);
+		// 既存の対象を含め、ID優先・未解決時の名前fallbackを維持する。
+		return {target ? target->id : 0, target ? SceneEnemyTargetIssue::None :
+			(!behavior.enemyTargetEntityId && behavior.enemyTargetEntityName.empty() ? SceneEnemyTargetIssue::Unassigned : SceneEnemyTargetIssue::Missing)};
+	case SceneEnemyTargetMode::AutoPlayer:
+		if (!runtimePlayerEntityId) return {0, SceneEnemyTargetIssue::Missing};
+		target = document.FindEntity(runtimePlayerEntityId); break;
+	case SceneEnemyTargetMode::Entity:
+		if (!behavior.enemyTargetEntityId) return {0, SceneEnemyTargetIssue::Unassigned};
+		target = document.FindEntity(behavior.enemyTargetEntityId); break;
+	case SceneEnemyTargetMode::Name:
+		if (behavior.enemyTargetEntityName.empty()) return {0, SceneEnemyTargetIssue::Unassigned};
+		for (const auto& entity : document.GetEntities()) if (entity.name == behavior.enemyTargetEntityName) {
+			if (target) return {0, SceneEnemyTargetIssue::Ambiguous};
+			target = &entity;
+		}
+		break;
+	default: return {0, SceneEnemyTargetIssue::UnknownMode};
+	}
+	if (!target) return {0, SceneEnemyTargetIssue::Missing};
+	if (target->id == owner.id || document.IsDescendantOf(target->id, owner.id)) return {target->id, SceneEnemyTargetIssue::Self};
+	if (!SceneEntityQuery::IsEntityActiveInHierarchy(document, *target)) return {target->id, SceneEnemyTargetIssue::Inactive};
+	if ((behavior.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer || behavior.enemyMovementMode == "PositioningCharge") &&
+		(!SceneEntityQuery::FindEnabledComponent(*target, "PlayerBehavior") || target->id != runtimePlayerEntityId))
+		return {target->id, SceneEnemyTargetIssue::UnsupportedPlayer};
+	return {target->id, SceneEnemyTargetIssue::None};
 }

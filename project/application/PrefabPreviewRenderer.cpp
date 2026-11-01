@@ -1,5 +1,7 @@
 // 役割: Prefab DocumentをPreview専用の既存3D/UI描画Systemへ同期し、全階層を描画する。
 #include "PrefabPreviewRenderer.h"
+#include <new>
+#include <stdexcept>
 
 #include "../engine/3d/Camera.h"
 #include "../engine/3d/Model.h"
@@ -135,8 +137,10 @@ void PrefabPreviewRenderer::Render(
 	float pitch,
 	float zoom,
 	uint64_t framingSerial,
-	const OverlayOptions& overlayOptions
+	const OverlayOptions& overlayOptions,
+    const SceneReplayFramingRequest* replayFraming
 ) {
+	replayFramingValid_=false;
 	if (!renderTarget_ || !camera_ || !srvManager_) {
 		return;
 	}
@@ -169,6 +173,19 @@ void PrefabPreviewRenderer::Render(
 		(std::max)(fitDistance_ * (std::max)(zoom, 0.02f), 0.02f)
 	);
 	camera_->UpdatePreviewMatrices();
+    const Camera editorCamera=*camera_;
+    if (replayFraming && replayFraming->generation==document.GetContentGeneration()) {
+        try {
+            // SyncModels直後の親TransformをCPU姿勢へ反映してから測る。Animation時計は進めない。
+            for (auto& [id,runtime] : models_) { (void)id; runtime.object->UpdateForCamera(camera_); }
+            SceneReplayFramingBasis basis;
+            replayFramingValid_=TryGetReplayFraming(document,replayFraming->owner,basis) &&
+                ResolveReplayCamera(replayFraming->view,basis.world,camera_->GetWorldMatrix(),basis.min,basis.max,
+                    basis.min,basis.max,camera_->GetAspectRatio(),replayFramingCamera_,&replayFramingManual_);
+            if (replayFramingValid_ && replayFraming->preview) *camera_=replayFramingCamera_;
+        } catch (const std::bad_alloc&) { replayFramingValid_=false; }
+          catch (const std::length_error&) { replayFramingValid_=false; }
+    }
 	viewMatrix_ = camera_->GetViewMatrix();
 	projectionMatrix_ = camera_->GetProjectionMatrix();
 
@@ -230,6 +247,7 @@ void PrefabPreviewRenderer::Render(
 		uiRenderer_->Draw(uiDocument, *uiObjects_, *uiTexts_, "Scene2D");
 	}
 	renderTarget_->End();
+    *camera_=editorCamera; // 確認用構図を次frameの編集orbit設定へ保存しない。
 }
 
 void PrefabPreviewRenderer::Finalize() {
@@ -763,4 +781,27 @@ void PrefabPreviewRenderer::UpdateFraming(
 		0.01f
 	);
 	fitDistance_ = radius / std::tan(camera_->GetFovY() * 0.5f) * 1.25f;
+}
+
+bool PrefabPreviewRenderer::TryGetReplayFraming(const SceneDocument& document, uint64_t owner, SceneReplayFramingBasis& out) const {
+    const auto* entity=document.FindEntity(owner);
+    if (!entity || !IsEntityActiveInHierarchy(document,*entity)) return false;
+    const auto root=models_.find(owner);
+    SceneReplayFramingBasis basis;
+    basis.world=root!=models_.end() && root->second.object ? root->second.object->GetWorldMatrix() : ResolveSceneWorldMatrix(document,*entity);
+    for (const auto& [id,runtime] : models_) {
+        if (id!=owner && !document.IsDescendantOf(id,owner)) continue;
+        const auto* child=document.FindEntity(id);
+        if (!child || SceneEntityQuery::FindComponent(*child,"WaterVolume")) continue;
+        Object3d::ReplayPose pose; Object3d::ReplayBounds bounds;
+        if (!runtime.object || !runtime.object->CaptureReplayPose(runtime.modelPath,pose) ||
+            !Object3d::ComputeReplayBounds(pose,bounds) || !bounds.valid) return false;
+        if (!basis.valid) { basis.min=bounds.min; basis.max=bounds.max; basis.valid=true; }
+        else {
+            basis.min={(std::min)(basis.min.x,bounds.min.x),(std::min)(basis.min.y,bounds.min.y),(std::min)(basis.min.z,bounds.min.z)};
+            basis.max={(std::max)(basis.max.x,bounds.max.x),(std::max)(basis.max.y,bounds.max.y),(std::max)(basis.max.z,bounds.max.z)};
+        }
+    }
+    if (!basis.valid) return false;
+    out=basis; return true;
 }

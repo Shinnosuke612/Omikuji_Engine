@@ -211,3 +211,19 @@ void SceneLightingSystem::Finalize() {
 	lightManager_.reset();
 	dxCommon_ = nullptr;
 }
+
+bool SceneLightingSystem::TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, const SceneLightingSystem& source) {
+    if (dxCommon_ || !dx || !srv || !source.lightManager_) return false;
+    auto light = std::make_unique<LightManager>();
+    auto shadow = std::make_unique<ShadowManager>();
+    if (!light->TryInitializeReplay(dx, *source.lightManager_) ||
+        !shadow->TryInitializeReplay(dx, srv, source.lightManager_->GetShadowMapSize())) return false;
+    dxCommon_ = dx; lightManager_ = std::move(light); shadowManager_ = std::move(shadow);
+    return true;
+}
+uint64_t SceneLightingSystem::EstimateReplayGpuBytes() const {
+    if (!lightManager_) return 0;
+    const uint64_t size = lightManager_->GetShadowMapSize();
+    return size * size * 4 * ShadowManager::kShadowMapCount +
+        sizeof(LightManager::LightingForGPU) + sizeof(ShadowManager::ShadowForGPU);
+}

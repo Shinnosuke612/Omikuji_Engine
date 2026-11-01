@@ -27,8 +27,13 @@ public:
 	};
 
 	void Initialize(DirectXCommon* dxCommon, uint32_t gridResolution = 72);
+	// 新規Replay専用instance。失敗時は破棄し、通常描画へ渡さない。
+	bool TryInitializeReplay(DirectXCommon* dxCommon, uint32_t gridResolution = 72);
+	// 明示時計で描画し、通常のtime_を変更しない。GPU完了後に一面一回だけ使用。
+	void DrawAtTime(const Camera*, const Vector3&, const Vector3&, const Settings&, float time);
 	void Finalize();
 	void Update(float deltaTime);
+	float GetTime() const { return time_; } // 描画に使用する時計の値コピー。進行/巻戻しなし。
 	void Draw(
 		const Camera* camera,
 		const Vector3& center,
@@ -54,9 +59,9 @@ private:
 		Vector4 highlightColorNormal;
 	};
 
-	void CreateRootSignature();
-	void CreateGraphicsPipeline();
-	void CreateResources(uint32_t gridResolution);
+	bool CreateRootSignature(bool recoverable = false);
+	bool CreateGraphicsPipeline(bool recoverable = false);
+	bool CreateResources(uint32_t gridResolution, bool recoverable = false);
 
 	DirectXCommon* dxCommon_ = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature_;

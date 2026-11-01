@@ -4,8 +4,10 @@
 #include <dinput.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <string>
+#include <vector>
 
 struct SceneInputKeyDefinition {
 	const char* name;
@@ -20,6 +22,7 @@ inline constexpr SceneInputKeyDefinition kSceneInputKeyDefinitions[] = {
 	{ "F6", DIK_F6 }, { "F7", DIK_F7 }, { "F8", DIK_F8 },
 	{ "F9", DIK_F9 }, { "F10", DIK_F10 },
 	{ "ENTER", DIK_RETURN },
+	{ "SPACE", DIK_SPACE },
 	{ "ESCAPE", DIK_ESCAPE },
 	{ "UP", DIK_UP }, { "DOWN", DIK_DOWN },
 	{ "LEFT", DIK_LEFT }, { "RIGHT", DIK_RIGHT },
@@ -40,6 +43,8 @@ inline BYTE ResolveSceneInputKey(const std::string& keyName) {
 			return static_cast<char>(std::toupper(character));
 		}
 	);
+	// 既存Sceneの短縮名を読み取り互換として受け付ける。保存値や候補一覧は変えない。
+	if (key == "ESC") key = "ESCAPE";
 	for (const SceneInputKeyDefinition& definition :
 		kSceneInputKeyDefinitions) {
 		if (key == definition.name) {
@@ -47,4 +52,48 @@ inline BYTE ResolveSceneInputKey(const std::string& keyName) {
 		}
 	}
 	return 0;
+}
+
+// 有効コードだけを保存順で一度ずつ返す。未知名の診断は呼出し側が元の文字列で行う。
+// Document型を参照せず、旧単一キーも空の追加配列で同じ規則を使う。
+inline std::vector<BYTE> ResolveSceneInputKeys(const std::string& first,
+	const std::vector<std::string>& additional) {
+	std::vector<BYTE> result;
+	const auto append = [&](const std::string& name) {
+		const BYTE code = ResolveSceneInputKey(name);
+		if (code && std::find(result.begin(), result.end(), code) == result.end()) result.push_back(code);
+	};
+	append(first);
+	for (const auto& name : additional) append(name);
+	return result;
+}
+
+// Documentに依存せず、軸に対応するPrevious/Next/Confirm/Cancelを同じ規則で扱う。
+inline std::array<size_t, 4> MenuActiveKeyGroups(const std::string& axis) {
+	return {axis == "Horizontal" ? 2u : 0u, axis == "Horizontal" ? 3u : 1u, 4u, 5u};
+}
+
+template<class Groups>
+inline std::vector<BYTE> ResolveMenuStandardKeys(const Groups& groups, const std::string& axis) {
+	std::vector<std::string> names;
+	for (size_t index : MenuActiveKeyGroups(axis)) names.insert(names.end(), groups[index]->begin(), groups[index]->end());
+	return ResolveSceneInputKeys("", names);
+}
+
+// 重複は保存互換の警告として別扱い。構造不正と使用中操作間の衝突だけを拒否する。
+template<class Groups>
+inline const char* ValidateMenuStandardKeys(const Groups& groups, const std::string& axis) {
+	for (const auto* group : groups) {
+		if (group->empty()) return "MenuRuntime:StandardKeysEmpty";
+		for (const auto& name : *group) if (!ResolveSceneInputKey(name)) return "MenuRuntime:StandardKeysInvalid";
+	}
+	std::vector<BYTE> used;
+	for (size_t index : MenuActiveKeyGroups(axis)) {
+		const auto keys = ResolveSceneInputKeys("", *groups[index]);
+		for (BYTE key : keys) {
+			if (std::find(used.begin(), used.end(), key) != used.end()) return "MenuRuntime:StandardKeysConflict";
+			used.push_back(key);
+		}
+	}
+	return "";
 }

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "../../../../engine/scene/SceneMenuRuntime.h"
+#include "../../../../engine/scene/SceneReplayPresentation.h"
 #include "../../../../engine/scene/SceneDocument.h"
 #include <array>
 #include <cstdint>
@@ -15,6 +16,10 @@
 
 class SceneDocument;
 class SceneStatSystem;
+class SceneHealthSystem;
+class SceneDeathResponseSystem;
+struct SceneDeathStarted;
+struct SceneDeathAction { uint64_t owner = 0; SceneEventAction action; };
 class SceneStateMachineSystem;
 
 enum class ScenePostProcessRequestType {
@@ -81,6 +86,9 @@ struct SceneEventRuntimeSignals {
 	std::vector<uint64_t> finishedAudioEntityIds;
 	std::vector<SceneTextMotionCompletion> textMotionCompletions;
 	std::vector<ScenePresentationCompletion> presentationCompletions;
+	// RuntimeSceneの現在Update内だけで有効。通常の完了通知を消費せず渡せる。
+	uint64_t startedDirectorEntityId = 0;
+	uint64_t startedDocumentGeneration = 0;
 };
 
 // UI評価中にDocumentを変更しない。適用側は出所とownerの生存を再確認する。
@@ -89,11 +97,14 @@ struct SceneUiActionRequest {
 	uint64_t ownerEntityId = 0;
 	SceneEventAction action;
 	// 標準操作だけはEventTrigger不要。適用側はPanel所有と4操作を再検証する。
-	enum class Origin { EventBinding, PanelStandard };
+	enum class Origin { EventBinding, PanelStandard, ReplayCompletion };
 	Origin origin = Origin::EventBinding;
+	SceneReplayPresentationToken replayCompletion{}; // Runtimeが自然完了の識別を再検証する。
 };
 
 struct SceneEventResult {
+	std::string deathDiagnostic;
+	uint64_t deathDiagnosticEntityId = 0;
 	std::string sceneTransitionId;
 	std::string transitionAssetPath;
 	ScenePostProcessRequest postProcessRequest;
@@ -103,29 +114,39 @@ struct SceneEventResult {
 	std::vector<ScenePresentationRequest> presentationRequests;
 	// Scene破棄は行わず、callerが現在Instanceの再読込を予約する。
 	bool restartSceneRequested = false;
+	bool exitGameRequested = false; // Game境界での正常終了要求。ここではSceneを破棄しない。
 	std::vector<SceneUiActionRequest> menuRequests;
 };
 
 class SceneEventSystem {
 public:
 	// blocked ownerの状態/時計は保持し、外部Actionからの対象操作は取消以外を不適用にする。
+	// evaluateGameplay=falseは開始pulseだけをdt=0で評価し、他のbinding状態/時計/掃除を変更しない。
 	SceneEventResult Update(
 		SceneDocument& document,
 		SceneStatSystem& statSystem,
+		SceneHealthSystem& healthSystem,
+		SceneDeathResponseSystem& deathSystem,
 		SceneStateMachineSystem& stateMachineSystem,
 		float deltaTime,
 		const SceneEventRuntimeSignals& signals,
 		const std::unordered_set<uint64_t>& blockedEntityIds = {},
-		bool acceptGameplayInput = true
+		bool acceptGameplayInput = true,
+		bool evaluateGameplay = true
 	);
 	// Pool再利用時だけGameplayのonce/cooldownを破棄する。UI/Menu入力は変更しない。
 	void ResetEntity(uint64_t entityId);
 	void Clear();
+	// 渡された死亡pulseだけを評価。Gameplay条件/once/cooldownは再評価しない。
+	std::vector<SceneDeathAction> EvaluateDeaths(const SceneDocument& document, const std::vector<SceneDeathStarted>& pulses) const;
 	// 既存caller向けの移動結果adapter。完全なUI操作はEvaluateUiInputを使う。
 	SceneMenuMove EvaluateMenuInput(const SceneDocument& document, const SceneMenuFrame& frame, float deltaTime, bool allowed);
 	// 入力/通知を別段階で評価。戻り値は記載順、通知からの再帰実行はcallerが次Frameへ送る。
 	std::vector<SceneUiActionRequest> EvaluateUiInput(const SceneDocument& document, const SceneMenuFrame& frame, float deltaTime, bool allowed);
 	std::vector<SceneUiActionRequest> EvaluateUiNotifications(const SceneDocument& document, const std::vector<SceneMenuPulse>& pulses, float deltaTime);
+	// 自然完了だけを評価。通常の入力/once/cooldownを再評価せず、一件のOpenMenu要求に限定する。
+	std::vector<SceneUiActionRequest> EvaluateReplayCompletion(const SceneDocument&, const SceneMenuSource&,
+		const SceneReplayPresentationToken&, std::string& diagnostic) const;
 	void RearmMenuKeys() { menuKeyArmed_.fill(false); }
 	void ClearMenuInput();
 
@@ -135,6 +156,11 @@ private:
 		bool initialized = false;
 		bool wasConditionTrue = false;
 		bool fired = false;
+		uint64_t healthRevision = 0;
+		uint64_t healthTarget = 0;
+		uint64_t flagRevision = 0;
+		uint64_t flagTarget = 0;
+		std::string flagId;
 	};
 	BindingRuntime& UiBindingState(uint64_t ownerId, size_t index, const SceneComponent& events);
 

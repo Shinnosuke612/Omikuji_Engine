@@ -2,6 +2,7 @@
 #pragma once
 
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 class DirectXCommon;
@@ -21,6 +22,9 @@ public:
 		DirectXCommon* dxCommon,
 		SrvManager* srvManager
 	);
+    // 新規Replay instanceへCPU設定を複製。元SceneのShadow Map/定数bufferを共有しない。
+    bool TryInitializeReplay(DirectXCommon*, SrvManager*, const SceneLightingSystem& source);
+    uint64_t EstimateReplayGpuBytes() const;
 	// ActiveなLight ComponentをHierarchy順で実行時ライトへ変換する。
 	void Sync(const SceneDocument* document);
 	// Model描画前に、現在のLightとShadow MapをCommandListへ結び付ける。

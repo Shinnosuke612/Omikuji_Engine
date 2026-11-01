@@ -19,6 +19,22 @@ void Skybox::Initialize(Object3dCommon* object3dCommon, const std::string& textu
 	CreateMaterialResource();
 }
 
+bool Skybox::TryInitializeReplay(Object3dCommon* common, const std::string& key) {
+    if (!common || !common->GetDxCommon() || object3dCommon_ || !TextureManager::GetInstance()->HasTexture(key)) return false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> transform, material;
+    TransformationMatrix* td = nullptr; Material* md = nullptr;
+    auto* dx = common->GetDxCommon();
+    if (!dx->TryCreateBufferResource(sizeof(TransformationMatrix), transform) ||
+        !dx->TryCreateBufferResource(sizeof(Material), material) ||
+        FAILED(transform->Map(0, nullptr, reinterpret_cast<void**>(&td))) || !td ||
+        FAILED(material->Map(0, nullptr, reinterpret_cast<void**>(&md))) || !md) return false;
+    textureFilePath_ = key;
+    *td = {MakeIdentity4x4(), {0,0,0,1}}; *md = {{1,1,1,1}};
+    transformationMatrixResource_ = std::move(transform); materialResource_ = std::move(material);
+    transformationMatrixData_ = td; materialData_ = md;
+    object3dCommon_ = common; camera_ = common->GetDefaultCamera(); return true;
+}
+
 void Skybox::Update() {
 	if (camera_) {
 		transformationMatrixData_->inverseViewProjection =

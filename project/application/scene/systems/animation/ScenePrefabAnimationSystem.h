@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../../../../engine/math/Transform.h"
+#include "../../../../engine/scene/SceneDocument.h"
 
 class SceneDocument;
 
@@ -31,6 +32,16 @@ public:
 		float transitionDuration = 0.0f
 	);
 	void ResetEntity(uint64_t entityId);
+	// 入口の既存ClipをID解決して保持。新規Play/Active trackを開始しない。
+	void BeginDeathContinuation(const SceneDocument& document, const std::unordered_set<uint64_t>& participants,
+		const std::unordered_set<uint64_t>& attackTargets);
+	void UpdateDeathContinuation(SceneDocument& document, float worldDelta,
+		const std::unordered_set<uint64_t>& blockedEntityIds);
+	void ClearDeathContinuation();
+	// 保持中の退避姿勢も書込み所有に含め、World継続開始前に競合を調べる。
+	// 保存ClipのTransform書込先と演出の退避先を調べ、攻撃Poseの同時所有を拒否する。
+	bool HasTransformTargetsIn(const SceneDocument& document, const std::unordered_set<uint64_t>& ids) const;
+	bool HasPresentationTargetsIn(const std::unordered_set<uint64_t>& ids) const;
 	// 演出入口は非LoopのTransform Clip専用。失敗時はPose/activeを変更しない。
 	// 成功時はownerをactive化し、親座標系の時刻0 Poseを直ちに適用する。
 	bool PlayPresentation(SceneDocument& document, uint64_t entityId,
@@ -41,7 +52,9 @@ public:
 	// blocked targetへの復元は拒否しfalseを返す。
 	bool ResetPresentation(SceneDocument& document, uint64_t entityId, const std::unordered_set<uint64_t>& blockedEntityIds = {});
 	// Object同期前に通常deltaTime（秒）で一回呼ぶ。開始Frameは時刻0を保持する。
-	void UpdatePresentations(SceneDocument& document, float deltaTime, const std::unordered_set<uint64_t>& blockedEntityIds = {});
+	// pausedEntityIdsは死亡による参加停止。deathOwnersから開始した独立演出だけ迂回する。
+	void UpdatePresentations(SceneDocument& document, float deltaTime, const std::unordered_set<uint64_t>& blockedEntityIds = {},
+		const std::unordered_set<uint64_t>& pausedEntityIds = {}, const std::unordered_set<uint64_t>& deathOwners = {});
 	// Pool baseline復元後だけ使う。古いPose/activeを復元せず、対象を持つ演出と通知を破棄する。
 	void DiscardPresentationsForEntities(const std::unordered_set<uint64_t>& entityIds);
 	// 未消費pulseを取り出して空にする。Event gateが開くまでUpdateをまたいで保持する。
@@ -83,6 +96,8 @@ private:
 		const PresentationRuntime& runtime);
 
 	std::unordered_map<uint64_t, AnimationRuntime> runtimes_;
+	std::unordered_map<uint64_t, ScenePrefabAnimationClip> deathClips_;
+	std::unordered_set<uint64_t> deathParticipants_;
 	// Reset後もPlay前activeの退避はScene終了まで残し、Stop/Resetのactiveを変えない。
 	std::unordered_map<uint64_t, bool> presentationOriginalActive_;
 	std::unordered_map<uint64_t, PresentationRuntime> presentationRuntimes_;

@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../../SceneRuntimeObjectBinding.h"
@@ -16,6 +17,9 @@
 #include "../../../../engine/2d/SpriteCommon.h"
 #include "../../../../engine/physics/PhysicsBody.h"
 
+class SceneReplayHistorySystem;
+struct SceneReplayFrame;
+struct SceneReplayFramingBasis;
 class Camera;
 class Object3d;
 class SceneDocument;
@@ -51,6 +55,8 @@ public:
 		PhysicsBody physicsBody;
 		bool hasPhysicsBody = false;
 		uint64_t spawnActivationSerial = 0;
+		uint64_t replayIncarnation = 0;
+		bool replayActive = false;
 	};
 
 	SceneObjectSystem();
@@ -67,11 +73,20 @@ public:
 	// Runtime姿勢/再生状態を保持し、初回モデルだけ時刻0を準備する。Animation時計は進めない。
 	void SyncModelsForTransition(SceneDocument* document, ScenePhysicsSystem& physicsSystem);
 	// Agent・Physics・Environmentへ渡す非所有参照を、Object同期直後に再構築する。
+	// 変更対象と子のlocal/worldだけ同期。Animation/Asset/Physics/Pool世代は進めない。
+	void RefreshTransforms(const SceneDocument& document, const std::vector<uint64_t>& changedTargets);
 	void BuildBindings(
 		SceneDocument& document,
 		std::vector<SceneRuntimeObjectBinding>& bindings
 	);
 
+	// Updateごとに観測し、採取周期の間の再有効化/Pool再利用も別対象として扱う。
+	void ObserveReplaySubjects(const SceneDocument& document);
+	void ResetReplayEntity(uint64_t id);
+	bool EstimateReplayFrameBytes(const SceneDocument& document, uint64_t& out, uint64_t originOwner = 0) const;
+	bool CaptureReplaySubjects(const SceneDocument& document, SceneReplayHistorySystem& history, SceneReplayFrame& frame) const;
+    // 現在の表示姿勢の対象+モデル子だけ。CPU boundsを返し、Asset読込/Animation更新なし。
+    bool TryGetReplayFraming(const SceneDocument&, uint64_t owner, SceneReplayFramingBasis& out) const;
 	void ApplyRenderCamera(Camera* camera);
 	// 値を保持し、各viewの描画定数を作る直前にID/世代から再解決する。
 	void SetSpawnPresentationFrame(SceneSpawnFrame frame);
@@ -102,6 +117,11 @@ public:
 	) const;
 	ModelRuntime* FindModelRuntime(uint64_t entityId);
 	const ModelRuntime* FindModelRuntime(uint64_t entityId) const;
+	// 現在再生中の姿勢を継続。攻撃対象だけLoopをruntime上で解除する。
+	void BeginDeathContinuation(const std::unordered_set<uint64_t>& participants,
+		const std::unordered_set<uint64_t>& attackTargets);
+	void ClearDeathContinuation();
+	void ResetDeathContinuationEntity(uint64_t entityId);
 	void Finalize();
 
 private:
@@ -122,9 +142,12 @@ private:
 	void ApplySpawnPresentation();
 	void ClearSprites();
 
+	uint64_t nextReplayIncarnation_ = 1;
 	std::unordered_map<uint64_t, ModelRuntime> models_;
 	std::unordered_map<uint64_t, SpriteRuntime> sprites_;
 	SceneSpawnFrame spawnFrame_;
+	bool deathContinuation_ = false;
+	std::unordered_set<uint64_t> deathParticipants_, deathAttackTargets_;
 	// SyncModelsから次の同期/Finalizeまで借用。Frame自体にはpointerを格納しない。
 	const SceneDocument* modelDocument_ = nullptr;
 };

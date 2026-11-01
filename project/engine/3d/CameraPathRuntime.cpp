@@ -254,6 +254,53 @@ void CameraPathRuntime::Update(float deltaTime, Camera& camera) {
 	ApplyTransform(camera, evaluated);
 }
 
+void CameraPathRuntime::UpdateDeathContinuation(float worldDelta, Camera& camera) {
+	if (!std::isfinite(worldDelta) || worldDelta <= 0.0f || phase_ == Phase::Finished || points_.empty()) {
+		return;
+	}
+	finishedThisFrame_ = false;
+	float remaining = worldDelta;
+	// Enter/Path/Exitは各一度だけ通過する。ゼロ秒区間も無限ループにしない。
+	for (int stage = 0; stage < 3 && phase_ != Phase::Finished; ++stage) {
+		const float duration = phase_ == Phase::Enter ? enterDuration_
+			: phase_ == Phase::Path ? GetPathDuration() : exitDuration_;
+		float& elapsed = phase_ == Phase::Path ? pathElapsed_ : elapsed_;
+		if (!std::isfinite(duration) || !std::isfinite(elapsed)) {
+			return; // 最後の有効姿勢を維持し、通常経路への復帰を要求しない。
+		}
+		const float end = (std::max)(duration, 0.0f);
+		const float used = (std::min)(remaining, (std::max)(end - elapsed, 0.0f));
+		elapsed = (std::min)(elapsed + used, end);
+		remaining -= used;
+		const float t = end > 0.0f ? std::clamp(elapsed / end, 0.0f, 1.0f) : 1.0f;
+		Transform evaluated{};
+		if (phase_ == Phase::Enter) {
+			evaluated = LerpTransform(startTransform_, points_.front().transform, ApplyEasing(t, enterEasing_));
+		} else if (phase_ == Phase::Path) {
+			evaluated = EvaluatePath(elapsed);
+		} else {
+			evaluated = LerpTransform(points_.back().transform, returnTransform_, ApplyEasing(t, exitEasing_));
+		}
+		const bool reachedEnd = elapsed >= end;
+		if (reachedEnd) {
+			if (phase_ == Phase::Enter) {
+				phase_ = Phase::Path;
+				elapsed_ = pathElapsed_ = 0.0f;
+			} else if (phase_ == Phase::Path && returnToPreviousCamera_ && exitDuration_ > 0.0f) {
+				phase_ = Phase::Exit;
+				elapsed_ = 0.0f;
+			} else {
+				phase_ = Phase::Finished;
+				evaluated = returnToPreviousCamera_ ? returnTransform_ : points_.back().transform;
+			}
+		}
+		currentTransform_ = evaluated;
+		hasCurrentTransform_ = true;
+		ApplyTransform(camera, evaluated);
+		if (!reachedEnd) break;
+	}
+}
+
 void CameraPathRuntime::ApplyTransform(
 	Camera& camera,
 	const Transform& transform

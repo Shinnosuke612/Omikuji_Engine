@@ -12,6 +12,7 @@
 #include "../engine/scene/SceneCatalog.h"
 #include "../engine/scene/SceneEntityQuery.h"
 #include "../engine/scene/SceneExecutionContext.h"
+#include "../engine/scene/BaseScene.h"
 #include "../engine/scene/SceneTemplateRegistry.h"
 #include "../engine/scene/SceneTransformResolver.h"
 #include "../engine/scene/SceneValidator.h"
@@ -65,6 +66,8 @@
 #include <cstring>
 #include <cstddef>
 #include <limits>
+#include <new>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace {
@@ -579,6 +582,17 @@ void Game::Initialize() {
 void Game::Update() {
 	// 基底クラスの更新処理
 	Framework::Update();
+	// Scene更新スタックを抜けた次Frameでのみ停止する。ImGui BeginFrameより前に確定する。
+	const bool gameExitRequested = sceneManager_ && sceneManager_->ConsumeGameExitRequest();
+	if (gameExitRequested && !IsEndRequest()) {
+		CancelPresentedTransition();
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+		if (editorSession_) {
+			if (!editorSession_->IsEditing()) editorSession_->Stop();
+		} else
+#endif
+		{ endRequest_ = true; }
+	}
 	if (!presentedTransition_) presentedTransition_ = std::make_unique<PresentedTransitionState>();
 	// UIのStopはここへqueueし、Runtime Documentを切り替える前に取消する。
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -590,6 +604,33 @@ void Game::Update() {
 	++presentedTransition_->frameSerial;
 	if (presentedTransition_->renderer) presentedTransition_->renderer->BeginFrame(presentedTransition_->frameSerial);
 	if (presentedTransition_->drawFailed) CancelPresentedTransition(presentedTransition_->issue);
+
+	// F1/F2をImGuiの入力処理より先に確定し、Inspectorへ開始キーを流さない。
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (editorSession_ && !gameExitRequested && !startupErrorScreen_ && !IsEndRequest()) {
+		Input* input = Input::GetInstance();
+		if (input->TriggerKey(DIK_F1)) {
+			if (editorSession_->IsEditing()) {
+				editorSession_->Play();
+				if (imguiManager_) imguiManager_->RequestGameInputFocus();
+			} else {
+				CancelPresentedTransition();
+				editorSession_->Stop();
+			}
+		}
+		if (input->TriggerKey(DIK_F2)) {
+			if (editorSession_->IsPlaying()) {
+				editorSession_->Pause();
+			} else if (editorSession_->IsPaused()) {
+				editorSession_->Resume();
+				if (imguiManager_) imguiManager_->RequestGameInputFocus();
+			}
+		}
+	}
+	// 起動エラー画面も同じFrame対を使うため、早期returnより前に開始する。
+	if (imguiManager_ && !IsEndRequest()) imguiManager_->BeginFrame();
+#endif
+
 
 	if (startupErrorScreen_) {
 		if (startupErrorScreen_->IsCloseRequested()) {
@@ -605,10 +646,6 @@ void Game::Update() {
 	UpdateProjectLauncher();
 #endif
 	const float deltaTime = GetDeltaTime();
-
-	if (noiseAnimate_) {
-		noiseTime_ += deltaTime * noiseSpeed_;
-	}
 
 	if (executionContext_) {
 		const SceneDocument* document = sceneManager_
@@ -629,26 +666,6 @@ void Game::Update() {
 		}
 	}
 
-#if defined(_DEBUG) || defined(DEVELOPMENT)
-	if (editorSession_) {
-		Input* input = Input::GetInstance();
-		if (input->TriggerKey(DIK_F1)) {
-			if (editorSession_->IsEditing()) {
-				editorSession_->Play();
-			} else {
-				CancelPresentedTransition();
-				editorSession_->Stop();
-			}
-		}
-		if (input->TriggerKey(DIK_F2)) {
-			if (editorSession_->IsPlaying()) {
-				editorSession_->Pause();
-			} else if (editorSession_->IsPaused()) {
-				editorSession_->Resume();
-			}
-		}
-	}
-#endif
 
 	const bool isEditingAtFrameStart =
 		executionContext_ && executionContext_->IsEditing();
@@ -689,6 +706,7 @@ void Game::Update() {
 	postProcessSettingsChanged |= DrawPostProcessSettingsEditor(postProcessSettings);
 	if (ImGui::SmallButton("Reset Noise Time")) {
 		noiseTime_ = 0.0f;
+		resetViewEffectTimeRequested_ = true;
 	}
 	if (postProcessSettingsChanged) {
 		ApplyPostProcessSettings(postProcessSettings);
@@ -776,26 +794,6 @@ void Game::Update() {
 		// Editor Stop/OpenではRuntime用の保持をEdit Sceneへ持ち越さない。
 		sceneManager_->EndTransitionHold();
 	}
-	if (Input* input = Input::GetInstance()) {
-		const bool altHeld =
-			input->PushKey(DIK_LMENU) || input->PushKey(DIK_RMENU);
-		const bool playing =
-			executionContext_ && executionContext_->IsPlaying();
-		if (
-			editorSession_ &&
-			imguiManager_ &&
-			playing &&
-			!altHeld
-		) {
-			input->SetCursorCaptureRect(
-				imguiManager_->GetSceneViewMinX(),
-				imguiManager_->GetSceneViewMinY(),
-				imguiManager_->GetSceneViewMaxX(),
-				imguiManager_->GetSceneViewMaxY()
-			);
-		}
-		input->SetCursorCapture(playing && !altHeld);
-	}
 	const bool paused =
 		executionContext_ && executionContext_->IsPaused();
 	UpdatePresentedTransitionBeforeScene(deltaTime, paused);
@@ -812,10 +810,11 @@ void Game::Update() {
 	sceneManager_->SetEditorUIView(imguiManager_ ? imguiManager_->GetSceneUIEditorView() : SceneUIEditorView{});
 #endif
 	// UI入力許可だけを渡す。既存Gameplayの入力経路/消費規則は変更しない。
-	bool menuInputAllowed = winApp_ && GetForegroundWindow() == winApp_->GetHwnd() && !IsIconic(winApp_->GetHwnd());
+	bool menuInputAllowed = winApp_ && GetForegroundWindow() == winApp_->GetHwnd() && !IsIconic(winApp_->GetHwnd()) &&
+        IsWindowVisible(winApp_->GetHwnd()) && IsPresentedTransitionDrawable();
 	if (auto* input = Input::GetInstance()) menuInputAllowed = menuInputAllowed && !input->PushKey(DIK_LMENU) && !input->PushKey(DIK_RMENU);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
-	if (editorSession_) menuInputAllowed = menuInputAllowed && imguiManager_ && ImGuiManager::IsSceneViewInputActive() &&
+	if (editorSession_) menuInputAllowed = menuInputAllowed && imguiManager_ && imguiManager_->IsGameInputOwned() && ImGuiManager::IsSceneViewInputActive() &&
 		!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive();
 #endif
 	sceneManager_->SetMenuInputAllowed(menuInputAllowed);
@@ -823,13 +822,37 @@ void Game::Update() {
 		if (sceneManager_->IsTransitionHeld()) {
 			sceneManager_->UpdateTransitionHold();
 		} else {
+			sceneManager_->PrepareGameUpdate(deltaTime);
+			// 同FrameのMenu Openを反映し、新しいゲーム音の再生より先に停止理由を渡す。
+			if (audio_) audio_->SetGamePause(sceneManager_->IsGamePaused(), sceneManager_->ShouldPauseBgm());
 			sceneManager_->Update(deltaTime);
 		}
 	} else {
 		sceneManager_->UpdatePaused();
 	}
+	if (audio_) audio_->SetGamePause(sceneManager_->IsGamePaused(), sceneManager_->ShouldPauseBgm());
+	if (noiseAnimate_ && !sceneManager_->IsGamePaused()) noiseTime_ += deltaTime * noiseSpeed_;
+	UpdateViewEffectClock();
 	ApplyRuntimePostProcessSettings();
+    sceneManager_->AdvanceReplayPresentation(deltaTime,!paused && IsPresentedTransitionDrawable() && IsWindowVisible(winApp_->GetHwnd()) &&
+        !sceneManager_->IsTransitionHeld() && !sceneManager_->IsGamePaused() &&
+        !(presentedTransition_ && presentedTransition_->controller.IsActive()));
 	UpdatePresentedTransitionAfterScene();
+	// Scene切替とMenuのPause判定後に反映し、Title復帰やPause開始のFrameで解除する。
+	if (Input* input = Input::GetInstance()) {
+		const auto& sceneId = sceneManager_->GetCurrentSceneId();
+		const bool gameplayScene = sceneId == "gameplay" || sceneId == "gameplay_legacy";
+		const bool altHeld = input->PushKey(DIK_LMENU) || input->PushKey(DIK_RMENU);
+		const bool foreground = winApp_ && GetForegroundWindow() == winApp_->GetHwnd() &&
+			IsWindowVisible(winApp_->GetHwnd()) && !IsIconic(winApp_->GetHwnd());
+		bool captureGameInput = gameplayScene && executionContext_ && executionContext_->IsPlaying() &&
+			!sceneManager_->IsGamePaused() && foreground && !altHeld;
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+		if (editorSession_) captureGameInput = captureGameInput && imguiManager_ && imguiManager_->IsGameInputOwned();
+#endif
+		// 表示と拘束のOS処理はInputに任せ、Editorの入力所有権とは分離する。
+		input->SetCursorCapture(captureGameInput);
+	}
 	if (preserveEditorCamera) {
 		RestoreCameraSnapshot(editorCameraSnapshot);
 	}
@@ -1682,6 +1705,10 @@ void Game::UpdatePresentedTransitionAfterScene() {
 		if (!IsPresentedTransitionDrawable()) return;
 		PresentedTransitionRequest request;
 		if (!sceneManager_->ConsumePresentedTransitionRequest(request)) return;
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+		// 通知の重複抑制を要求ごとに区切り、準備で同じ原因の失敗が続いても再通知する。
+		if (imguiManager_) imguiManager_->SetPresentedTransitionStatus({});
+#endif
 		t.uiSource = request.uiSource;
 		SceneTransitionAsset::Diagnostics diagnostics;
 		bool ready = IsPresentedTransitionDrawable() && (!executionContext_ || !executionContext_->IsEditing()) &&
@@ -1752,11 +1779,12 @@ void Game::Draw() {
 		return;
 	}
 
+	const float gameViewTime = GetGameViewEffectTime();
+	if (sceneManager_) sceneManager_->CaptureReplayBeforeDraw({ ++replayDrawSerial_, gameViewTime });
+
 	// 影描画でもスキニングパレットSRVを使うので先に必要
 	srvManager_->PreDraw();
 
-	sceneManager_->DrawShadow();
-	sceneManager_->DrawOffscreenViews();
 
 	uint32_t renderWidth = dxCommon_->GetClientWidth();
 	uint32_t renderHeight = dxCommon_->GetClientHeight();
@@ -1766,6 +1794,37 @@ void Game::Draw() {
 		renderHeight = imguiManager_->GetSceneViewHeight();
 	}
 #endif
+    Camera* const normalEditorCamera=Object3dCommon::GetInstance()->GetDefaultCamera();
+    bool replayFramingPreview=false;
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+    SceneReplayFramingRequest framing;
+    if (imguiManager_ && imguiManager_->GetReplayFramingRequest(false,framing)) {
+        SceneReplayFramingBasis basis; SceneReplayViewSettings manual;
+        const bool success=normalEditorCamera && renderWidth && renderHeight && sceneManager_->TryGetReplayFraming(framing.owner,basis) &&
+            ResolveReplayCamera(framing.view,basis.world,normalEditorCamera->GetWorldMatrix(),basis.min,basis.max,basis.min,basis.max,
+                static_cast<float>(renderWidth)/renderHeight,replayEditorCamera_,&manual);
+        imguiManager_->SetReplayFramingResult(framing,success,manual);
+        replayFramingPreview=success && framing.preview;
+    }
+#endif
+    SceneReplayGameFrame replayFrame;
+    bool replayActive = renderWidth && renderHeight && sceneManager_->PrepareReplayGameFrame(replayDrawSerial_,
+        static_cast<float>(renderWidth)/renderHeight,replayFrame);
+    if (replayActive != replayWasActive_ || (replayActive && replayFrame.finishedHold != replayWasFinished_) || (replayActive &&
+        (replayFrame.token.instance != lastReplayToken_.instance || replayFrame.token.generation != lastReplayToken_.generation ||
+         replayFrame.token.deathSerial != lastReplayToken_.deathSerial || replayFrame.token.cut != lastReplayToken_.cut)))
+        InvalidateMotionBlurHistory();
+    if (replayActive && (!replayWasActive_ || replayFrame.token.instance != lastReplayToken_.instance ||
+        replayFrame.token.generation != lastReplayToken_.generation || replayFrame.token.deathSerial != lastReplayToken_.deathSerial)) {
+        try { replayWaterStates_ = CaptureWaterPostEffectStates(true); }
+        catch (const std::bad_alloc&) { sceneManager_->RejectReplayGameFrame(replayFrame.token); replayActive=false; InvalidateMotionBlurHistory(); }
+        catch (const std::length_error&) { sceneManager_->RejectReplayGameFrame(replayFrame.token); replayActive=false; InvalidateMotionBlurHistory(); }
+    }
+    if (!replayActive) replayWaterStates_.clear();
+    replayWasActive_=replayActive; replayWasFinished_=replayActive && replayFrame.finishedHold; lastReplayToken_=replayFrame.token;
+    sceneManager_->DrawShadow();
+    sceneManager_->DrawOffscreenViews();
+    if (replayActive) replayActive=sceneManager_->DrawReplayGameShadow(replayFrame.token);
 	sceneRenderTarget_->Resize(renderWidth, renderHeight);
 	if (
 		motionBlurHistoryRenderTarget_->GetWidth() != renderWidth ||
@@ -1788,8 +1847,12 @@ void Game::Draw() {
 	sceneRenderTarget_->Begin();
 	srvManager_->PreDraw();
 	Object3dCommon::GetInstance()->SetCommonRenderState();
-	sceneManager_->Draw();
+    if (replayActive && !sceneManager_->DrawReplayGameWorld(replayFrame.token)) {
+        replayActive=false; InvalidateMotionBlurHistory();
+    }
+    if (!replayActive) sceneManager_->Draw(replayFramingPreview ? &replayEditorCamera_ : nullptr);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
+    if (!replayActive) {
 	DrawSceneSpatialPreview();
 	if (
 		editorSession_ &&
@@ -1802,9 +1865,12 @@ void Game::Draw() {
 	DebugRenderer::GetInstance()->Draw(
 		Object3dCommon::GetInstance()->GetDefaultCamera()
 	);
+    }
 #endif
 	sceneRenderTarget_->End();
 
+    // Scene描画のApplyRenderCameraが指定した確認Cameraを独立Viewへ持ち越さない。
+    Object3dCommon::GetInstance()->SetDefaultCamera(normalEditorCamera);
 	bool drawUIEditor = false;
 	uint32_t uiWidth = 1, uiHeight = 1;
 	SceneUIEditorView uiView;
@@ -1830,19 +1896,44 @@ void Game::Draw() {
 	DrawPrefabPreview();
 #endif
 
+    // 各Viewの設定/Camera/定数bufferを明示入力にする。Gameメンバーを書換えて戻さない。
+    auto processView = [&](SceneRenderTarget* sceneRenderTarget_, SceneRenderTarget** postProcessRenderTargets_,
+        SceneRenderTarget* foregroundComposeRenderTarget_, FullscreenCopy* fullscreenCopy_, BloomRenderer* bloomRenderer_,
+        const ScenePostProcessSettings& settings, Camera* renderCamera, float gameViewTime, bool ui, bool replay,
+        int& outputPass) {
+        const bool deferForegroundEffects = settings.waterRefractionEnabled;
+        auto drawForeground = [&] {
+            if (ui) sceneManager_->DrawEditorUIView("Foreground",uiWidth,uiHeight);
+            else if (!replay) sceneManager_->DrawForegroundEffects(replayFramingPreview ? &replayEditorCamera_ : nullptr);
+        };
+        const float radialBlurCenter_[] = {settings.radialBlurCenter.x, settings.radialBlurCenter.y};
+        const float chromaticAberrationCenter_[] = {settings.chromaticAberrationCenter.x, settings.chromaticAberrationCenter.y};
+        const float dissolveEdgeColor_[] = {settings.dissolveEdgeColor.x, settings.dissolveEdgeColor.y, settings.dissolveEdgeColor.z, settings.dissolveEdgeColor.w};
+        const float outlineColor_[] = {settings.outlineColor.x, settings.outlineColor.y, settings.outlineColor.z, settings.outlineColor.w};
+        const float underwaterTintColor_[] = {settings.underwaterTintColor.x, settings.underwaterTintColor.y, settings.underwaterTintColor.z, settings.underwaterTintColor.w};
+        const float waterRefractionTintColor_[] = {settings.waterRefractionTintColor.x, settings.waterRefractionTintColor.y, settings.waterRefractionTintColor.z, settings.waterRefractionTintColor.w};
+        auto bloomParameters_ = this->bloomParameters_;
+        bloomParameters_.enabled = settings.bloomEnabled;
+        bloomParameters_.toneMapMode = settings.toneMapMode;
+        bloomParameters_.threshold = settings.bloomThreshold;
+        bloomParameters_.softKnee = settings.bloomSoftKnee;
+        bloomParameters_.intensity = settings.bloomIntensity;
+        bloomParameters_.blurIterations = settings.bloomBlurIterations;
+        bloomParameters_.downsampleScale = settings.bloomDownsampleScale;
+        bloomParameters_.blurRadius = settings.bloomBlurRadius;
+        if (replay) bloomParameters_.exposure = settings.baseExposure;
 	fullscreenCopy_->BeginFrame();
 	const D3D12_GPU_DESCRIPTOR_HANDLE depthHandle =
 		sceneRenderTarget_->GetDepthSrvGpuHandle();
 	const char* dissolveMaskPath =
-		dissolveMaskIndex_ == 1
+		settings.dissolveMaskIndex == 1
 			? "resources/noise1.png"
 			: "resources/noise0.png";
 	const D3D12_GPU_DESCRIPTOR_HANDLE maskHandle =
 		TextureManager::GetInstance()->GetSrvHandleGPU(dissolveMaskPath);
-	Camera* renderCamera =
-		Object3dCommon::GetInstance()->GetDefaultCamera();
+
 	const WaterPostEffectState waterState =
-		ResolveWaterPostEffectState(renderCamera);
+		ResolveWaterPostEffectState(renderCamera, replay ? &replayWaterStates_ : nullptr);
 	auto fillWaterParameters = [&](
 		FullscreenCopy::Parameters& parameters
 	) {
@@ -1867,13 +1958,13 @@ void Game::Draw() {
 			parameters.cameraForwardActive[1] = cameraWorld.m[2][1];
 			parameters.cameraForwardActive[2] = cameraWorld.m[2][2];
 		}
-		parameters.cameraUpTime[3] = noiseTime_;
+		parameters.cameraUpTime[3] = gameViewTime;
 		parameters.cameraForwardActive[3] =
 			waterState.hasVolume ? 1.0f : 0.0f;
 		parameters.underwaterParams[0] =
-			waterState.cameraInside ? underwaterIntensity_ : 0.0f;
-		parameters.underwaterParams[1] = underwaterFogDensity_;
-		parameters.underwaterParams[2] = underwaterDistortion_;
+			waterState.cameraInside ? settings.underwaterIntensity : 0.0f;
+		parameters.underwaterParams[1] = settings.underwaterFogDensity;
+		parameters.underwaterParams[2] = settings.underwaterDistortion;
 		for (uint32_t index = 0; index < 4; ++index) {
 			parameters.underwaterTintColor[index] =
 				underwaterTintColor_[index];
@@ -1887,15 +1978,15 @@ void Game::Draw() {
 		parameters.waterVolumeHalfSizeEdge[1] = waterState.halfSize.y;
 		parameters.waterVolumeHalfSizeEdge[2] = waterState.halfSize.z;
 		parameters.waterVolumeHalfSizeEdge[3] =
-			waterRefractionEdgeSoftness_;
+			settings.waterRefractionEdgeSoftness;
 		for (uint32_t index = 0; index < 4; ++index) {
 			parameters.waterRefractionTintColor[index] =
 				waterRefractionTintColor_[index];
 		}
 		parameters.waterRefractionParams[0] =
-			waterRefractionStrength_;
+			settings.waterRefractionStrength;
 		parameters.waterRefractionParams[1] =
-			waterRefractionTintStrength_;
+			settings.waterRefractionTintStrength;
 		parameters.waterLightColorIntensity[0] =
 			waterState.lightColor.x;
 		parameters.waterLightColorIntensity[1] =
@@ -1929,26 +2020,10 @@ void Game::Draw() {
 	};
 
 
-	// Viewごとにcopy定数とRTを分け、通常SceneのPostEffect資源を再利用して上書きしない。
-	auto applyUIEditorHdrEffect = [&](FullscreenCopy::Effect effect, const FullscreenCopy::Parameters& parameters) {
-		if (!drawUIEditor) return;
-		uiEditorForegroundTarget_->Begin();
-		srvManager_->PreDraw();
-		uiEditorCopy_->SetParameters(parameters);
-		uiEditorCopy_->Draw(uiEditorSceneTarget_->GetSrvGpuHandle(), uiEditorSceneTarget_->GetDepthSrvGpuHandle(),
-			maskHandle, effect, FullscreenCopy::OutputFormat::kSceneHdr);
-		uiEditorForegroundTarget_->End();
-		uiEditorSceneTarget_->Begin(false, false);
-		srvManager_->PreDraw();
-		uiEditorCopy_->SetParameters({});
-		uiEditorCopy_->Draw(uiEditorForegroundTarget_->GetSrvGpuHandle(), maskHandle, maskHandle,
-			FullscreenCopy::Effect::kCopy, FullscreenCopy::OutputFormat::kSceneHdr);
-		uiEditorSceneTarget_->End();
-	};
 	bool waterRefractionAppliedBeforeForeground = false;
 	if (deferForegroundEffects) {
 		if (
-			waterRefractionEnabled_ &&
+			settings.waterRefractionEnabled &&
 			waterState.hasVolume &&
 			!waterState.cameraInside &&
 			renderCamera
@@ -1978,27 +2053,17 @@ void Game::Draw() {
 				FullscreenCopy::Effect::kCopy,
 				FullscreenCopy::OutputFormat::kSceneHdr
 			);
-			sceneManager_->DrawForegroundEffects();
+			drawForeground();
 			sceneRenderTarget_->End();
 			waterRefractionAppliedBeforeForeground = true;
 		} else {
 			sceneRenderTarget_->Begin(false, false);
 			srvManager_->PreDraw();
-			sceneManager_->DrawForegroundEffects();
+			drawForeground();
 			sceneRenderTarget_->End();
 		}
 	}
-	if (drawUIEditor && deferForegroundEffects) {
-		if (waterRefractionAppliedBeforeForeground) {
-			FullscreenCopy::Parameters parameters{}; fillWaterParameters(parameters);
-			applyUIEditorHdrEffect(FullscreenCopy::Effect::kWaterRefraction, parameters);
-		}
-		uiEditorSceneTarget_->Begin(false, false);
-		srvManager_->PreDraw();
-		sceneManager_->DrawEditorUIView("Foreground", uiWidth, uiHeight);
-		uiEditorSceneTarget_->End();
-	}
-	sceneManager_->SetDeferForegroundEffects(false);
+
 
 	auto applySceneHdrEffect = [&](
 		FullscreenCopy::Effect effect,
@@ -2028,7 +2093,7 @@ void Game::Draw() {
 			FullscreenCopy::OutputFormat::kSceneHdr
 		);
 		sceneRenderTarget_->End();
-		applyUIEditorHdrEffect(effect, parameters);
+
 	};
 
 	if (
@@ -2064,20 +2129,6 @@ void Game::Draw() {
 		);
 		postProcessRenderTargets_[0]->End();
 	}
-	D3D12_GPU_DESCRIPTOR_HANDLE uiSourceHandle{};
-	int uiPassIndex = 1;
-	if (drawUIEditor) {
-		if (uiEditorBloom_) {
-			uiEditorBloom_->BeginFrame(); uiEditorBloom_->SetParameters(bloomParameters_);
-			uiEditorBloom_->Apply(uiEditorSceneTarget_->GetSrvGpuHandle(), uiEditorPostTargets_[0]);
-		} else {
-			uiEditorPostTargets_[0]->Begin(); srvManager_->PreDraw(); uiEditorCopy_->SetParameters({});
-			uiEditorCopy_->Draw(uiEditorSceneTarget_->GetSrvGpuHandle(), uiEditorSceneTarget_->GetDepthSrvGpuHandle(),
-				maskHandle, FullscreenCopy::Effect::kCopy);
-			uiEditorPostTargets_[0]->End();
-		}
-		uiSourceHandle = uiEditorPostTargets_[0]->GetSrvGpuHandle();
-	}
 	D3D12_GPU_DESCRIPTOR_HANDLE sourceHandle =
 		postProcessRenderTargets_[0]->GetSrvGpuHandle();
 	int passIndex = 1;
@@ -2099,58 +2150,53 @@ void Game::Draw() {
 		destination->End();
 		sourceHandle = destination->GetSrvGpuHandle();
 		++passIndex;
-		if (drawUIEditor) {
-			auto* uiDestination = uiEditorPostTargets_[uiPassIndex++ % 2];
-			uiDestination->Begin(); srvManager_->PreDraw();
-			uiEditorCopy_->SetParameters(parameters);
-			uiEditorCopy_->Draw(uiSourceHandle, uiEditorSceneTarget_->GetDepthSrvGpuHandle(), maskHandle, effect);
-			uiDestination->End(); uiSourceHandle = uiDestination->GetSrvGpuHandle();
-		}
+
 	};
 
-	if (grayscaleEnabled_) {
+	if (settings.grayscaleEnabled) {
 		applyEffect(
 			FullscreenCopy::Effect::kGrayscale,
 			FullscreenCopy::Parameters{}
 		);
 	}
-	if (vignetteEnabled_) {
+	if (settings.vignetteEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.vignetteScale = vignetteScale_;
-		parameters.vignettePower = vignettePower_;
-		parameters.vignetteIntensity = vignetteIntensity_;
+		parameters.vignetteScale = settings.vignetteScale;
+		parameters.vignettePower = settings.vignettePower;
+		parameters.vignetteIntensity = settings.vignetteIntensity;
 		applyEffect(FullscreenCopy::Effect::kVignette, parameters);
 	}
-	if (boxBlurEnabled_) {
+	if (settings.boxBlurEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.blurStrength = boxBlurStrength_;
-		parameters.blurRadius = boxBlurKernelSize_ == 5 ? 2u : 1u;
+		parameters.blurStrength = settings.boxBlurStrength;
+		parameters.blurRadius = settings.boxBlurKernelSize == 5 ? 2u : 1u;
 		applyEffect(FullscreenCopy::Effect::kBoxBlur, parameters);
 	}
-	if (gaussianBlurEnabled_) {
+	if (settings.gaussianBlurEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.blurStrength = gaussianBlurStrength_;
+		parameters.blurStrength = settings.gaussianBlurStrength;
 		parameters.blurRadius =
-			gaussianBlurKernelSize_ == 5 ? 2u : 1u;
-		parameters.gaussianSigma = gaussianBlurSigma_;
+			settings.gaussianBlurKernelSize == 5 ? 2u : 1u;
+		parameters.gaussianSigma = settings.gaussianBlurSigma;
 		applyEffect(FullscreenCopy::Effect::kGaussianBlur, parameters);
 	}
-	if (depthOfFieldEnabled_) {
+	if (settings.depthOfFieldEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.blurStrength = dofBlurStrength_;
-		parameters.dofFocusDistance = dofFocusDistance_;
-		parameters.dofFocusRange = dofFocusRange_;
-		parameters.dofNearStrength = dofNearStrength_;
-		parameters.dofFarStrength = dofFarStrength_;
-		parameters.dofMaxRadius = dofMaxRadius_;
+		parameters.blurStrength = settings.depthOfFieldBlurStrength;
+		parameters.dofFocusDistance = settings.depthOfFieldFocusDistance;
+		parameters.dofFocusRange = settings.depthOfFieldFocusRange;
+		parameters.dofNearStrength = settings.depthOfFieldNearStrength;
+		parameters.dofFarStrength = settings.depthOfFieldFarStrength;
+		parameters.dofMaxRadius = settings.depthOfFieldMaxRadius;
 		Camera* camera =
-			Object3dCommon::GetInstance()->GetDefaultCamera();
+			renderCamera;
 		if (camera) {
 			parameters.cameraNear = camera->GetNearClip();
 			parameters.cameraFar = camera->GetFarClip();
 		}
 		applyEffect(FullscreenCopy::Effect::kDepthOfField, parameters);
 	}
+	if (!ui) {
 	const bool motionBlurPlaying =
 		executionContext_ && executionContext_->IsPlaying();
 	const SceneInstanceId motionBlurSceneInstanceId = sceneManager_
@@ -2165,12 +2211,12 @@ void Game::Draw() {
 	motionBlurLastPlaying_ = motionBlurPlaying;
 	motionBlurLastSceneInstanceId_ = motionBlurSceneInstanceId;
 
-	if (!motionBlurEnabled_) {
+	if (!settings.motionBlurEnabled) {
 		motionBlurWasEnabled_ = false;
 		InvalidateMotionBlurHistory();
 	} else {
 		Camera* motionBlurCamera =
-			Object3dCommon::GetInstance()->GetDefaultCamera();
+			renderCamera;
 		if (!motionBlurCamera) {
 			InvalidateMotionBlurHistory();
 		} else {
@@ -2200,10 +2246,10 @@ void Game::Draw() {
 					Inverse(currentViewProjection);
 				parameters.motionBlurPreviousViewProjection =
 					previousMotionBlurViewProjection_;
-				parameters.motionBlurParams[0] = motionBlurStrength_;
+				parameters.motionBlurParams[0] = settings.motionBlurStrength;
 				parameters.motionBlurParams[1] =
-					static_cast<float>(motionBlurSamples_);
-				parameters.motionBlurParams[2] = motionBlurMaxRadius_;
+					static_cast<float>(settings.motionBlurSamples);
+				parameters.motionBlurParams[2] = settings.motionBlurMaxRadius;
 				parameters.motionBlurTextureSizeHistoryValid[0] =
 					static_cast<float>(postProcessRenderTargets_[0]->GetWidth());
 				parameters.motionBlurTextureSizeHistoryValid[1] =
@@ -2232,56 +2278,57 @@ void Game::Draw() {
 			motionBlurWasEnabled_ = true;
 		}
 	}
-	if (radialBlurEnabled_) {
+	}
+	if (settings.radialBlurEnabled) {
 		FullscreenCopy::Parameters parameters{};
 		parameters.radialBlurCenter[0] = radialBlurCenter_[0];
 		parameters.radialBlurCenter[1] = radialBlurCenter_[1];
-		parameters.radialBlurWidth = radialBlurWidth_;
+		parameters.radialBlurWidth = settings.radialBlurWidth;
 		parameters.radialBlurSamples =
-			static_cast<uint32_t>(radialBlurSamples_);
+			static_cast<uint32_t>(settings.radialBlurSamples);
 		applyEffect(FullscreenCopy::Effect::kRadialBlur, parameters);
 	}
-	if (noiseEnabled_) {
+	if (settings.noiseEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.noiseTime = noiseTime_;
-		parameters.noiseAmount = noiseAmount_;
-		parameters.noiseScale = noiseScale_;
-		parameters.noiseSeed = noiseSeed_;
+		parameters.noiseTime = gameViewTime;
+		parameters.noiseAmount = settings.noiseAmount;
+		parameters.noiseScale = settings.noiseScale;
+		parameters.noiseSeed = settings.noiseSeed;
 		applyEffect(FullscreenCopy::Effect::kNoise, parameters);
 	}
-	if (dissolveEnabled_) {
+	if (settings.dissolveEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.dissolveThreshold = dissolveThreshold_;
-		parameters.dissolveEdgeWidth = dissolveEdgeWidth_;
+		parameters.dissolveThreshold = settings.dissolveThreshold;
+		parameters.dissolveEdgeWidth = settings.dissolveEdgeWidth;
 		for (uint32_t index = 0; index < 4; ++index) {
 			parameters.dissolveEdgeColor[index] =
 				dissolveEdgeColor_[index];
 		}
 		applyEffect(FullscreenCopy::Effect::kDissolve, parameters);
 	}
-	if (outlineEnabled_) {
+	if (settings.outlineEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.outlineLuminanceWeight = outlineLuminanceWeight_;
-		parameters.outlineDepthWeight = outlineDepthWeight_;
-		parameters.outlineThreshold = outlineThreshold_;
-		parameters.outlineSoftness = outlineSoftness_;
-		parameters.outlineThickness = outlineThickness_;
+		parameters.outlineLuminanceWeight = settings.outlineLuminanceWeight;
+		parameters.outlineDepthWeight = settings.outlineDepthWeight;
+		parameters.outlineThreshold = settings.outlineThreshold;
+		parameters.outlineSoftness = settings.outlineSoftness;
+		parameters.outlineThickness = settings.outlineThickness;
 		Camera* camera =
-			Object3dCommon::GetInstance()->GetDefaultCamera();
+			renderCamera;
 		if (camera) {
 			parameters.cameraNear = camera->GetNearClip();
 			parameters.cameraFar = camera->GetFarClip();
 		}
 		parameters.outlineFlags =
-			(outlineLuminanceEnabled_ ? 1u : 0u) |
-			(outlineDepthEnabled_ ? 2u : 0u);
+			(settings.outlineLuminanceEnabled ? 1u : 0u) |
+			(settings.outlineDepthEnabled ? 2u : 0u);
 		for (uint32_t index = 0; index < 4; ++index) {
 			parameters.outlineColor[index] = outlineColor_[index];
 		}
 		applyEffect(FullscreenCopy::Effect::kOutline, parameters);
 	}
 	if (
-		waterRefractionEnabled_ &&
+		settings.waterRefractionEnabled &&
 		!waterRefractionAppliedBeforeForeground &&
 		waterState.hasVolume &&
 		!waterState.cameraInside &&
@@ -2291,27 +2338,46 @@ void Game::Draw() {
 		fillWaterParameters(parameters);
 		applyEffect(FullscreenCopy::Effect::kWaterRefraction, parameters);
 	}
-	if (underwaterEnabled_ && waterState.cameraInside && renderCamera) {
+	if (settings.underwaterEnabled && waterState.cameraInside && renderCamera) {
 		FullscreenCopy::Parameters parameters{};
 		fillWaterParameters(parameters);
 		applyEffect(FullscreenCopy::Effect::kUnderwater, parameters);
 	}
-	if (pixelationEnabled_) {
+	if (settings.pixelationEnabled) {
 		FullscreenCopy::Parameters parameters{};
-		parameters.pixelationParams[0] = static_cast<float>(pixelationBlockSize_);
+		parameters.pixelationParams[0] = static_cast<float>(settings.pixelationBlockSize);
 		parameters.pixelationParams[1] = static_cast<float>(postProcessRenderTargets_[0]->GetWidth());
 		parameters.pixelationParams[2] = static_cast<float>(postProcessRenderTargets_[0]->GetHeight());
 		applyEffect(FullscreenCopy::Effect::kPixelation, parameters);
 	}
-	if (chromaticAberrationEnabled_) {
+	if (settings.chromaticAberrationEnabled) {
 		FullscreenCopy::Parameters parameters{};
 		parameters.chromaticCenterIntensity[0] = chromaticAberrationCenter_[0];
 		parameters.chromaticCenterIntensity[1] = chromaticAberrationCenter_[1];
-		parameters.chromaticCenterIntensity[2] = chromaticAberrationIntensity_;
-		parameters.chromaticParams[0] = chromaticAberrationFalloff_;
+		parameters.chromaticCenterIntensity[2] = settings.chromaticAberrationIntensity;
+		parameters.chromaticParams[0] = settings.chromaticAberrationFalloff;
 		applyEffect(FullscreenCopy::Effect::kChromaticAberration, parameters);
 	}
-	if (sceneManager_ && sceneManager_->HasScreenOverlay()) {
+        outputPass = passIndex;
+        return sourceHandle;
+    };
+    const auto liveSettings = CapturePostProcessSettings();
+    Camera* liveCamera = normalEditorCamera;
+    int passIndex = 1;
+    auto sourceHandle = processView(sceneRenderTarget_,postProcessRenderTargets_,foregroundComposeRenderTarget_,fullscreenCopy_,bloomRenderer_,
+        replayActive ? replayFrame.postProcess : liveSettings, replayActive ? &replayFrame.camera : (replayFramingPreview ? &replayEditorCamera_ : liveCamera),
+        replayActive ? replayFrame.effectTime : gameViewTime,false,replayActive,passIndex);
+    D3D12_GPU_DESCRIPTOR_HANDLE uiSourceHandle{};
+    if (drawUIEditor) {
+        int unusedPass = 1;
+        uiSourceHandle = processView(uiEditorSceneTarget_,uiEditorPostTargets_,uiEditorForegroundTarget_,uiEditorCopy_,uiEditorBloom_,
+            liveSettings,liveCamera,noiseTime_,true,false,unusedPass);
+    }
+    sceneManager_->SetDeferForegroundEffects(false);
+    const auto depthHandle = sceneRenderTarget_->GetDepthSrvGpuHandle();
+    const auto maskHandle = TextureManager::GetInstance()->GetSrvHandleGPU("resources/noise0.png");
+    SceneMenuSource replayMenuDrawn{};
+	if (sceneManager_ && ((!replayActive && sceneManager_->HasScreenOverlay()) || (replayActive && replayFrame.finishedHold))) {
 		textOverlayRenderTarget_->Begin(false, false);
 		srvManager_->PreDraw();
 		fullscreenCopy_->SetParameters(FullscreenCopy::Parameters{});
@@ -2321,7 +2387,8 @@ void Game::Draw() {
 			maskHandle,
 			FullscreenCopy::Effect::kCopy
 		);
-		sceneManager_->DrawScreenOverlay(renderWidth, renderHeight);
+        if (replayActive) sceneManager_->DrawReplayMenu(replayFrame.token,replayMenuDrawn);
+        else sceneManager_->DrawScreenOverlay(renderWidth, renderHeight);
 		textOverlayRenderTarget_->End();
 		sourceHandle = textOverlayRenderTarget_->GetSrvGpuHandle();
 	}
@@ -2338,13 +2405,19 @@ void Game::Draw() {
 	SceneRenderTarget* const postProcessOutputTarget =
 		postProcessRenderTargets_[(passIndex - 1) % 2];
 	if (editorSession_) {
-		imguiManager_->SetUIEditorViewTexture(drawUIEditor ? uiEditorOverlayTarget_->GetSrvGpuHandle() : D3D12_GPU_DESCRIPTOR_HANDLE{}, drawUIEditor ? uiView : SceneUIEditorView{});
+		imguiManager_->SetUIEditorViewTexture(
+			drawUIEditor ? uiEditorOverlayTarget_->GetSrvGpuHandle() : D3D12_GPU_DESCRIPTOR_HANDLE{},
+			drawUIEditor ? uiView : SceneUIEditorView{},
+			drawUIEditor ? uiEditorOverlayTarget_->GetWidth() : 0,
+			drawUIEditor ? uiEditorOverlayTarget_->GetHeight() : 0);
+        if (replayFramingPreview) Object3dCommon::GetInstance()->SetDefaultCamera(&replayEditorCamera_);
 		imguiManager_->DrawEditorWorkspace(
 			sourceHandle,
 			postProcessOutputTarget->GetWidth(),
 			postProcessOutputTarget->GetHeight(),
 			sceneManager_->GetCurrentSceneName().c_str()
 		);
+        Object3dCommon::GetInstance()->SetDefaultCamera(normalEditorCamera);
 		if (presentedTransition_ && !IsPresentedTransitionDrawable()) presentedTransition_->controller.DiscardDrawReceipt();
 	}
 #endif
@@ -2353,7 +2426,7 @@ void Game::Draw() {
 	srvManager_->PreDraw();
 	fullscreenCopy_->Draw(sourceHandle, depthHandle, maskHandle);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
-	imguiManager_->EndFrame(drawUIEditor || (presentedTransition_ && presentedTransition_->renderedTextureUsed));
+	imguiManager_->EndFrame(replayActive || drawUIEditor || (presentedTransition_ && presentedTransition_->renderedTextureUsed));
 #endif
 
 	dxCommon_->PostDraw();
@@ -2361,6 +2434,12 @@ void Game::Draw() {
 	// UI編集/演出のRTをmain送信後にplatformへ渡し、最後の利用まで既存Fenceで待つ。
 	if (imguiManager_->RenderDeferredPlatformWindows()) dxCommon_->ExecuteCommandListAndWait();
 #endif
+	if (sceneManager_) sceneManager_->NotifyReplayGpuCompleted();
+    if (replayActive && IsPresentedTransitionDrawable() && IsWindowVisible(winApp_->GetHwnd()) && !sceneManager_->IsTransitionHeld() &&
+        !(presentedTransition_ && presentedTransition_->controller.IsActive())) {
+        sceneManager_->AcceptReplayPresentationReceipt(replayFrame.token);
+        if (replayMenuDrawn.panelId) sceneManager_->AcceptReplayMenuReceipt(replayFrame.token,replayMenuDrawn);
+    }
 	if (presentedTransition_) presentedTransition_->completedSerial = presentedTransition_->frameSerial;
 }
 
@@ -2422,13 +2501,9 @@ void Game::EndPauseDebugCamera() {
 	pauseMainCameraSnapshot_ = {};
 }
 
-Game::WaterPostEffectState Game::ResolveWaterPostEffectState(
-	const Camera* camera
-) const {
-	WaterPostEffectState state{};
-	if (!camera || !sceneManager_) {
-		return state;
-	}
+std::vector<Game::WaterPostEffectState> Game::CaptureWaterPostEffectStates(bool activeOnly) const {
+    std::vector<WaterPostEffectState> result;
+    if (!sceneManager_) return result;
 
 	std::vector<const SceneDocument*> documents;
 	const SceneDocument* activeDocument =
@@ -2436,7 +2511,7 @@ Game::WaterPostEffectState Game::ResolveWaterPostEffectState(
 	if (activeDocument) {
 		documents.push_back(activeDocument);
 	}
-	for (const SceneInstance* instance :
+	if (!activeOnly) for (const SceneInstance* instance :
 		sceneManager_->GetLoadedSceneInstances()) {
 		const SceneDocument* document = instance
 			? instance->GetDocument()
@@ -2450,11 +2525,10 @@ Game::WaterPostEffectState Game::ResolveWaterPostEffectState(
 		}
 	}
 	if (documents.empty()) {
-		return state;
+		return result;
 	}
 
-	const Vector3 cameraPosition = camera->GetTranslate();
-	WaterPostEffectState firstVolume{};
+
 	for (const SceneDocument* document : documents) {
 	for (const SceneEntity& entity : document->GetEntities()) {
 		if (!IsEntityActiveInHierarchy(*document, entity)) {
@@ -2510,22 +2584,25 @@ Game::WaterPostEffectState Game::ResolveWaterPostEffectState(
 			4,
 			32
 		);
-		candidate.cameraInside = IsPointInsideAabb(
-			cameraPosition,
-			candidate.center,
-			candidate.halfSize
-		);
-
-		if (!firstVolume.hasVolume) {
-			firstVolume = candidate;
-		}
-		if (candidate.cameraInside) {
-			return candidate;
-		}
+		result.push_back(candidate);
 	}
 	}
 
-	return firstVolume;
+	return result;
+}
+
+Game::WaterPostEffectState Game::ResolveWaterPostEffectState(const Camera* camera,
+    const std::vector<WaterPostEffectState>* frozen) const {
+    if (!camera) return {};
+    const auto live = frozen ? std::vector<WaterPostEffectState>{} : CaptureWaterPostEffectStates(false);
+    const auto& volumes = frozen ? *frozen : live;
+    WaterPostEffectState first{};
+    for (auto candidate : volumes) {
+        candidate.cameraInside=IsPointInsideAabb(camera->GetTranslate(),candidate.center,candidate.halfSize);
+        if (!first.hasVolume) first=candidate;
+        if (candidate.cameraInside) return candidate;
+    }
+    return first;
 }
 
 ScenePostProcessSettings Game::CapturePostProcessSettings() const {
@@ -2721,6 +2798,56 @@ void Game::ApplyPostProcessSettings(
 	waterRefractionTintStrength_ = settings.waterRefractionTintStrength;
 }
 
+void Game::UpdateViewEffectClock() {
+	const bool resetRequested = resetViewEffectTimeRequested_;
+	resetViewEffectTimeRequested_ = false;
+	if (resetRequested) gameEffectTime_ = 0.0;
+	SceneViewEffectClock clock{};
+	SceneInstanceId instance = kInvalidSceneInstanceId;
+	const bool runtimeView = !executionContext_ || !executionContext_->IsEditing();
+	if (!runtimeView || !sceneManager_ || !sceneManager_->TryGetActiveViewEffectClock(clock, instance)) {
+		viewEffectClockBound_ = false;
+		viewEffectClockInstance_ = kInvalidSceneInstanceId;
+		viewEffectClockGeneration_ = 0;
+		lastObservedWorldSeconds_ = gameEffectTime_ = 0.0;
+		return;
+	}
+	const bool sameBinding = viewEffectClockBound_ && instance == viewEffectClockInstance_ &&
+		clock.contentGeneration == viewEffectClockGeneration_;
+	if (!sameBinding) viewEffectClockBound_ = false;
+	const double elapsed = clock.deathWorldElapsedSeconds;
+	if (!std::isfinite(elapsed) || elapsed < 0.0 ||
+		(sameBinding && elapsed < lastObservedWorldSeconds_)) return;
+	if (!sameBinding) {
+		viewEffectClockInstance_ = instance;
+		viewEffectClockGeneration_ = clock.contentGeneration;
+		// 初表示時より前の累積をまとめて足さず、その画面の現在位相を引き継ぐ。
+		gameEffectTime_ = resetRequested ? 0.0 : (std::isfinite(noiseTime_) ? noiseTime_ : 0.0);
+		lastObservedWorldSeconds_ = elapsed;
+		viewEffectClockBound_ = true;
+		return;
+	}
+	const double delta = elapsed - lastObservedWorldSeconds_;
+	// Animate off/不正な倍率/Resetでもcursorを進め、再有効化時の追い付き加算を防ぐ。
+	lastObservedWorldSeconds_ = elapsed;
+	if (resetRequested || !noiseAnimate_ || !std::isfinite(noiseSpeed_)) return;
+	const double next = gameEffectTime_ + delta * static_cast<double>(noiseSpeed_);
+	if (std::isfinite(next) && std::abs(next) <= static_cast<double>((std::numeric_limits<float>::max)())) {
+		gameEffectTime_ = next;
+	}
+}
+
+float Game::GetGameViewEffectTime() const {
+	SceneViewEffectClock clock{};
+	SceneInstanceId instance = kInvalidSceneInstanceId;
+	if (viewEffectClockBound_ && (!executionContext_ || !executionContext_->IsEditing()) && sceneManager_ &&
+		sceneManager_->TryGetActiveViewEffectClock(clock, instance) && instance == viewEffectClockInstance_ &&
+		clock.contentGeneration == viewEffectClockGeneration_) {
+		return static_cast<float>(gameEffectTime_);
+	}
+	return noiseTime_;
+}
+
 void Game::ApplyRuntimePostProcessSettings() {
 	if (!sceneManager_ || !executionContext_ || !executionContext_->IsPlaying()) {
 		appliedRuntimePostProcessGeneration_ = static_cast<uint64_t>(-1);
@@ -2889,6 +3016,8 @@ void Game::DrawPrefabPreview() {
 		!imguiManager_->GetPrefabPreviewRequest(request) ||
 		!request.document
 	) {
+        SceneReplayFramingRequest framing;
+        if (imguiManager_->GetReplayFramingRequest(true,framing)) imguiManager_->SetReplayFramingResult(framing,false,{});
 		return;
 	}
 
@@ -2900,6 +3029,12 @@ void Game::DrawPrefabPreview() {
 	overlayOptions.showCombatVolumes = request.showCombatVolumes;
 	overlayOptions.isolateSelectedCollider = request.isolateSelectedCollider;
 	overlayOptions.showGrid = request.showGrid;
+    SceneReplayFramingRequest framing;
+    const bool hasFraming=imguiManager_->GetReplayFramingRequest(true,framing);
+    // Animation Previewは同じEntity IDを保つ別世代の表示用Document。元Prefabとの対応を先に照合する。
+    const bool matchingFraming=hasFraming && request.assetPath==framing.sourcePath;
+    auto displayFraming=framing;
+    displayFraming.generation=request.document->GetContentGeneration();
 	prefabPreviewRenderer_->Render(
 		request.assetPath,
 		*request.document,
@@ -2910,8 +3045,13 @@ void Game::DrawPrefabPreview() {
 		request.pitch,
 		request.zoom,
 		request.framingSerial,
-		overlayOptions
+		overlayOptions,
+        matchingFraming ? &displayFraming : nullptr
 	);
+    if (hasFraming) {
+        Camera camera; SceneReplayViewSettings manual;
+        imguiManager_->SetReplayFramingResult(framing,matchingFraming && prefabPreviewRenderer_->GetReplayFramingResult(camera,manual),manual);
+    }
 	imguiManager_->SetPrefabPreviewTexture(
 		request.assetPath,
 		request.revision,

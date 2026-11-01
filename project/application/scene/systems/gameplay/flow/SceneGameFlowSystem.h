@@ -18,6 +18,9 @@ struct SceneGameFlowWaveRequest { uint64_t spawnerEntityId = 0; uint64_t generat
 struct SceneGameFlowEntityRequest { uint64_t entityId = 0; bool active = false; };
 
 struct SceneGameFlowResult {
+	// 初回StartCue→PhaseActiveだけのpulse。callerは保持用結果へコピーする前に取り出す。
+	uint64_t startedDirectorEntityId = 0;
+	uint64_t startedDocumentGeneration = 0;
 	bool hasDirector = false;
 	bool gameplayAllowed = true;
 	std::vector<SceneGameFlowTextRequest> textRequests;
@@ -31,8 +34,11 @@ struct SceneGameFlowResult {
 
 class SceneGameFlowSystem {
 public:
-	// 秒単位で進行し、前FrameのSpawner状態から要求を返す。要求適用とSystem更新順はcallerが所有する。
-	SceneGameFlowResult Update(SceneDocument& document, SceneEnemySpawnerSystem& spawnerSystem, float deltaTime);
+	// 前段で秒時計/開始準備を更新し、finalize=trueでは時計を進めずPhase以降の結果を確定する。
+	// callerは死亡判定後に必要なFrameだけ後段を一回呼ぶ。要求の適用もcallerが所有する。
+	SceneGameFlowResult Update(SceneDocument& document, SceneEnemySpawnerSystem& spawnerSystem, float deltaTime, bool finalize = false);
+	// Phase以降だけ戦闘/Event後に確定。前段は時計だけを進める。
+	bool NeedsFinalize() const { return state_ == SceneGameFlowState::PhaseActive || state_ == SceneGameFlowState::PhaseGap || state_ == SceneGameFlowState::ResultDelay || state_ == SceneGameFlowState::Result; }
 	bool IsGameplayAllowed() const { return gameplayAllowed_; }
 	// Runtime状態だけを初期化する。Spawner/文字の破棄や復元はcaller側のScene終了処理で行う。
 	void Clear();

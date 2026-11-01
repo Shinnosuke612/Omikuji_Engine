@@ -180,6 +180,7 @@ void Audio::Initialize(const MediaFoundationRuntime* mediaFoundationRuntime){
 }
 
 void Audio::Finalize(){
+	gamePaused_ = gamePauseBgm_ = false;
 	if (audioDirector_) {
 		audioDirector_->Reset();
 	}
@@ -219,7 +220,8 @@ void Audio::Update(float realDeltaTime) {
 	UpdateStreamingPlaybacks();
 	CollectRetiredPlaybacks(false);
 	if (audioDirector_) {
-		audioDirector_->Update(realDeltaTime);
+		// BGMも止める設定ではcrossfadeの時計も保持する。callback/stream回収は継続する。
+		audioDirector_->Update(gamePaused_ && gamePauseBgm_ ? 0.0f : realDeltaTime);
 	}
 	for (auto iterator = clipCache_.begin(); iterator != clipCache_.end();) {
 		if (iterator->second.expired()) {
@@ -489,13 +491,15 @@ Audio::PlaybackHandle Audio::PlayAudioClip(
 	playbacks_.emplace(playbackId, std::move(playback));
 	ApplyVolume(playbackState);
 	sourceVoice->SetFrequencyRatio(playbackState.pitch);
-	result = sourceVoice->Start();
+	// 停止中の新規Voiceを一瞬鳴らさない。解除時は手動理由とのORを再確認する。
+	const bool startNow = !IsGamePauseTarget(playbackState);
+	result = startNow ? sourceVoice->Start() : S_OK;
 	if (FAILED(result)) {
 		DestroyPlayback(playbackId);
 		return handle;
 	}
 	handle.id_ = playbackId;
-	playbackState.voiceStarted = true;
+	playbackState.voiceStarted = startNow;
 	return handle;
 }
 
@@ -565,6 +569,26 @@ void Audio::SetBusVolume(AudioBus bus, float volume) {
 	}
 }
 
+bool Audio::IsGamePauseTarget(const PlaybackState& playback) const {
+	return gamePaused_ && (playback.bus == AudioBus::SFX || playback.bus == AudioBus::Ambience ||
+		(gamePauseBgm_ && playback.bus == AudioBus::BGM));
+}
+void Audio::SetGamePause(bool paused, bool pauseBgm) {
+	if (gamePaused_ == paused && gamePauseBgm_ == pauseBgm) return;
+	const bool oldPaused = gamePaused_, oldBgm = gamePauseBgm_;
+	gamePaused_ = paused; gamePauseBgm_ = pauseBgm;
+	for (auto& [id, state] : playbacks_) {
+		auto& p = *state;
+		const bool wasPaused = oldPaused && (p.bus == AudioBus::SFX || p.bus == AudioBus::Ambience ||
+			(oldBgm && p.bus == AudioBus::BGM));
+		const bool nowPaused = IsGamePauseTarget(p);
+		if (!p.voice || wasPaused == nowPaused) continue;
+		if (nowPaused) p.voice->Stop();
+		else if (!p.paused && (!p.streaming || p.submittedStreamBuffers > 0)) {
+			if (SUCCEEDED(p.voice->Start())) p.voiceStarted = true;
+		}
+	}
+}
 void Audio::Pause(PlaybackHandle& handle) {
 	const auto found = playbacks_.find(handle.id_);
 	if (found == playbacks_.end()) {
@@ -582,8 +606,9 @@ void Audio::Resume(PlaybackHandle& handle) {
 		return;
 	}
 	found->second->paused = false;
-	if (found->second->voice) {
-		if (SUCCEEDED(found->second->voice->Start()) && found->second->streaming) {
+	if (found->second->voice && !IsGamePauseTarget(*found->second) &&
+		(!found->second->streaming || found->second->submittedStreamBuffers > 0)) {
+		if (SUCCEEDED(found->second->voice->Start())) {
 			found->second->voiceStarted = true;
 		}
 	}
@@ -763,10 +788,11 @@ bool Audio::IsPlaying(const PlaybackHandle& handle) const {
 	return handle.IsValid() && playbacks_.contains(handle.id_);
 }
 
-void Audio::ResolvePersistentBgm(const PersistentBgmRequest& request) {
+bool Audio::ResolvePersistentBgm(const PersistentBgmRequest& request) {
 	if (audioDirector_) {
-		audioDirector_->Resolve(request);
+		return audioDirector_->Resolve(request);
 	}
+	return false;
 }
 
 void Audio::ResolveNoPersistentBgm(uint64_t sceneOwnerId) {
@@ -960,7 +986,7 @@ void Audio::UpdateStreamingPlaybacks() {
 			DestroyPlayback(playbackId);
 			continue;
 		}
-		if (!playback.voiceStarted && !playback.paused && playback.submittedStreamBuffers > 0) {
+		if (!playback.voiceStarted && !playback.paused && !IsGamePauseTarget(playback) && playback.submittedStreamBuffers > 0) {
 			if (FAILED(playback.voice->Start())) {
 				DestroyPlayback(playbackId);
 				continue;

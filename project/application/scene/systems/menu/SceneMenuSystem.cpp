@@ -1,4 +1,4 @@
-// 役割: Menu参照の生存確認、選択移動、文字色とMarker枝の値packetを組み立てる。
+// 役割: Menu参照・選択・描画packetと、開いているPause rootの停止理由を検証する。
 #include "SceneMenuSystem.h"
 #include "../../../../engine/scene/SceneDocument.h"
 #include "../../../../engine/scene/SceneEntityQuery.h"
@@ -121,6 +121,15 @@ void SceneMenuSystem::Apply(const SceneDocument& doc, const SceneMenuMove& move)
 SceneMenuSource SceneMenuSystem::GetSource() const {
 	return {frame_.instanceId, frame_.generation, frame_.revision, frame_.panelId, frame_.openSerial};
 }
+SceneMenuSource SceneMenuSystem::GetOpenSource(uint64_t panelId) const {
+	for (const auto& panel : stack_) if (panel.id == panelId)
+		return {frame_.instanceId, frame_.generation, frame_.revision, panel.id, panel.serial};
+	return {};
+}
+void SceneMenuSystem::RemoveBranch(const SceneDocument& doc, uint64_t panelId) {
+	const auto found = std::find_if(stack_.begin(), stack_.end(), [&](const auto& p) { return p.id == panelId; });
+	if (found != stack_.end()) { stack_.erase(found, stack_.end()); Rebuild(doc); }
+}
 bool SceneMenuSystem::IsSourceValid(const SceneDocument& doc, const SceneMenuSource& source) const {
 	if (!Matches(doc, source.instanceId) || source.generation != frame_.generation || source.revision != frame_.revision) return false;
 	if (!source.panelId) return source.openSerial == 0;
@@ -214,3 +223,38 @@ void SceneMenuSystem::CompleteCancel(const SceneDocument& doc, const SceneMenuPu
 		Apply(doc, SceneMenuCommand{pulse.source, SceneMenuCommandType::Close, pulse.source.panelId});
 }
 std::string SceneMenuSystem::ConsumeDiagnostic() { return std::exchange(diagnostic_, {}); }
+
+const SceneComponent* SceneGamePauseSystem::FindSettings(const SceneDocument& doc, uint64_t panelId, std::string& error) {
+	error.clear();
+	const SceneComponent* found = nullptr;
+	size_t enabledCount = 0;
+	for (const auto& entity : doc.GetEntities()) {
+		if (!IsEntityActiveInHierarchy(doc, entity)) continue;
+		for (const auto& setting : entity.components) {
+			if (setting.type != "GamePause" || !setting.enabled) continue;
+			++enabledCount;
+			if (setting.gamePausePanelEntityId == panelId) {
+				if (found) { error = "MenuRuntime:PauseAmbiguous"; return nullptr; }
+				found = &setting;
+			}
+		}
+	}
+	if (!found) return nullptr;
+	const auto* entity = doc.FindEntity(panelId);
+	const auto* panel = entity ? FindEnabledComponent(*entity, "MenuPanel") : nullptr;
+	if (enabledCount > 1) error = "MenuRuntime:PauseMultiple";
+	else if (!panel || !IsEntityActiveInHierarchy(doc, *entity)) error = "MenuRuntime:PauseInvalidPanel";
+	else if (panel->menuInitiallyOpen) error = "MenuRuntime:PauseInitiallyOpen";
+	return error.empty() ? found : nullptr;
+}
+uint64_t SceneGamePauseSystem::Sync(const SceneDocument& doc, const SceneMenuSystem& menus, bool supported, std::string& error) {
+	Clear(); error.clear();
+	for (const auto id : menus.GetFrame().visiblePanelIds) {
+		const auto* setting = FindSettings(doc, id, error);
+		if (!error.empty()) return id;
+		if (!setting) continue;
+		if (!supported) { error = "MenuRuntime:PauseUnsupportedScene"; return id; }
+		root_ = menus.GetOpenSource(id); pauseBgm_ = setting->gamePauseBgm;
+	}
+	return 0;
+}

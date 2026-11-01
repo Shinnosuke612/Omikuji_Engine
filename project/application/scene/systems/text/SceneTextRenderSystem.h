@@ -12,6 +12,7 @@
 
 class DirectXCommon;
 class SceneDocument;
+class SceneStatSystem;
 
 class SceneTextRenderSystem {
 public:
@@ -29,7 +30,8 @@ public:
 		float opacityMultiplier
 	);
 	void ClearPresentationOverrides();
-	void Sync(SceneDocument* document);
+	// statsは呼出し中だけ借用。nullは編集用initial/max、非nullはRuntime読取のみ。
+	void Sync(SceneDocument* document, const SceneStatSystem* stats = nullptr);
 	void DrawScene2D(const SceneDocument& document, uint32_t width, uint32_t height, bool editorView = false) const;
 	void DrawScreenOverlay(const SceneDocument& document, uint32_t width, uint32_t height, bool editorView = false) const;
 	bool HasScreenOverlay(const SceneDocument& document) const;

@@ -173,6 +173,7 @@ void SceneEnemySpawnerSystem::Update(SceneDocument& document, const SceneSpawnUp
 	const float elapsed = std::isfinite(sourceDelta) ? (std::max)(sourceDelta, 0.0f) : 0.0f;
 	// 通常列挙から消えたSpawnerも、取消と破損検出だけは取りこぼさない。
 	for (auto& [id, runtime] : runtimes_) {
+		if (context.blockedEntityIds.contains(id)) continue;
 		CancelPending(document, runtime);
 		const auto* owner = document.FindEntity(id);
 		const auto* component = owner ? SceneEntityQuery::FindEnabledComponent(*owner, "EnemySpawner") : nullptr;
@@ -189,6 +190,7 @@ void SceneEnemySpawnerSystem::Update(SceneDocument& document, const SceneSpawnUp
 	}
 	std::vector<uint64_t> spawnerIds;
 	for (const auto& entity : document.GetEntities()) {
+		if (context.blockedEntityIds.contains(entity.id)) continue;
 		const auto* spawner = SceneEntityQuery::FindEnabledComponent(entity, "EnemySpawner");
 		if (!spawner) continue;
 		const auto found = runtimes_.find(entity.id);

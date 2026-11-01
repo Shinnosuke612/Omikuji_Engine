@@ -25,7 +25,8 @@ public:
 	void UpdateSpatial(const SceneDocument& document, const Camera* camera);
 	// Event評価直前に、現行Bindingへ対応する自然終了Entityを一回だけ回収する。
 	std::vector<uint64_t> ConsumeFinishedEntityIds(const SceneDocument& document);
-	void ApplyRequests(const SceneDocument& document, const std::vector<SceneAudioRequest>& requests);
+	// 全要求の同期受付結果。非同期Streamingの後続障害は既存音声診断に残す。
+	bool ApplyRequests(const SceneDocument& document, const std::vector<SceneAudioRequest>& requests);
 	void PrepareForSceneTransition();
 	void Clear();
 

@@ -328,11 +328,15 @@ void PhysicsWorld::AddStaticCollider(Collider* collider) {
 	staticColliders_.push_back(collider);
 }
 
+float PhysicsWorld::EffectiveStepDelta(float deltaTime) {
+	return std::isfinite(deltaTime) ? std::clamp(deltaTime, 0.0f, 1.0f / 15.0f) : 0.0f;
+}
+
 void PhysicsWorld::Step(float deltaTime) {
+	deltaTime = EffectiveStepDelta(deltaTime);
 	if (deltaTime <= 0.0f) {
 		return;
 	}
-	deltaTime = (std::min)(deltaTime, 1.0f / 15.0f);
 
 	for (PhysicsBody* body : bodies_) {
 		if (

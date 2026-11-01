@@ -11,6 +11,8 @@
 #include "SceneUIEditorView.h"
 #include "SceneTransitionRequest.h"
 #include "ScenePreparationDiagnostic.h"
+#include "SceneReplayHistory.h"
+#include "SceneReplayPresentation.h"
 
 class AbstractSceneFactory;
 class BaseScene;
@@ -18,6 +20,9 @@ class SceneCatalog;
 class SceneDocument;
 struct SceneEntity;
 struct ScenePostProcessSettings;
+struct SceneViewEffectClock;
+struct SceneDeathReplayStatus;
+struct SceneEnemyPositioningStatus;
 class SceneExecutionContext;
 
 enum class SceneLoadMode {
@@ -32,9 +37,20 @@ public:
 	~SceneManager();
 
 	void Update(float deltaTime);
+	// Gameはこの準備後、Audio停止理由を反映してからUpdateする。Update単独でも準備する。
+	void PrepareGameUpdate(float deltaTime);
+	// 全Instanceが表示専用Pause更新に対応する場合だけ許可。部分停止は行わない。
+	bool CanPauseGame() const;
+	bool IsGamePaused() const { return gamePaused_; }
+	bool ShouldPauseBgm() const { return gamePaused_ && pauseBgm_; }
 	// Gameが毎Frame渡す入力許可。Scene側はInput/Editorに依存しない。
 	void SetMenuInputAllowed(bool allowed) { menuInputAllowed_ = allowed; }
 	// 最初の一件を占有。Consume後もFinishまで追加要求を拒否し、Sceneは変更しない。
+	// 現在の実行Sceneからのみ受付。遷移予約と排他、Gameが次Frameで一回消費する。
+	bool RequestGameExit(SceneInstanceId sourceInstanceId, uint64_t generation);
+	// 消費時もScene世代と実行状態を照合し、無効な要求も破棄する。
+	bool ConsumeGameExitRequest();
+	bool IsGameExitPending() const { return gameExitSource_ != kInvalidSceneInstanceId; }
 	bool RequestPresentedTransition(const PresentedTransitionRequest& request);
 	// false時outは不変。要求の所有をGameへ渡すが、占有は維持する。
 	bool ConsumePresentedTransitionRequest(PresentedTransitionRequest& out);
@@ -55,8 +71,9 @@ public:
 	// UI編集RTをBindしたcallerだけが呼ぶ。通常Draw/Monitorへフィルターを持ち越さない。
 	void DrawEditorUIView(const char* renderSpace, uint32_t width = 0, uint32_t height = 0);
 	bool IsDrawingEditorUIView() const { return drawingEditorUIView_; }
-	void Draw();
-	void DrawForegroundEffects();
+	// Editor構図確認のCameraはこのDraw中だけ借用。通常呼出しの選択Cameraは維持。
+	void Draw(Camera* editorCamera = nullptr);
+	void DrawForegroundEffects(Camera* editorCamera = nullptr);
 	bool HasScreenOverlay() const;
 	void DrawScreenOverlay(uint32_t width, uint32_t height);
 	void DrawShadow();
@@ -116,12 +133,42 @@ public:
 	}
 	SceneDocument* GetActiveSceneDocument();
 	const SceneDocument* GetActiveSceneDocument() const;
+	// Active InstanceのDocumentが一致するときだけ実行値をコピーする。未対応/未検出時はfalse、outは不変。
+	// Scene本体やRuntime状態の所有権は公開せず、問い合わせ中だけ参照する。
+	// maxValue指定時は実行中の上限も返す。失敗時は出力を変更しない。
+	bool TryGetRuntimeStat(const SceneDocument& document, uint64_t entityId,
+		const std::string& statId, float& out, float* maxValue = nullptr) const;
+	// Active Document一致時だけ値コピー。Scene本体を公開せず、失敗時out不変。
+	bool TryGetEnemyPositioningStatus(const SceneDocument& document, uint64_t entityId, SceneEnemyPositioningStatus& out) const;
+	// Active InstanceのDocument一致時だけ受付状態を返す。不一致/未対応は-1。
+	int GetDeathResponseStatus(const SceneDocument& document, uint64_t id) const;
+	// Active Document一致/成功時だけoutを更新する。
+	// Active instance/document一致を照合。Editor Editでは採取しない。query失敗時はout不変。
+    // Active Scene限定のReplay表示。通常/Monitor/UI描画経路とは分離する。
+    bool TryGetReplayFraming(uint64_t owner, SceneReplayFramingBasis& out) const;
+    void AdvanceReplayPresentation(float delta, bool allowed);
+    bool PrepareReplayGameFrame(uint64_t drawSerial, float aspect, SceneReplayGameFrame& out);
+    bool DrawReplayGameShadow(const SceneReplayPresentationToken& token);
+    bool DrawReplayGameWorld(const SceneReplayPresentationToken& token);
+    void RejectReplayGameFrame(const SceneReplayPresentationToken& token);
+    void AcceptReplayPresentationReceipt(const SceneReplayPresentationToken& token);
+    // Active Sceneの完了画面だけを合成し、その表示完了を中継する。
+    bool DrawReplayMenu(const SceneReplayPresentationToken&, SceneMenuSource&);
+    void AcceptReplayMenuReceipt(const SceneReplayPresentationToken&, const SceneMenuSource&);
+	void NotifyReplayGpuCompleted();
+	void CaptureReplayBeforeDraw(const SceneReplayCaptureRequest& request);
+	bool TryGetReplayHistoryStatus(const SceneDocument& document, uint64_t id, SceneReplayHistoryStatus& out) const;
+	bool TryGetDeathReplayStatus(const SceneDocument& document, uint64_t id, SceneDeathReplayStatus& out) const;
+	bool TryGetRuntimeFlag(const SceneDocument& document, uint64_t entityId,
+		const std::string& flagId, bool& out) const;
 	// Active Sceneの準備診断を値で返す。Sceneなしは空診断で、Scene本体や所有権は公開しない。
 	ScenePreparationDiagnostic GetActivePreparationDiagnostic() const;
 	bool TryGetActiveRuntimePostProcessSettings(
 		ScenePostProcessSettings& settings,
 		uint64_t& generation
 	) const;
+	// Active Sceneの成功時だけ値とinstanceをコピーする。失敗時は両outとも不変。
+	bool TryGetActiveViewEffectClock(SceneViewEffectClock& out, SceneInstanceId& instanceId) const;
 	SceneInstanceId GetActiveSceneInstanceId() const {
 		return activeSceneInstanceId_;
 	}
@@ -141,6 +188,8 @@ public:
 private:
 	void PrepareMenuInput(float deltaTime, bool allowed);
 	bool menuInputAllowed_ = false;
+	bool gameUpdatePrepared_ = false;
+	bool gamePaused_ = false, pauseBgm_ = false;
 	SceneUIEditorView editorUIView_;
 	bool drawingEditorUIView_ = false;
 	void ActivatePendingScene();
@@ -163,8 +212,13 @@ private:
 	SceneInstanceId pendingReloadSceneInstanceId_ = kInvalidSceneInstanceId;
 	bool pendingForceUnloadAllSceneInstances_ = false;
 	bool pendingRestartScene_ = false;
+	// Event/演出の遷移予約だけ保存状態を読み直す。EditorのPlay開始/Reloadとは区別する。
+	bool pendingReadSavedScene_ = false;
 	SceneMenuSource pendingUiTransitionSource_;
 	std::vector<SceneInstanceId> pendingUnloadSceneInstanceIds_;
+	// Scene/Playの境界で破棄する非保存要求。Document pointerは保持しない。
+	SceneInstanceId gameExitSource_ = kInvalidSceneInstanceId;
+	uint64_t gameExitGeneration_ = 0;
 	SceneInstanceId activeSceneInstanceId_ = kInvalidSceneInstanceId;
 	SceneInstanceId nextSceneInstanceId_ = 1;
 	AbstractSceneFactory* sceneFactory_ = nullptr;

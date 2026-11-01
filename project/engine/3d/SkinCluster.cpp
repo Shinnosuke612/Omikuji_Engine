@@ -16,7 +16,7 @@ namespace {
 
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavBufferResource(
 	ID3D12Device* device,
-	size_t sizeInBytes
+	size_t sizeInBytes, bool recoverable
 ) {
 	assert(device);
 
@@ -42,7 +42,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavBufferResource(
 		nullptr,
 		IID_PPV_ARGS(&resource)
 	);
-	assert(SUCCEEDED(hr));
+	if (!recoverable) assert(SUCCEEDED(hr));
 	return resource;
 }
 
@@ -70,20 +70,29 @@ void SkinCluster::ReleaseDescriptors() {
 	srvManager_ = nullptr;
 }
 
-void SkinCluster::Initialize(
-	DirectXCommon* dxCommon,
-	SrvManager* srvManager,
-	const Skeleton& skeleton,
-	const Model& model
-) {
+void SkinCluster::Initialize(DirectXCommon* dx, SrvManager* srv, const Skeleton& skeleton, const Model& model) {
+    (void)InitializeInternal(dx, srv, skeleton, model, false);
+}
+bool SkinCluster::TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, const Skeleton& skeleton, const Model& model) {
+    return InitializeInternal(dx, srv, skeleton, model, true);
+}
+bool SkinCluster::InitializeInternal(DirectXCommon* dxCommon, SrvManager* srvManager,
+    const Skeleton& skeleton, const Model& model, bool recoverable) {
+	if (!dxCommon || !srvManager || !skeleton.IsValid()) return false;
 	assert(dxCommon);
 	assert(srvManager);
 	assert(skeleton.IsValid());
 	assert(!srvManager_);
 	if (srvManager_) {
-		return;
+		return false;
 	}
 	srvManager_ = srvManager;
+    auto buffer = [&](size_t bytes) {
+        Microsoft::WRL::ComPtr<ID3D12Resource> result;
+        if (recoverable) dxCommon->TryCreateBufferResource(bytes, result);
+        else result = dxCommon->CreateBufferResource(bytes);
+        return result;
+    };
 
 	auto allocateDescriptor = [this, srvManager](uint32_t& index) {
 		if (!srvManager->TryAllocate(index)) {
@@ -93,19 +102,22 @@ void SkinCluster::Initialize(
 		return true;
 	};
 
+    if (!dxCommon->GetDevice() || !model.GetVertexResource() || skeleton.joints.size() > UINT32_MAX / sizeof(PaletteWell) ||
+        model.GetVertexCount() == 0 || model.GetVertexCount() > UINT32_MAX / sizeof(Model::VertexData) ||
+        model.GetVertexCount() > UINT32_MAX / sizeof(VertexInfluence)) return false;
 	jointCount_ = static_cast<uint32_t>(skeleton.joints.size());
 	const uint32_t vertexCount = model.GetVertexCount();
 
-	paletteResource_ = dxCommon->CreateBufferResource(
+	paletteResource_ = buffer(
 		sizeof(PaletteWell) * jointCount_
 	);
-	paletteResource_->Map(
+	if (!paletteResource_ || FAILED(paletteResource_->Map(
 		0,
 		nullptr,
 		reinterpret_cast<void**>(&mappedPalette_)
-	);
+	)) || !mappedPalette_) return false;
 	if (!allocateDescriptor(paletteSrvIndex_)) {
-		return;
+		return false;
 	}
 	if (!srvManager->CreateSRVforStructuredBuffer(
 		paletteSrvIndex_,
@@ -114,11 +126,11 @@ void SkinCluster::Initialize(
 		sizeof(PaletteWell)
 	)) {
 		ReleaseDescriptors();
-		return;
+		return false;
 	}
 
 	if (!allocateDescriptor(inputVertexSrvIndex_)) {
-		return;
+		return false;
 	}
 	if (!srvManager->CreateSRVforStructuredBuffer(
 		inputVertexSrvIndex_,
@@ -127,17 +139,17 @@ void SkinCluster::Initialize(
 		sizeof(Model::VertexData)
 	)) {
 		ReleaseDescriptors();
-		return;
+		return false;
 	}
 
-	influenceResource_ = dxCommon->CreateBufferResource(
+	influenceResource_ = buffer(
 		sizeof(VertexInfluence) * vertexCount
 	);
-	influenceResource_->Map(
+	if (!influenceResource_ || FAILED(influenceResource_->Map(
 		0,
 		nullptr,
 		reinterpret_cast<void**>(&mappedInfluences_)
-	);
+	)) || !mappedInfluences_) return false;
 	std::memset(
 		mappedInfluences_,
 		0,
@@ -151,7 +163,7 @@ void SkinCluster::Initialize(
 	influenceBufferView_.StrideInBytes = sizeof(VertexInfluence);
 
 	if (!allocateDescriptor(influenceSrvIndex_)) {
-		return;
+		return false;
 	}
 	if (!srvManager->CreateSRVforStructuredBuffer(
 		influenceSrvIndex_,
@@ -160,13 +172,14 @@ void SkinCluster::Initialize(
 		sizeof(VertexInfluence)
 	)) {
 		ReleaseDescriptors();
-		return;
+		return false;
 	}
 
 	outputVertexResource_ = CreateUavBufferResource(
 		dxCommon->GetDevice(),
-		sizeof(Model::VertexData) * vertexCount
+		sizeof(Model::VertexData) * vertexCount, recoverable
 	);
+	if (!outputVertexResource_) return false;
 	skinnedVertexBufferView_.BufferLocation =
 		outputVertexResource_->GetGPUVirtualAddress();
 	skinnedVertexBufferView_.SizeInBytes = static_cast<UINT>(
@@ -175,7 +188,7 @@ void SkinCluster::Initialize(
 	skinnedVertexBufferView_.StrideInBytes = sizeof(Model::VertexData);
 
 	if (!allocateDescriptor(outputVertexUavIndex_)) {
-		return;
+		return false;
 	}
 	if (!srvManager->CreateUAVforStructuredBuffer(
 		outputVertexUavIndex_,
@@ -184,98 +197,23 @@ void SkinCluster::Initialize(
 		sizeof(Model::VertexData)
 	)) {
 		ReleaseDescriptors();
-		return;
+		return false;
 	}
 
-	skinningInformationResource_ = dxCommon->CreateBufferResource(
+	skinningInformationResource_ = buffer(
 		sizeof(SkinningInformation)
 	);
-	skinningInformationResource_->Map(
+	if (!skinningInformationResource_ || FAILED(skinningInformationResource_->Map(
 		0,
 		nullptr,
 		reinterpret_cast<void**>(&mappedSkinningInformation_)
-	);
+	)) || !mappedSkinningInformation_) return false;
 	mappedSkinningInformation_->numVertices = vertexCount;
 
-	inverseBindPoseMatrices_.assign(
-		jointCount_,
-		MakeIdentity4x4()
-	);
-
-	for (const auto& [jointName, jointWeight] :
-		model.GetSkinClusterData()) {
-		const auto jointIt = skeleton.jointMap.find(jointName);
-		if (jointIt == skeleton.jointMap.end()) {
-			continue;
-		}
-
-		const uint32_t jointIndex =
-			static_cast<uint32_t>(jointIt->second);
-
-		inverseBindPoseMatrices_[jointIndex] =
-			jointWeight.inverseBindPoseMatrix;
-
-#if defined(_DEBUG) || defined(DEVELOPMENT)
-		{
-			const Matrix4x4 bindCheck = Multiply(
-				inverseBindPoseMatrices_[jointIndex],
-				skeleton.joints[jointIndex].skeletonSpaceMatrix
-			);
-
-			float maxError = 0.0f;
-			for (uint32_t row = 0; row < 4; ++row) {
-				for (uint32_t column = 0; column < 4; ++column) {
-					const float expected =
-						row == column ? 1.0f : 0.0f;
-					maxError = (std::max)(
-						maxError,
-						std::abs(bindCheck.m[row][column] - expected)
-					);
-				}
-			}
-
-			if (maxError > 0.001f) {
-				OutputDebugStringA(
-					("[SkinCluster] Bind pose mismatch: " +
-						jointName +
-						" error=" +
-						std::to_string(maxError) +
-						"\n").c_str()
-				);
-			}
-		}
-#endif
-
-		for (const Model::VertexWeightData& vertexWeight :
-			jointWeight.vertexWeights) {
-			if (vertexWeight.vertexIndex >= vertexCount) {
-				continue;
-			}
-			AddInfluence(
-				mappedInfluences_[vertexWeight.vertexIndex],
-				vertexWeight.weight,
-				jointIndex
-			);
-		}
-	}
-
-	for (uint32_t vertexIndex = 0;
-		vertexIndex < vertexCount;
-		++vertexIndex) {
-		VertexInfluence& influence = mappedInfluences_[vertexIndex];
-		const float weightSum = std::accumulate(
-			influence.weights.begin(),
-			influence.weights.end(),
-			0.0f
-		);
-		if (weightSum > 0.0f) {
-			for (float& weight : influence.weights) {
-				weight /= weightSum;
-			}
-		}
-	}
+    BuildInfluences(skeleton, model, {mappedInfluences_, vertexCount}, inverseBindPoseMatrices_, true);
 
 	Update(skeleton);
+	return true;
 }
 
 void SkinCluster::Update(const Skeleton& skeleton) {
@@ -350,4 +288,90 @@ void SkinCluster::AddInfluence(
 	);
 	influence.weights[influenceIndex] = weight;
 	influence.jointIndices[influenceIndex] = jointIndex;
+}
+
+void SkinCluster::BuildInfluences(const Skeleton& skeleton, const Model& model,
+    std::span<VertexInfluence> influences, std::vector<Matrix4x4>& inverseBind, bool checkBindPose) {
+    const uint32_t vertexCount = model.GetVertexCount();
+    assert(influences.size() == vertexCount);
+    std::fill(influences.begin(), influences.end(), VertexInfluence{});
+    (void)checkBindPose;
+	inverseBind.assign(
+		skeleton.joints.size(),
+		MakeIdentity4x4()
+	);
+
+	for (const auto& [jointName, jointWeight] :
+		model.GetSkinClusterData()) {
+		const auto jointIt = skeleton.jointMap.find(jointName);
+		if (jointIt == skeleton.jointMap.end()) {
+			continue;
+		}
+
+		const uint32_t jointIndex =
+			static_cast<uint32_t>(jointIt->second);
+
+		inverseBind[jointIndex] =
+			jointWeight.inverseBindPoseMatrix;
+
+
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+		if (checkBindPose) {
+			const Matrix4x4 bindCheck = Multiply(
+				inverseBind[jointIndex],
+				skeleton.joints[jointIndex].skeletonSpaceMatrix
+			);
+
+			float maxError = 0.0f;
+			for (uint32_t row = 0; row < 4; ++row) {
+				for (uint32_t column = 0; column < 4; ++column) {
+					const float expected =
+						row == column ? 1.0f : 0.0f;
+					maxError = (std::max)(
+						maxError,
+						std::abs(bindCheck.m[row][column] - expected)
+					);
+				}
+			}
+
+			if (maxError > 0.001f) {
+				OutputDebugStringA(
+					("[SkinCluster] Bind pose mismatch: " +
+						jointName +
+						" error=" +
+						std::to_string(maxError) +
+						"\n").c_str()
+				);
+			}
+		}
+#endif
+		for (const Model::VertexWeightData& vertexWeight :
+			jointWeight.vertexWeights) {
+			if (vertexWeight.vertexIndex >= vertexCount) {
+				continue;
+			}
+			AddInfluence(
+				influences[vertexWeight.vertexIndex],
+				vertexWeight.weight,
+				jointIndex
+			);
+		}
+	}
+
+	for (uint32_t vertexIndex = 0;
+		vertexIndex < vertexCount;
+		++vertexIndex) {
+		VertexInfluence& influence = influences[vertexIndex];
+		const float weightSum = std::accumulate(
+			influence.weights.begin(),
+			influence.weights.end(),
+			0.0f
+		);
+		if (weightSum > 0.0f) {
+			for (float& weight : influence.weights) {
+				weight /= weightSum;
+			}
+		}
+	}
+
 }

@@ -76,6 +76,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\FullscreenCopy.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\ImGuiManager.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\ImGuiManager.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\base\PlayerCombatEditor.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\base\PlayerCombatEditor.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\PostProcessSettingsEditor.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\PostProcessSettingsEditor.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\RenderFormats.h"><Filter>Engine</Filter></ClInclude>
@@ -102,6 +104,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\effect\WaterSurfaceRenderer.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\io\Input.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\io\Input.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\math\Easing.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\math\Easing.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\math\Math.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\math\Math.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\math\Matrix3x3.h"><Filter>Engine</Filter></ClInclude>
@@ -173,6 +177,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocument.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEnemyChargeEvaluator.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneEnemyChargeEvaluator.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEntityQuery.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneEntityQuery.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneEntityReference.h"><Filter>Engine</Filter></ClInclude>
@@ -187,6 +193,8 @@
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePreparationDiagnostic.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneReplayHistory.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneReplayPresentation.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneSettings.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.h"><Filter>Engine</Filter></ClInclude>

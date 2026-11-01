@@ -11,7 +11,8 @@ class AudioDirector {
 public:
 	explicit AudioDirector(Audio& audio) : audio_(audio) {}
 
-	void Resolve(const PersistentBgmRequest& request);
+	// 要求の同期受付結果。Streamingの実再生開始/完了の保証ではない。
+	bool Resolve(const PersistentBgmRequest& request);
 	void ResolveNone(uint64_t nextSceneOwnerId);
 	void BeginSceneTransition(uint64_t sceneOwnerId);
 	void ReleaseOwner(uint64_t sceneOwnerId);

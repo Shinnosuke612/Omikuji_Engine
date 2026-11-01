@@ -1,5 +1,8 @@
 // 役割: 描画ComponentをObject3d/Spriteへ反映し、実行時の所有関係を管理する。
 #include "SceneObjectSystem.h"
+#include "../../../../engine/scene/SceneReplayPresentation.h"
+#include "../replay/SceneReplayHistorySystem.h"
+#include <limits>
 
 #include "../physics/ScenePhysicsSystem.h"
 #include "../../../../engine/2d/Sprite.h"
@@ -7,6 +10,7 @@
 #include "../../../../engine/2d/TextureManager.h"
 #include "../../../../engine/3d/Camera.h"
 #include "../../../../engine/3d/ModelManager.h"
+#include "../../../../engine/3d/Model.h"
 #include "../../../../engine/3d/Object3d.h"
 #include "../../../../engine/3d/Object3dCommon.h"
 #include "../../../../engine/agent/AgentSettingsResolver.h"
@@ -126,6 +130,7 @@ void SceneObjectSystem::SyncModelsInternal(
 			}
 			runtime.modelPath = modelPath;
 			runtime.hasRenderer = hasRenderer;
+			runtime.replayIncarnation = nextReplayIncarnation_++;
 			found = models_.emplace(entity.id, std::move(runtime)).first;
 		}
 
@@ -163,61 +168,67 @@ void SceneObjectSystem::SyncModelsInternal(
 			initialAnimationPoseIds.insert(entity.id);
 		}
 
-		if (
-			!runtime.animatorInitialized ||
-			(advanceAnimation && (runtime.hasAnimator != hasAnimator ||
-				runtime.animatorAutoPlayAllowed != allowAnimatorAutoPlay))
-		) {
-			runtime.object->SetAnimationEnabled(hasAnimator);
-			if (hasAnimator) {
-				runtime.object->SetAnimationLoop(animator->animatorLoop);
-				runtime.object->SetAnimationSpeed(animator->animatorSpeed);
-				runtime.object->SetAnimationBlendCurve(blendCurve);
-				runtime.object->PlayAnimation(
-					static_cast<size_t>(defaultClip),
-					0.0f,
-					true
-				);
-				runtime.object->SetAnimationPlaying(
-					allowAnimatorAutoPlay && animator->animatorPlayOnStart
-				);
+		// 継続中はAuthoring同期によるClip再開始を禁止する。
+		if (!deathContinuation_) {
+			if (
+				!runtime.animatorInitialized ||
+				(advanceAnimation && (runtime.hasAnimator != hasAnimator ||
+					runtime.animatorAutoPlayAllowed != allowAnimatorAutoPlay))
+			) {
+				runtime.object->SetAnimationEnabled(hasAnimator);
+				if (hasAnimator) {
+					runtime.object->SetAnimationLoop(animator->animatorLoop);
+					runtime.object->SetAnimationSpeed(animator->animatorSpeed);
+					runtime.object->SetAnimationBlendCurve(blendCurve);
+					runtime.object->PlayAnimation(
+						static_cast<size_t>(defaultClip),
+						0.0f,
+						true
+					);
+					runtime.object->SetAnimationPlaying(
+						allowAnimatorAutoPlay && animator->animatorPlayOnStart
+					);
+				}
+				runtime.animatorInitialized = true;
+				runtime.animatorAutoPlayAllowed = allowAnimatorAutoPlay;
+			} else if (hasAnimator && advanceAnimation) {
+				if (runtime.animatorPlayOnStart != animator->animatorPlayOnStart) {
+					runtime.object->SetAnimationPlaying(
+						allowAnimatorAutoPlay && animator->animatorPlayOnStart
+					);
+				}
+				if (runtime.animatorBlendCurve != animator->animatorBlendCurve) {
+					runtime.object->SetAnimationBlendCurve(blendCurve);
+				}
+				if (runtime.animatorLoop != animator->animatorLoop) {
+					runtime.object->SetAnimationLoop(animator->animatorLoop);
+				}
+				if (runtime.animatorSpeed != animator->animatorSpeed) {
+					runtime.object->SetAnimationSpeed(animator->animatorSpeed);
+				}
+				if (runtime.animatorDefaultClip != defaultClip) {
+					runtime.object->PlayAnimation(
+						static_cast<size_t>(defaultClip),
+						(std::max)(animator->animatorTransitionDuration, 0.0f),
+						true
+					);
+				}
 			}
-			runtime.animatorInitialized = true;
-			runtime.animatorAutoPlayAllowed = allowAnimatorAutoPlay;
-		} else if (hasAnimator && advanceAnimation) {
-			if (runtime.animatorPlayOnStart != animator->animatorPlayOnStart) {
-				runtime.object->SetAnimationPlaying(
-					allowAnimatorAutoPlay && animator->animatorPlayOnStart
-				);
+			if (advanceAnimation || initializeAnimator) {
+				runtime.hasAnimator = hasAnimator;
 			}
-			if (runtime.animatorBlendCurve != animator->animatorBlendCurve) {
-				runtime.object->SetAnimationBlendCurve(blendCurve);
+			if (animator && (advanceAnimation || initializeAnimator)) {
+				runtime.animatorPlayOnStart = animator->animatorPlayOnStart;
+				runtime.animatorLoop = animator->animatorLoop;
+				runtime.animatorSpeed = animator->animatorSpeed;
+				runtime.animatorDefaultClip = defaultClip;
+				runtime.animatorTransitionDuration =
+					animator->animatorTransitionDuration;
+				runtime.animatorBlendCurve = animator->animatorBlendCurve;
 			}
-			if (runtime.animatorLoop != animator->animatorLoop) {
-				runtime.object->SetAnimationLoop(animator->animatorLoop);
-			}
-			if (runtime.animatorSpeed != animator->animatorSpeed) {
-				runtime.object->SetAnimationSpeed(animator->animatorSpeed);
-			}
-			if (runtime.animatorDefaultClip != defaultClip) {
-				runtime.object->PlayAnimation(
-					static_cast<size_t>(defaultClip),
-					(std::max)(animator->animatorTransitionDuration, 0.0f),
-					true
-				);
-			}
-		}
-		if (advanceAnimation || initializeAnimator) {
-			runtime.hasAnimator = hasAnimator;
-		}
-		if (animator && (advanceAnimation || initializeAnimator)) {
-			runtime.animatorPlayOnStart = animator->animatorPlayOnStart;
-			runtime.animatorLoop = animator->animatorLoop;
-			runtime.animatorSpeed = animator->animatorSpeed;
-			runtime.animatorDefaultClip = defaultClip;
-			runtime.animatorTransitionDuration =
-				animator->animatorTransitionDuration;
-			runtime.animatorBlendCurve = animator->animatorBlendCurve;
+		} else if (!runtime.animatorInitialized) {
+			runtime.object->SetAnimationPlaying(false);
+			deathParticipants_.erase(entity.id);
 		}
 
 		Transform& runtimeTransform = runtime.object->GetTransform();
@@ -405,7 +416,9 @@ void SceneObjectSystem::SyncModelsInternal(
 		}
 		if (IsEntityActiveInHierarchy(*document, *entity)) {
 			if ((advanceAnimation && !spawnFrame_.blockedEntityIds.contains(entityId)) || initialAnimationPoseIds.contains(entityId)) {
-				object->UpdateAnimation(spawnFrame_.blockedEntityIds.contains(entityId) ? 0.0f : deltaTime);
+				if (!deathContinuation_ || deathParticipants_.contains(entityId)) {
+					object->UpdateAnimation(spawnFrame_.blockedEntityIds.contains(entityId) ? 0.0f : deltaTime);
+				}
 			}
 			object->Update();
 		}
@@ -504,6 +517,65 @@ void SceneObjectSystem::BuildBindings(
 				: nullptr
 		});
 	}
+}
+
+void SceneObjectSystem::ObserveReplaySubjects(const SceneDocument& document) {
+	for (auto& [id, runtime] : models_) {
+		const auto* entity = document.FindEntity(id);
+		const bool active = entity && SceneEntityQuery::IsEntityActiveInHierarchy(document, *entity);
+		if (active && !runtime.replayActive) runtime.replayIncarnation = nextReplayIncarnation_++;
+		runtime.replayActive = active;
+	}
+}
+void SceneObjectSystem::ResetReplayEntity(uint64_t id) {
+	if (auto* runtime = FindModelRuntime(id)) runtime->replayIncarnation = nextReplayIncarnation_++;
+}
+bool SceneObjectSystem::EstimateReplayFrameBytes(const SceneDocument& document, uint64_t& out, uint64_t originOwner) const {
+	uint64_t bytes = sizeof(SceneReplayFrame) * 4 + 256; // move中のframe値/末尾nodeの同時存在も含む。
+	const auto limit = (std::numeric_limits<uint64_t>::max)();
+	for (const auto& entity : document.GetEntities()) {
+		const auto* runtime = FindModelRuntime(entity.id);
+		if (!runtime || !runtime->hasRenderer || !IsEntityActiveInHierarchy(document, entity) || HasComponent(entity, "WaterVolume")) continue;
+		uint64_t poseBytes = 0;
+		if (!runtime->object || !runtime->object->EstimateReplayPoseBytes(runtime->modelPath, poseBytes)) return false;
+		const uint64_t metadata = sizeof(SceneReplaySubject) * 4 + 128;
+		if (poseBytes > limit - metadata || bytes > limit - poseBytes - metadata) return false;
+		bytes += poseBytes + metadata;
+        // posed boundsはt=0の死亡対象groupだけ。全対象・全sampleへ余分な予約を課さない。
+        if (!originOwner || (entity.id != originOwner && !document.IsDescendantOf(entity.id,originOwner))) continue;
+        const auto* cached = ModelManager::GetInstance()->FindModel(runtime->modelPath);
+        if (!cached) return false;
+        const uint64_t vertexScratch = uint64_t(cached->GetVertexCount()) * sizeof(SkinCluster::VertexInfluence);
+        if (poseBytes > (limit-vertexScratch)/2) return false;
+        const uint64_t boundsScratch = vertexScratch + poseBytes * 2;
+        if (bytes > limit - boundsScratch) return false;
+        bytes += boundsScratch;
+	}
+	out = bytes; return true;
+}
+bool SceneObjectSystem::CaptureReplaySubjects(const SceneDocument& document, SceneReplayHistorySystem& history, SceneReplayFrame& frame) const {
+	size_t count = 0;
+	for (const auto& entity : document.GetEntities()) {
+		const auto* runtime = FindModelRuntime(entity.id);
+		if (runtime && runtime->hasRenderer && IsEntityActiveInHierarchy(document, entity) && !HasComponent(entity, "WaterVolume")) ++count;
+	}
+	frame.subjects.reserve(count);
+	for (const auto& entity : document.GetEntities()) {
+		const auto* runtime = FindModelRuntime(entity.id);
+		if (!runtime || !runtime->hasRenderer || !IsEntityActiveInHierarchy(document, entity) || HasComponent(entity, "WaterVolume")) continue;
+		Object3d::ReplayPose pose;
+		if (!runtime->object || !runtime->object->CaptureReplayPose(runtime->modelPath, pose)) return false;
+		// 一人称のCamera用非表示は採取対象から除かない。影の対象条件も通常modelと共通。
+		frame.subjects.push_back({entity.id, runtime->replayIncarnation, true, true,
+			history.SharePose(entity.id, runtime->replayIncarnation, std::move(pose))});
+        if (history.Status().sampleCount == 0 && (entity.id == frame.identity.owner ||
+            document.IsDescendantOf(entity.id, frame.identity.owner))) {
+            SceneReplayOriginSubject origin; origin.entityId=entity.id;
+            if (!Object3d::ComputeReplayBounds(*frame.subjects.back().pose, origin.bounds)) return false;
+            frame.originSubjects.push_back(origin);
+        }
+	}
+	return true;
 }
 
 void SceneObjectSystem::ApplyRenderCamera(Camera* camera) {
@@ -657,6 +729,7 @@ const SceneObjectSystem::ModelRuntime* SceneObjectSystem::FindModelRuntime(
 }
 
 void SceneObjectSystem::ClearModels() {
+	ClearDeathContinuation();
 	spawnFrame_ = {};
 	modelDocument_ = nullptr;
 	models_.clear();
@@ -669,4 +742,70 @@ void SceneObjectSystem::ClearSprites() {
 void SceneObjectSystem::Finalize() {
 	ClearSprites();
 	ClearModels();
+}
+
+void SceneObjectSystem::BeginDeathContinuation(const std::unordered_set<uint64_t>& participants,
+	const std::unordered_set<uint64_t>& attackTargets) {
+	ClearDeathContinuation(); deathContinuation_ = true;
+	for (uint64_t id : participants) {
+		auto* runtime = FindModelRuntime(id);
+		if (!runtime || !runtime->object || !runtime->animatorInitialized) continue;
+		deathParticipants_.insert(id);
+		if (attackTargets.contains(id)) {
+			deathAttackTargets_.insert(id); runtime->object->SetAnimationLoop(false);
+		}
+	}
+}
+void SceneObjectSystem::ResetDeathContinuationEntity(uint64_t id) {
+	if (deathAttackTargets_.erase(id)) {
+		if (auto* runtime = FindModelRuntime(id); runtime && runtime->object) runtime->object->SetAnimationLoop(runtime->animatorLoop);
+	}
+	deathParticipants_.erase(id);
+}
+void SceneObjectSystem::ClearDeathContinuation() {
+	for (uint64_t id : deathAttackTargets_) {
+		if (auto* runtime = FindModelRuntime(id); runtime && runtime->object) runtime->object->SetAnimationLoop(runtime->animatorLoop);
+	}
+	deathParticipants_.clear(); deathAttackTargets_.clear(); deathContinuation_ = false;
+}
+
+bool SceneObjectSystem::TryGetReplayFraming(const SceneDocument& document, uint64_t owner, SceneReplayFramingBasis& out) const {
+    const auto* object=FindObject(owner);
+    if (!object) return false;
+    SceneReplayFramingBasis basis; basis.world=object->GetWorldMatrix();
+    for (const auto& entity : document.GetEntities()) {
+        if ((entity.id!=owner && !document.IsDescendantOf(entity.id,owner)) || !IsEntityActiveInHierarchy(document,entity) ||
+            HasComponent(entity,"WaterVolume")) continue;
+        const auto* runtime=FindModelRuntime(entity.id);
+        if (!runtime || !runtime->hasRenderer || !runtime->object) continue;
+        Object3d::ReplayPose pose; Object3d::ReplayBounds bounds;
+        if (!runtime->object->CaptureReplayPose(runtime->modelPath,pose) || !Object3d::ComputeReplayBounds(pose,bounds) || !bounds.valid) return false;
+        if (!basis.valid) { basis.min=bounds.min; basis.max=bounds.max; basis.valid=true; }
+        else {
+            basis.min={(std::min)(basis.min.x,bounds.min.x),(std::min)(basis.min.y,bounds.min.y),(std::min)(basis.min.z,bounds.min.z)};
+            basis.max={(std::max)(basis.max.x,bounds.max.x),(std::max)(basis.max.y,bounds.max.y),(std::max)(basis.max.z,bounds.max.z)};
+        }
+    }
+    if (!basis.valid) return false;
+    out=basis; return true;
+}
+
+void SceneObjectSystem::RefreshTransforms(const SceneDocument& document, const std::vector<uint64_t>& changedTargets) {
+	std::unordered_set<uint64_t> updated, visiting;
+	std::function<void(uint64_t)> refresh = [&](uint64_t id) {
+		if (updated.contains(id) || !visiting.insert(id).second) return;
+		const auto* entity = document.FindEntity(id);
+		auto* runtime = FindModelRuntime(id);
+		if (entity && runtime && runtime->object) {
+			if (entity->parentId) refresh(entity->parentId);
+			auto& transform = runtime->object->GetTransform();
+			transform.translate = entity->transform.translate; transform.scale = entity->transform.scale;
+			transform.useQuaternionRotation = true; transform.quaternionRotate = entity->transform.rotate;
+			runtime->object->Update();
+		}
+		visiting.erase(id); updated.insert(id);
+	};
+	for (const auto& entity : document.GetEntities()) {
+		for (uint64_t id : changedTargets) if (entity.id == id || document.IsDescendantOf(entity.id, id)) { refresh(entity.id); break; }
+	}
 }

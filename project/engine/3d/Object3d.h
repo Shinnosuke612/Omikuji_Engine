@@ -58,6 +58,7 @@ private://インナークラス
 		bool colorOverrideEnabled = false;
 		Vector4 colorOverride = { 1.0f, 1.0f, 1.0f, 1.0f };
 		D3D12_GPU_DESCRIPTOR_HANDLE textureOverride{};
+		std::string textureOverrideKey;
 	};
 
 public: //公開メンバ関数
@@ -68,6 +69,47 @@ public: //公開メンバ関数
 		Vector4 color = { 1.0f, 1.0f, 1.0f, 1.0f };
 		std::string texturePath;
 	};
+
+	// GPU address/元Objectへの参照を含まない確定表示値。資源cacheは採取から適用まで不変が前提。
+	struct ReplayMaterial {
+		Vector4 color{}, emissiveColor{};
+		Matrix4x4 uvTransform{};
+		int32_t enableLighting = 0;
+		float emissiveIntensity = 0, shininess = 0;
+		float dissolveAmount = 0, dissolveEdgeWidth = 0, dissolveNoiseScale = 0;
+		std::string textureKey;
+	};
+	struct ReplayJoint {
+		std::string name;
+		int32_t parent = -1;
+		QuaternionTransform transform{};
+	};
+	struct ReplayPose {
+		std::string modelKey, environmentKey;
+		// root animation/親/出現補正をすべて含む。適用時に再合成しない。
+		Matrix4x4 renderWorld{};
+		std::vector<ReplayJoint> joints;
+		std::vector<ReplayMaterial> materials;
+		float environmentCoefficient = 0;
+		Object3dCommon::CullMode cullMode = Object3dCommon::CullMode::kBack;
+	};
+    struct ReplayBounds { Vector3 min{}, max{}; bool valid = false; };
+    // GPU readbackなし。cache内の頂点/共通weightからworld姿勢のboundsを計算する。
+    static bool ComputeReplayBounds(const ReplayPose& pose, ReplayBounds& out);
+	// Update後の確定姿勢だけを値コピー。assetKeyは現在modelのcache key。
+	// 未確定Animation/由来不明texture/非有限値はfalse、out不変。時計/GPU dispatchなし。
+	// 採取前の保守的なCPU見積り。配列を確保せずoverflow/未解決modelを拒否する。
+	bool EstimateReplayPoseBytes(const std::string& assetKey, uint64_t& out) const;
+	bool CaptureReplayPose(const std::string& assetKey, ReplayPose& out) const;
+	// 同じmodelを設定済みの表示専用Objectで使用。全検証後に自分の描画資源だけへ適用。
+	// 適用後の材質/Transform setterと論理World/Joint getterは使わず、Camera/描画だけを使う。
+	// 成功後Update/UpdateForCameraは投影のみ更新し、UpdateAnimationは時計を進めない。
+	// GPU前frame完了後・当該frameの最初の影描画前に呼ぶ。SetModelで専用状態を解除。
+	// texture同keyの差替え検出/資源保持は延期。拒否時は既存表示を保持する。
+	bool ApplyReplayPose(const ReplayPose& pose);
+
+	// 新規の表示専用instanceだけ。失敗したinstanceは描画せず破棄する。cacheをLoadしない。
+	bool TryInitializeReplay(Object3dCommon* common, const ReplayPose& pose);
 
 	//初期化
 	void Initialize(Object3dCommon* object3dCommon);
@@ -204,6 +246,9 @@ private: //非公開メンバ関数
 	void DispatchSkinningIfNeeded();
 	void UpdateInternal();
 private://メンバ変数
+	// 通常Objectの既存所有契約には触れず、Replayのraw aliasだけを所有する。
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> replayResources_;
+	bool replayPoseActive_ = false;
 	Transform transform;
 	Matrix4x4 objectWorldMatrix_ = MakeIdentity4x4();
 	Matrix4x4 renderWorldDelta_ = MakeIdentity4x4();
@@ -215,7 +260,7 @@ private://メンバ変数
 
 
 	//バッファリソース
-	ID3D12Resource* transformationMatrixResource;
+	ID3D12Resource* transformationMatrixResource = nullptr;
 	//バッファリソース内のデータおw指すポインタ
 	TransformationMatrix* transformationMatrixData = nullptr;
 	ID3D12Resource* shadowTransformationMatrixResource = nullptr;
@@ -228,7 +273,7 @@ private://メンバ変数
 	//カメラ
 	Camera* camera = nullptr;
 
-	ID3D12Resource* cameraResource;
+	ID3D12Resource* cameraResource = nullptr;
 	CameraForGPU* cameraData = nullptr;
 	std::vector<MaterialSlotResource> materialSlots_;
 	std::vector<ID3D12Resource*> materialResourcesForDraw_;

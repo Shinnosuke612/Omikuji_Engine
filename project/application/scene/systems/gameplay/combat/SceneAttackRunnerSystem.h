@@ -54,6 +54,16 @@ public:
 		const Vector3& playerInputDirection,
 		float deltaTime
 	);
+	// 既存実行だけを継続。新規Start/HitWindow/Loopは停止し、方向は入口で固定する。
+	void BeginDeathContinuation(SceneDocument& document, const std::vector<SceneRuntimeObjectBinding>& bindings,
+		const std::unordered_set<uint64_t>& participants);
+	void AdvanceDeathContinuation(SceneDocument& document, float worldDelta);
+	// 終了ownerのXZ解除は呼出側がPhysics後に行う。Yには触れない。
+	std::vector<uint64_t> ApplyDeathContinuationMotion(SceneDocument& document,
+		const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta);
+	const std::unordered_set<uint64_t>& DeathAnimationTargets() const { return deathAnimationTargets_; }
+	std::vector<SceneAttackEffectRequest> ConsumeDeathEffectRequests();
+	void ClearDeathContinuation();
 	bool IsRunning(uint64_t ownerEntityId) const;
 	bool IsFinished(uint64_t ownerEntityId) const;
 	float GetTime(uint64_t ownerEntityId) const;
@@ -102,6 +112,8 @@ private:
 		bool animationStarted = false;
 		bool axesCaptured = false;
 		bool finished = false;
+		bool deathContinuing = false;
+		bool deathEndPending = false;
 		bool loopRequested = false;
 		int loopCount = 0;
 		float elapsedTime = 0.0f;
@@ -112,6 +124,7 @@ private:
 	};
 
 	static float GetDuration(const SceneAttackDefinition& definition);
+	static float MotionProgress(const Runtime& runtime);
 	static SceneEntity* ResolveEntity(
 		SceneDocument& document,
 		uint64_t entityId,
@@ -129,4 +142,7 @@ private:
 	std::unordered_map<uint64_t, Runtime> runtimes_;
 	std::vector<SceneAttackEffectRequest> effectRequests_;
 	uint64_t nextAttackExecutionId_ = 1;
+	bool deathContinuation_ = false;
+	std::unordered_set<uint64_t> deathAnimationTargets_;
+	std::vector<SceneAttackEffectRequest> deathEffectRequests_;
 };

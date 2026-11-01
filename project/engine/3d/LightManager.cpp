@@ -99,6 +99,19 @@ void LightManager::Initialize(DirectXCommon* dxCommon, const std::string& jsonPa
 	SyncToGPU();
 }
 
+bool LightManager::TryInitializeReplay(DirectXCommon* dx, const LightManager& source) {
+    if (!dx || dxCommon_) return false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource; LightingForGPU* data = nullptr;
+    if (!dx->TryCreateBufferResource(sizeof(LightingForGPU), resource) ||
+        FAILED(resource->Map(0, nullptr, reinterpret_cast<void**>(&data))) || !data) return false;
+    directionalLight_ = source.directionalLight_; directionalShadowSettings_ = source.directionalShadowSettings_;
+    pointLights_ = source.pointLights_; spotLights_ = source.spotLights_;
+    pointShadowSettings_ = source.pointShadowSettings_; spotShadowSettings_ = source.spotShadowSettings_;
+    shadowMapSize_ = source.shadowMapSize_;
+    lightingResource_ = std::move(resource); lightingData_ = data; dxCommon_ = dx;
+    SyncToGPU(); return true;
+}
+
 void LightManager::Reset() {
 	directionalLight_.color = { 1.0f, 1.0f, 1.0f, 1.0f };
 	directionalLight_.direction = { 0.0f, -1.0f, 0.0f };

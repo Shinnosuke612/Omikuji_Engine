@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <vector>
+#include <span>
 
 #include <d3d12.h>
 #include <wrl.h>
@@ -47,6 +48,11 @@ public:
 		const Skeleton& skeleton,
 		const Model& model
 	);
+    // 新規instance専用。失敗時は描画せず破棄。既存Initializeの呼出契約は維持。
+    bool TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, const Skeleton& skeleton, const Model& model);
+    // GPU生成とCPU posed boundsで同じ最大4weight選択/正規化を使う。
+    static void BuildInfluences(const Skeleton&, const Model&,
+        std::span<VertexInfluence>, std::vector<Matrix4x4>& inverseBind, bool checkBindPose = false);
 	void Update(const Skeleton& skeleton);
 	void TransitionOutputResource(
 		ID3D12GraphicsCommandList* commandList,
@@ -79,9 +85,10 @@ public:
 	}
 
 private:
+	bool InitializeInternal(DirectXCommon*, SrvManager*, const Skeleton&, const Model&, bool recoverable);
 	// SkinClusterが確保したslotだけを返却し、再返却を防ぐ。
 	void ReleaseDescriptors();
-	void AddInfluence(
+	static void AddInfluence(
 		VertexInfluence& influence,
 		float weight,
 		uint32_t jointIndex

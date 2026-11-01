@@ -6,6 +6,8 @@
 #include <cmath>
 #include <memory>
 #include <iomanip>
+#include <locale>
+#include "../gameplay/combat/SceneStatSystem.h"
 #include <limits>
 #include <sstream>
 #include <unordered_set>
@@ -163,7 +165,7 @@ SceneTextRenderSystem::FindPresentationOverride(uint64_t entityId) const {
 	return found == presentationOverrides_.end() ? nullptr : &found->second;
 }
 
-void SceneTextRenderSystem::Sync(SceneDocument* document) {
+void SceneTextRenderSystem::Sync(SceneDocument* document, const SceneStatSystem* stats) {
 	if (!document || !dxCommon_) {
 		Finalize();
 		return;
@@ -189,10 +191,51 @@ void SceneTextRenderSystem::Sync(SceneDocument* document) {
 				std::to_string(entity.id);
 			runtime.sprite = std::make_unique<TextSprite>();
 		}
+		// 専用値表示は保存文字を変更しない。Flow等の既存overrideの優先権も維持する。
+		std::string statText;
+		const auto* binding = FindEnabledComponent(entity, "StatTextDisplay");
+		if (binding) {
+			const auto count = std::count_if(entity.components.begin(), entity.components.end(),
+				[](const auto& c) { return c.type == "StatTextDisplay"; });
+			const SceneEntity* target = nullptr;
+			if (binding->statTextStatsEntityId) target = document->FindEntity(binding->statTextStatsEntityId);
+			else if (binding->statTextStatsEntityName.empty()) target = &entity;
+			else for (const auto& candidate : document->GetEntities()) {
+				if (candidate.name != binding->statTextStatsEntityName) continue;
+				if (target) { target = nullptr; break; }
+				target = &candidate;
+			}
+			const auto* definition = target ? FindEnabledComponent(*target, "StatSet") : nullptr;
+			float current = 0, maximum = 0;
+			bool valid = false;
+			if (definition) for (const auto& stat : definition->stats) {
+				if (stat.id != binding->statTextStatId) continue;
+				if (!std::isfinite(stat.initialValue) || !std::isfinite(stat.minValue) || !std::isfinite(stat.maxValue)) break;
+				current = std::clamp(stat.initialValue, stat.minValue, (std::max)(stat.minValue, stat.maxValue));
+				maximum = (std::max)(stat.minValue, stat.maxValue);
+				valid = !stats || stats->TryGet(target->id, stat.id, current, nullptr, &maximum);
+				break;
+			}
+			if (count == 1 && valid && std::isfinite(current) && std::isfinite(maximum) &&
+				binding->statTextDecimalPlaces >= 0 && binding->statTextDecimalPlaces <= 3 &&
+				(binding->statTextDisplayMode == "Current" || binding->statTextDisplayMode == "CurrentAndMax")) {
+				const auto number = [&](float value) {
+					const double factor = std::pow(10.0, binding->statTextDecimalPlaces);
+					double rounded = std::round(static_cast<double>(value) * factor) / factor;
+					if (rounded == 0) rounded = 0;
+					std::ostringstream out; out.imbue(std::locale::classic());
+					out << std::fixed << std::setprecision(binding->statTextDecimalPlaces) << rounded;
+					return out.str();
+				};
+				statText = binding->statTextPrefix + number(current);
+				if (binding->statTextDisplayMode == "CurrentAndMax") statText += " / " + number(maximum);
+				statText += binding->statTextSuffix;
+			}
+		}
 		const auto override = textOverrides_.find(entity.id);
 		const std::string& text = override != textOverrides_.end()
 			? override->second
-			: component->textValue;
+			: binding ? statText : component->textValue;
 		// Rasterizerとsignatureは同じ実効色を使用し、選択中の毎Frame再生成を避ける。
 		auto settings = ToRasterizerSettings(*component, text);
 		if (const auto found = menuColors_.find(entity.id); found != menuColors_.end()) settings.color = found->second;

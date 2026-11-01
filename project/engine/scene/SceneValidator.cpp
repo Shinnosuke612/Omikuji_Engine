@@ -13,6 +13,7 @@
 #include "../utility/StringUtility.h"
 
 #include <algorithm>
+#include <limits>
 #include <exception>
 #include <cmath>
 #include <sstream>
@@ -85,6 +86,116 @@ bool SceneValidator::ValidateDocument(
 	};
 
 	std::unordered_map<uint64_t, const SceneEntity*> entitiesById;
+	// 非表示でも参照構造は検証し、同じHPの二重所有は許さない。
+	std::unordered_map<uint64_t, std::unordered_set<std::string>> healthOwners;
+	auto healthTarget = [&](const SceneEntity& owner, uint64_t id, const std::string& name) -> const SceneEntity* {
+		if (id) return document.FindEntity(id);
+		if (name.empty()) return &owner;
+		const SceneEntity* result = nullptr;
+		for (const auto& candidate : document.GetEntities()) {
+			if (candidate.name != name) continue;
+			if (result) return nullptr;
+			result = &candidate;
+		}
+		return result;
+	};
+	// HUD設定漏れは警告に留め、補助表示だけでSceneの開始を拒否しない。
+	for (const auto& owner : document.GetEntities()) {
+		const auto count = std::count_if(owner.components.begin(), owner.components.end(),
+			[](const auto& c) { return c.type == "StatTextDisplay"; });
+		for (const auto& c : owner.components) {
+			if (c.type != "StatTextDisplay") continue;
+			if (count > 1) addIssue(SceneValidationSeverity::Warning, owner.id, "StatText:Duplicate");
+			if (!c.enabled) continue;
+			const auto* target = healthTarget(owner, c.statTextStatsEntityId, c.statTextStatsEntityName);
+			const auto* stats = target ? SceneEntityQuery::FindEnabledComponent(*target, "StatSet") : nullptr;
+			const bool valid = stats && std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& n) {
+				return n.id == c.statTextStatId && std::isfinite(n.initialValue) && std::isfinite(n.minValue) && std::isfinite(n.maxValue);
+			});
+			if (!valid) addIssue(SceneValidationSeverity::Warning, owner.id, "StatText:Reference");
+			if (!SceneEntityQuery::FindEnabledComponent(owner, "TextRenderer")) addIssue(SceneValidationSeverity::Warning, owner.id, "StatText:TextMissing");
+			if (c.statTextDecimalPlaces < 0 || c.statTextDecimalPlaces > 3 ||
+				(c.statTextDisplayMode != "Current" && c.statTextDisplayMode != "CurrentAndMax"))
+				addIssue(SceneValidationSeverity::Warning, owner.id, "StatText:Format");
+			for (const auto& source : document.GetEntities()) for (const auto& writer : source.components) {
+				if (!writer.enabled) continue;
+				const bool flow = writer.type == "GameFlowDirector" && (writer.gameFlowIntroTextEntityId == owner.id ||
+					writer.gameFlowCountdownTextEntityId == owner.id || writer.gameFlowPhaseTextEntityId == owner.id ||
+					writer.gameFlowTimerTextEntityId == owner.id || writer.gameFlowRemainingTextEntityId == owner.id || writer.gameFlowResultTimeTextEntityId == owner.id);
+				const bool status = writer.type == "PostProcessProfileManager" && (writer.postProcessStatusTextEntityId == owner.id ||
+					(!writer.postProcessStatusTextEntityId && !writer.postProcessStatusTextEntityName.empty() && writer.postProcessStatusTextEntityName == owner.name));
+				if (flow || status) addIssue(SceneValidationSeverity::Warning, owner.id, "StatText:Conflict");
+			}
+		}
+	}
+	for (const auto& owner : document.GetEntities()) {
+		size_t healthCount = 0;
+		for (const auto& health : owner.components) {
+			if (health.type != "Health") continue;
+			if (++healthCount > 1) addIssue(SceneValidationSeverity::Error, owner.id, "Health:DuplicateComponent");
+			const auto* target = healthTarget(owner, health.healthStatsEntityId, health.healthStatsEntityName);
+			const auto* stats = target ? SceneEntityQuery::FindEnabledComponent(*target, "StatSet") : nullptr;
+			const bool validStat = stats && std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& stat) {
+				return stat.id == health.healthStatId && stat.minValue == 0.0f && std::isfinite(stat.maxValue) && stat.maxValue > 0.0f;
+			});
+			if (!validStat) addIssue(SceneValidationSeverity::Error, owner.id, "Health:InvalidHP");
+			if (!std::isfinite(health.healthInvulnerabilityDuration) || health.healthInvulnerabilityDuration < 0.0f)
+				addIssue(SceneValidationSeverity::Error, owner.id, "Health:InvalidDuration");
+			if (health.enabled && target && !healthOwners[target->id].insert(health.healthStatId).second)
+				addIssue(SceneValidationSeverity::Error, owner.id, "Health:DuplicateOwner");
+		}
+	}
+	std::unordered_map<uint64_t, std::unordered_set<std::string>> deathOwners;
+	for (const auto& owner : document.GetEntities()) {
+		size_t count = 0;
+		for (const auto& death : owner.components) if (death.type == "DeathResponse") {
+			if (++count > 1) addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:Duplicate");
+			const auto* health = SceneEntityQuery::FindEnabledComponent(owner, "Health");
+			const auto* target = health ? healthTarget(owner, health->healthStatsEntityId, health->healthStatsEntityName) : nullptr;
+			const auto* stats = target ? SceneEntityQuery::FindEnabledComponent(*target, "StatSet") : nullptr;
+			const bool valid = health && stats &&
+				std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& s) { return s.id == health->healthStatId && s.minValue == 0 && s.maxValue > 0 && s.initialValue > 0; }) &&
+				std::any_of(stats->flags.begin(), stats->flags.end(), [&](const auto& f) { return f.id == death.deathResponseFlagId && !f.initialValue; });
+			if (!valid) addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:InvalidSource");
+			if (death.deathResponseScope != "Target" && death.deathResponseScope != "Scene") addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:InvalidScope");
+			if (death.enabled && target && !deathOwners[target->id].insert(death.deathResponseFlagId).second)
+				addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:Duplicate");
+			if (death.enabled && SceneEntityQuery::FindEnabledComponent(owner, "DeathPresentation"))
+				addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:LegacyConflict");
+		}
+	}
+	// 未使用の制作途中設定は警告に留めるが、重複Componentは構造エラーにする。
+	size_t activeDeathReplays = 0;
+	for (const auto& owner : document.GetEntities()) {
+		size_t count = 0;
+		for (const auto& replay : owner.components) if (replay.type == "DeathReplay") {
+			if (++count > 1) addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:ReplayDuplicate");
+			const bool active = replay.enabled && SceneEntityQuery::IsEntityActiveInHierarchy(document, owner);
+			const auto severity = active ? SceneValidationSeverity::Error : SceneValidationSeverity::Warning;
+			if (active && ++activeDeathReplays > 1) addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:ReplayDuplicate");
+			const auto* death = SceneEntityQuery::FindEnabledComponent(owner, "DeathResponse");
+			const auto* health = SceneEntityQuery::FindEnabledComponent(owner, "Health");
+			const auto* target = health ? healthTarget(owner, health->healthStatsEntityId, health->healthStatsEntityName) : nullptr;
+			const auto* stats = target ? SceneEntityQuery::FindEnabledComponent(*target, "StatSet") : nullptr;
+			const bool validSource = death && death->deathResponseScope == "Scene" && health && stats &&
+				std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& s) {
+					return s.id == health->healthStatId && s.minValue == 0 &&
+						std::isfinite(s.maxValue) && s.maxValue > 0 && std::isfinite(s.initialValue) && s.initialValue > 0;
+				}) &&
+				std::any_of(stats->flags.begin(), stats->flags.end(), [&](const auto& f) { return f.id == death->deathResponseFlagId && !f.initialValue; });
+			if (!validSource || !std::isfinite(replay.deathReplaySlowScale) || replay.deathReplaySlowScale <= 0 || replay.deathReplaySlowScale > 1 ||
+				!std::isfinite(replay.deathReplaySlowDuration) || replay.deathReplaySlowDuration <= 0)
+				addIssue(severity, owner.id, "DeathResponse:ReplayInvalidSettings");
+            if (!std::isfinite(replay.deathReplaySpeed) || replay.deathReplaySpeed <= 0 || replay.deathReplayViews.size() != 3 ||
+                !std::all_of(replay.deathReplayViews.begin(), replay.deathReplayViews.end(), IsValidReplayView))
+                addIssue(active && replay.deathReplayEnabled ? SceneValidationSeverity::Error : SceneValidationSeverity::Warning,
+                    owner.id, "DeathResponse:ReplayViewSettings");
+			if (!std::isfinite(replay.deathReplayCaptureHz) || replay.deathReplayCaptureHz <= 0 || replay.deathReplayCaptureHz > 60 ||
+				!replay.deathReplayHistoryBudgetMiB || replay.deathReplayHistoryBudgetMiB > (std::numeric_limits<uint64_t>::max)() / (1024 * 1024))
+				addIssue(active && replay.deathReplayEnabled ? SceneValidationSeverity::Error : SceneValidationSeverity::Warning,
+					owner.id, "DeathResponse:HistorySettings");
+		}
+	}
 	// Menu参照は同一DocumentのIDだけで検証し、名前fallbackで接続先を補わない。
 	auto isWithinMenu = [&document](uint64_t childId, uint64_t rootId) {
 		const SceneEntity* current = document.FindEntity(childId);
@@ -105,6 +216,7 @@ bool SceneValidator::ValidateDocument(
 	};
 	std::unordered_set<uint64_t> assignedMenuMarkers;
 	std::unordered_set<std::string> uiKeyBindings;
+	std::unordered_set<uint64_t> replayCompletionTargets;
 	size_t initiallyOpenMenus = 0;
 	size_t gamePauseCount = 0;
 	for (const SceneEntity& owner : document.GetEntities()) {
@@ -256,7 +368,7 @@ bool SceneValidator::ValidateDocument(
 								if (c.type == "HitBox") supported &= internal(c.hitBoxOwnerEntityId, c.hitBoxOwnerEntityName);
 								if (c.type == "HurtBox") supported &= internal(c.hurtBoxStatsEntityId, c.hurtBoxStatsEntityName);
 								if (c.type == "BoneAttachment") supported &= internal(c.boneAttachmentTargetEntityId, c.boneAttachmentTargetEntityName);
-								if (c.type == "EnemyBehavior") supported &= internal(c.enemyAttackHitBoxEntityId, c.enemyAttackHitBoxEntityName);
+								if (c.type == "EnemyBehavior") { supported &= internal(c.enemyAttackHitBoxEntityId, c.enemyAttackHitBoxEntityName); if (c.enemyCharge.poseEnabled) supported &= internal(c.enemyCharge.poseEntityId, ""); }
 								if (c.type == "StateMachine") for (const auto& state : c.stateMachineStates) for (const auto& parameter : state.parameters)
 									if (parameter.type == "Entity") supported &= internal(parameter.entityId, parameter.entityName);
 								if (c.type == "AttackSet") for (const auto& attack : c.attackDefinitions) {
@@ -301,6 +413,13 @@ bool SceneValidator::ValidateDocument(
 					if (++initiallyOpenMenus > 1) menuError("Only one active MenuPanel may be initially open");
 				}
 				if (setting.menuNavigationAxis != "Vertical" && setting.menuNavigationAxis != "Horizontal") menuError("MenuPanel navigationAxis must be Vertical or Horizontal");
+				const auto standardGroups = setting.MenuStandardKeyGroups();
+				if (const char* error = ValidateMenuStandardKeys(standardGroups, setting.menuNavigationAxis); *error) menuError(error);
+				for (const auto* group : standardGroups) {
+					const auto validCount = std::count_if(group->begin(), group->end(), [](const auto& key) { return ResolveSceneInputKey(key) != 0; });
+					if (ResolveSceneInputKeys("", *group).size() < static_cast<size_t>(validCount))
+						addIssue(SceneValidationSeverity::Warning, owner.id, "MenuRuntime:StandardKeysDuplicate");
+				}
 				if (setting.menuCancelMode != "Close" && setting.menuCancelMode != "InvokeItem" && setting.menuCancelMode != "None") menuError("MenuPanel has an invalid cancelMode");
 				std::unordered_set<uint64_t> localItems;
 				bool hasSelectableItem = false;
@@ -372,37 +491,92 @@ bool SceneValidator::ValidateDocument(
 			} else if (setting.type == "GamePause") {
 				if (setting.enabled && isMenuEntityActive(owner) && ++gamePauseCount > 1) menuError("Only one active GamePause is allowed per scene");
 				const SceneComponent* panel = requireMenuTarget(setting.gamePausePanelEntityId, "MenuPanel", "GamePause panel");
-				if (panel && panel->menuInitiallyOpen) menuError("GamePause panel must start closed");
+				if (setting.enabled && panel && panel->menuInitiallyOpen) menuError("GamePause panel must start closed");
 			} else if (setting.type == "EventTrigger") {
 				for (const SceneEventBinding& binding : setting.eventBindings) {
-					if (binding.executionDomain != "Gameplay" && binding.executionDomain != "UI") menuError("Event executionDomain must be Gameplay or UI");
+                    if (binding.triggerType == "OnGameFlowStarted") {
+                        if (binding.executionDomain != "Gameplay") {
+                            addIssue(SceneValidationSeverity::Warning,owner.id,"GameFlowEvent:Domain");
+                            continue;
+                        }
+                        const auto* source = healthTarget(owner,binding.targetEntityId,binding.targetEntityName);
+                        if (!source || !SceneEntityQuery::FindEnabledComponent(*source,"GameFlowDirector") || !SceneEntityQuery::IsEntityActiveInHierarchy(document,*source))
+                            addIssue(SceneValidationSeverity::Warning,owner.id,"GameFlowEvent:Source");
+                        if (!setting.enabled || !SceneEntityQuery::IsEntityActiveInHierarchy(document,owner))
+                            addIssue(SceneValidationSeverity::Warning,owner.id,"GameFlowEvent:Owner");
+                    }
+					const auto keys = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+					if (binding.executionDomain != "Gameplay" && binding.executionDomain != "UI" && binding.executionDomain != "Death") addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:InvalidEvent");
+					if (binding.executionDomain == "Death") {
+						const auto* target = document.FindEntity(binding.targetEntityId ? binding.targetEntityId : owner.id);
+						if (binding.triggerType != "OnDeathStarted" || !binding.targetEntityName.empty() || !target || !SceneEntityQuery::FindEnabledComponent(*target, "DeathResponse"))
+							addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:InvalidEvent");
+						for (const auto& a : binding.actions) if (a.type != "PlayAudio" && a.type != "PlayTextMotion" && a.type != "PlayPresentationClip")
+							addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:InvalidAction");
+					} else if (binding.triggerType == "OnDeathStarted") addIssue(SceneValidationSeverity::Error, owner.id, "DeathResponse:InvalidEvent");
+                    if (binding.triggerType=="OnDeathReplayCompleted") {
+                        const uint64_t replayId=binding.targetEntityId ? binding.targetEntityId : owner.id;
+                        const auto* target=document.FindEntity(replayId);
+                        const auto* replay=target ? SceneEntityQuery::FindComponent(*target,"DeathReplay") : nullptr;
+                        const bool active=setting.enabled && SceneEntityQuery::IsEntityActiveInHierarchy(document,owner);
+                        if (binding.executionDomain!="UI" || !binding.targetEntityName.empty() || !replay ||
+                            binding.actions.size()!=1 || binding.actions.front().type!="OpenMenu" ||
+                            !binding.actions.front().targetEntityName.empty()) {
+                            menuError("MenuRuntime:ReplayBinding");
+                        } else {
+                            const auto* panelOwner=document.FindEntity(binding.actions.front().targetEntityId);
+                            const auto* panel=panelOwner ? SceneEntityQuery::FindComponent(*panelOwner,"MenuPanel") : nullptr;
+                            const auto* canvas=panelOwner ? SceneEntityQuery::FindComponent(*panelOwner,"UICanvas") : nullptr;
+                            bool pause=false;
+                            for (const auto& e : document.GetEntities()) for (const auto& c : e.components)
+                                if (c.type=="GamePause" && c.enabled && panelOwner && c.gamePausePanelEntityId==panelOwner->id) pause=true;
+                            if (!panel || !canvas) menuError("MenuRuntime:ReplayPanel");
+                            else {
+                                bool selectable=false;
+                                for (uint64_t id : panel->menuItemEntityIds) {
+                                    const auto* itemOwner=document.FindEntity(id);
+                                    const auto* item=itemOwner ? SceneEntityQuery::FindEnabledComponent(*itemOwner,"MenuItem") : nullptr;
+                                    selectable |= item && item->menuInteractable && SceneEntityQuery::IsEntityActiveInHierarchy(document,*itemOwner);
+                                }
+                                if (!panel->enabled || !canvas->enabled || canvas->uiRenderSpace!="ScreenOverlay" ||
+                                    panel->menuInitiallyOpen || pause || !selectable || !replay->enabled || !replay->deathReplayEnabled ||
+                                    !SceneEntityQuery::IsEntityActiveInHierarchy(document,*target) ||
+                                    !SceneEntityQuery::IsEntityActiveInHierarchy(document,*panelOwner))
+                                    addIssue(SceneValidationSeverity::Warning,owner.id,"MenuRuntime:ReplayPanel");
+                            }
+                            if (active && !replayCompletionTargets.insert(replayId).second)
+                                addIssue(SceneValidationSeverity::Error,owner.id,"MenuRuntime:ReplayAmbiguous");
+                        }
+                    }
 					const bool ui = binding.executionDomain == "UI";
 					if (ui) {
 						const bool keyBinding = binding.triggerType == "OnKeyPressed";
 						if (keyBinding) for (const auto& other : document.GetEntities()) {
 							const auto* events = SceneEntityQuery::FindEnabledComponent(other, "EventTrigger");
 							if (!events) continue;
-							for (const auto& gameplay : events->eventBindings) if (gameplay.executionDomain == "Gameplay" && gameplay.triggerType == "OnKeyPressed" &&
-								ResolveSceneInputKey(gameplay.triggerKey) == ResolveSceneInputKey(binding.triggerKey))
-								addIssue(SceneValidationSeverity::Warning, owner.id, "Menu runtime: key conflict");
+							for (const auto& gameplay : events->eventBindings) if (gameplay.executionDomain == "Gameplay" && gameplay.triggerType == "OnKeyPressed") {
+								const auto gameplayKeys = ResolveSceneInputKeys(gameplay.triggerKey, gameplay.additionalTriggerKeys);
+								if (std::any_of(keys.begin(), keys.end(), [&](BYTE key) { return std::find(gameplayKeys.begin(), gameplayKeys.end(), key) != gameplayKeys.end(); }))
+									addIssue(SceneValidationSeverity::Warning, owner.id, "Menu runtime: key conflict");
+							}
 						}
 						if (!std::isfinite(binding.cooldown) || binding.cooldown < 0) menuError("UI event cooldown must be finite and non-negative");
-						if (binding.triggerType != "OnKeyPressed" && binding.triggerType != "OnMenuItemConfirmed" && binding.triggerType != "OnMenuCancelled") menuError("Unsupported UI event condition: " + binding.triggerType);
+						if (binding.triggerType != "OnKeyPressed" && binding.triggerType != "OnMenuItemConfirmed" && binding.triggerType != "OnMenuCancelled" && binding.triggerType != "OnDeathReplayCompleted") menuError("Unsupported UI event condition: " + binding.triggerType);
 						if (binding.uiInputScope != "WhenNoMenu" && binding.uiInputScope != "FocusedMenu") menuError("Invalid UI input scope");
 						if (binding.triggerType == "OnMenuItemConfirmed") requireMenuTarget(binding.targetEntityId, "MenuItem", "UI confirmation");
 						if (binding.triggerType == "OnMenuCancelled" || (binding.triggerType == "OnKeyPressed" && binding.uiInputScope == "FocusedMenu")) requireMenuTarget(binding.targetEntityId, "MenuPanel", "UI event target");
 						if (binding.triggerType == "OnKeyPressed" && setting.enabled && SceneEntityQuery::IsEntityActiveInHierarchy(document, owner)) {
-							const auto key = ResolveSceneInputKey(binding.triggerKey);
 							const auto* target = document.FindEntity(binding.targetEntityId);
 							const auto* panel = target ? SceneEntityQuery::FindEnabledComponent(*target, "MenuPanel") : nullptr;
-							if (binding.uiInputScope == "FocusedMenu" && panel && panel->menuInputMode == "Standard") {
-								const bool horizontal = panel->menuNavigationAxis == "Horizontal";
-								if (key && (key == ResolveSceneInputKey("ENTER") || key == ResolveSceneInputKey("ESCAPE") ||
-									key == ResolveSceneInputKey(horizontal ? "LEFT" : "UP") || key == ResolveSceneInputKey(horizontal ? "RIGHT" : "DOWN")))
-									addIssue(SceneValidationSeverity::Warning, owner.id, "MenuRuntime:ReservedKey");
+							for (BYTE key : keys) {
+								if (binding.uiInputScope == "FocusedMenu" && panel && panel->menuInputMode == "Standard") {
+									const auto reserved = ResolveMenuStandardKeys(panel->MenuStandardKeyGroups(), panel->menuNavigationAxis);
+									if (std::find(reserved.begin(), reserved.end(), key) != reserved.end())
+										addIssue(SceneValidationSeverity::Warning, owner.id, "MenuRuntime:ReservedKey");
+								}
+								const std::string identity = binding.uiInputScope + ":" + std::to_string(binding.uiInputScope == "FocusedMenu" ? binding.targetEntityId : 0) + ":" + std::to_string(key);
+								if (!uiKeyBindings.insert(identity).second) addIssue(SceneValidationSeverity::Warning, owner.id, "Duplicate UI key binding in the same input scope");
 							}
-							const std::string identity = binding.uiInputScope + ":" + std::to_string(binding.uiInputScope == "FocusedMenu" ? binding.targetEntityId : 0) + ":" + std::to_string(key);
-							if (key && !uiKeyBindings.insert(identity).second) addIssue(SceneValidationSeverity::Warning, owner.id, "Duplicate UI key binding in the same input scope");
 						}
 					} else if (binding.triggerType == "OnMenuItemConfirmed" || binding.triggerType == "OnMenuCancelled") menuError("Menu notifications require the UI execution domain");
 					for (const SceneEventAction& action : binding.actions) {
@@ -417,10 +591,10 @@ bool SceneValidator::ValidateDocument(
 						if (ui) {
 							const bool audioAction = action.type == "PlayAudio" || action.type == "StopAudio" || action.type == "PauseAudio" || action.type == "ResumeAudio";
 							const bool textAction = action.type == "PlayTextMotion" || action.type == "StopTextMotion" || action.type == "ResetTextMotion";
-							if (!newAction && !audioAction && !textAction && action.type != "SceneTransition") menuError("Unsupported UI action: " + action.type);
+							if (!newAction && !audioAction && !textAction && action.type != "SceneTransition" && action.type != "ExitGame") menuError("Unsupported UI action: " + action.type);
 							if (audioAction) requireMenuTarget(action.targetEntityId, "AudioSource", action.type);
 							if (textAction) requireMenuTarget(action.targetEntityId, "TextMotion", action.type);
-							if (binding.triggerType == "OnMenuCancelled" && (action.type == "CloseMenu" || action.type == "ResumeGame" || action.type == "SceneTransition" || action.type == "RequestApplicationExit")) {
+							if (binding.triggerType == "OnMenuCancelled" && (action.type == "CloseMenu" || action.type == "ResumeGame" || action.type == "SceneTransition" || action.type == "RequestApplicationExit" || action.type == "ExitGame")) {
 								const SceneEntity* panelEntity = document.FindEntity(binding.targetEntityId);
 								const SceneComponent* panel = panelEntity ? SceneEntityQuery::FindEnabledComponent(*panelEntity, "MenuPanel") : nullptr;
 								if (panel && panel->menuCancelMode != "None") addIssue(SceneValidationSeverity::Warning, owner.id, "OnMenuCancelled duplicates the panel's configured cancel behavior");
@@ -1273,6 +1447,8 @@ bool SceneValidator::ValidateDocument(
 							"StatSet contains a duplicate Stat Id: " + stat.id
 						);
 					}
+					if (!std::isfinite(stat.minValue) || !std::isfinite(stat.maxValue) || !std::isfinite(stat.initialValue))
+						addIssue(SceneValidationSeverity::Error, entity.id, "StatFlags:InvalidNumber " + stat.id);
 					if (stat.maxValue < stat.minValue) {
 						addIssue(
 							SceneValidationSeverity::Error,
@@ -1280,6 +1456,10 @@ bool SceneValidator::ValidateDocument(
 							"Stat max is below min: " + stat.id
 						);
 					}
+				}
+				for (const auto& flag : component.flags) {
+					if (flag.id.empty() || !statIds.insert(flag.id).second)
+						addIssue(SceneValidationSeverity::Error, entity.id, "StatFlags:InvalidId " + flag.id);
 				}
 			} else if (component.type == "EventTrigger") {
 				auto validateCameraEventTarget = [
@@ -1517,10 +1697,23 @@ bool SceneValidator::ValidateDocument(
 					const SceneEntity* target = resolveEventTarget(targetId, targetName);
 					return target && onStartActivatedEntityIds.contains(target->id);
 				};
+				// フラグ参照はRuntimeと同じく、明示IDを優先し同名の曖昧さを拒否する。
+				const auto resolveFlagTarget = [&](uint64_t id, const std::string& name) -> const SceneEntity* {
+					if (id) return document.FindEntity(id);
+					if (name.empty()) return &entity;
+					const SceneEntity* result = nullptr;
+					for (const auto& candidate : document.GetEntities()) {
+						if (candidate.name != name) continue;
+						if (result) return nullptr;
+						result = &candidate;
+					}
+					return result;
+				};
 				for (const SceneEventBinding& binding : component.eventBindings) {
 					const bool triggerUsesTarget =
 						binding.triggerType == "OnStatReachedMin" ||
 						binding.triggerType == "OnStatCompare" ||
+						binding.triggerType == "OnFlagChanged" || binding.triggerType == "OnFlagCompare" ||
 						binding.triggerType == "OnPositionReached";
 					if (triggerUsesTarget) {
 						validateEntityReference(
@@ -1528,16 +1721,27 @@ bool SceneValidator::ValidateDocument(
 							"Event target"
 						);
 					}
-					if (
-						binding.triggerType == "OnKeyPressed" &&
-						ResolveSceneInputKey(binding.triggerKey) == 0
-					) {
-						addIssue(
-							SceneValidationSeverity::Warning,
-							entity.id,
-							"OnKeyPressed Event has an unsupported key: " +
-								binding.triggerKey
-						);
+					if (binding.triggerType == "OnHealthDamaged") {
+						const auto* target = healthTarget(entity, binding.targetEntityId, binding.targetEntityName);
+						if (binding.executionDomain != "Gameplay" || !target || !SceneEntityQuery::FindEnabledComponent(*target, "Health"))
+							addIssue(SceneValidationSeverity::Error, entity.id, "Health:InvalidEventTarget");
+					}
+					if (binding.triggerType == "OnFlagChanged" || binding.triggerType == "OnFlagCompare") {
+						const SceneEntity* target = resolveFlagTarget(binding.targetEntityId, binding.targetEntityName);
+						const SceneComponent* stats = target ? SceneEntityQuery::FindEnabledComponent(*target, "StatSet") : nullptr;
+						if (binding.executionDomain != "Gameplay" || !stats ||
+							std::none_of(stats->flags.begin(), stats->flags.end(), [&](const auto& f) { return f.id == binding.flagId; }))
+							addIssue(SceneValidationSeverity::Error, entity.id, "StatFlags:InvalidReference " + binding.flagId);
+					}
+					if (binding.triggerType == "OnKeyPressed") {
+						std::unordered_set<BYTE> seen;
+						const auto validateKey = [&](const std::string& name) {
+							const BYTE key = ResolveSceneInputKey(name);
+							if (!key) addIssue(SceneValidationSeverity::Error, entity.id, "EventKeys:Invalid " + name);
+							else if (!seen.insert(key).second) addIssue(SceneValidationSeverity::Warning, entity.id, "EventKeys:Duplicate " + name);
+						};
+						validateKey(binding.triggerKey);
+						for (const auto& name : binding.additionalTriggerKeys) validateKey(name);
 					}
 					if (binding.triggerType == "OnCameraPathCompleted") {
 						validateCameraEventTarget(
@@ -1598,8 +1802,22 @@ bool SceneValidator::ValidateDocument(
 						actionIndex < binding.actions.size();
 						++actionIndex) {
 						const SceneEventAction& action = binding.actions[actionIndex];
+						if (action.type == "ApplyDamage") {
+							const auto* target = healthTarget(entity, action.targetEntityId, action.targetEntityName);
+							if (binding.executionDomain != "Gameplay" || !target || !SceneEntityQuery::FindEnabledComponent(*target, "Health"))
+								addIssue(SceneValidationSeverity::Error, entity.id, "Health:InvalidEventTarget");
+							if (!std::isfinite(action.value) || action.value <= 0.0f)
+								addIssue(SceneValidationSeverity::Error, entity.id, "Health:InvalidDamage");
+						}
+						if (action.type == "SetFlag") {
+							const SceneEntity* target = resolveFlagTarget(action.targetEntityId, action.targetEntityName);
+							const SceneComponent* stats = target ? SceneEntityQuery::FindEnabledComponent(*target, "StatSet") : nullptr;
+							if (binding.executionDomain != "Gameplay" || !stats ||
+								std::none_of(stats->flags.begin(), stats->flags.end(), [&](const auto& f) { return f.id == action.flagId; }))
+								addIssue(SceneValidationSeverity::Error, entity.id, "StatFlags:InvalidReference " + action.flagId);
+						}
 						const bool actionUsesTarget =
-							action.type == "ModifyStat" ||
+							action.type == "ModifyStat" || action.type == "SetFlag" ||
 							action.type == "SetEntityActive" ||
 							action.type == "InstantiatePrefab" ||
 							action.type == "ChangeState" ||
@@ -2054,10 +2272,43 @@ bool SceneValidator::ValidateDocument(
 					);
 				}
 			} else if (component.type == "EnemyBehavior") {
-				validateEntityReference(
-					component.enemyTargetEntityId,
-					"Enemy target"
-				);
+				if (component.enemyMovementMode != "Legacy" && component.enemyMovementMode != "PositioningCharge")
+					addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyPositioning:Mode");
+				if (component.enemyMovementMode == "PositioningCharge") {
+					// 未知曲線も当該敵のWarningに留める。Legacyの移動やScene全体の読込を拒否しない。
+					const char* chargeIssue = ValidateEnemyChargeConfiguration(document, entity, component);
+					if (*chargeIssue) addIssue(SceneValidationSeverity::Warning, entity.id, chargeIssue);
+					if (!component.enemyPositioning.IsValid(component.enemyMoveSpeed) ||
+						!std::isfinite(component.enemyDetectionRange) || component.enemyDetectionRange < 0.0f ||
+						!std::isfinite(component.enemyLoseRange) || component.enemyLoseRange < component.enemyDetectionRange ||
+						!std::isfinite(component.enemyTurnSpeed) || component.enemyTurnSpeed < 0.0f)
+						addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyPositioning:Settings");
+					const auto* body = SceneEntityQuery::FindEnabledComponent(entity, "PhysicsBody");
+					const auto* collider = SceneEntityQuery::FindEnabledComponent(entity, "OBBCollider");
+					if (!body || body->physicsBodyType != "Dynamic" || !collider || !collider->colliderActive || collider->colliderIsTrigger)
+						addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyPositioning:Body");
+					if (component.enemyPositioning.distance + component.enemyPositioning.tolerance +
+						(component.enemyPositioning.variation ? component.enemyPositioning.distanceVariation : 0.0f) >= component.enemyLoseRange)
+						addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyPositioning:Range");
+				}
+				if (component.enemyTargetMode == SceneEnemyTargetMode::LegacyReference || component.enemyTargetMode == SceneEnemyTargetMode::Entity)
+					validateEntityReference(component.enemyTargetEntityId, "Enemy target");
+				// Prefab外のPlayer不在は許容し、実Playerとの一致はRuntimeで検査する。
+				const auto* explicitTarget = component.enemyTargetMode == SceneEnemyTargetMode::Name
+					? document.FindEntityByName(component.enemyTargetEntityName) : document.FindEntity(component.enemyTargetEntityId);
+				const auto target = ResolveEnemyTarget(document, entity, component, explicitTarget ? explicitTarget->id : 0);
+				if (component.enemyTargetMode == SceneEnemyTargetMode::Unknown)
+					addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyCharge:TargetMode");
+				else if (target.issue == SceneEnemyTargetIssue::Ambiguous)
+					addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyCharge:TargetAmbiguous");
+				else if (target.issue == SceneEnemyTargetIssue::Self || target.issue == SceneEnemyTargetIssue::UnsupportedPlayer ||
+					(component.enemyMovementMode == "PositioningCharge" && explicitTarget && !SceneEntityQuery::FindEnabledComponent(*explicitTarget, "PlayerBehavior")))
+					addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyCharge:Target");
+				if (component.enemyTargetMode == SceneEnemyTargetMode::LegacyReference && explicitTarget &&
+					!component.enemyTargetEntityName.empty() && explicitTarget->name != component.enemyTargetEntityName)
+					addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyCharge:LegacyTarget");
+				if (!component.enemyCharge.poseEnabled && component.enemyCharge.poseEntityId && !document.FindEntity(component.enemyCharge.poseEntityId))
+					addIssue(SceneValidationSeverity::Warning, entity.id, "EnemyCharge:UnusedPose");
 				validateEntityReference(
 					component.enemyAttackHitBoxEntityId,
 					"Enemy attack HitBox"

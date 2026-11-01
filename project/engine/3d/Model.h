@@ -142,6 +142,7 @@ public://公開メンバ関数
 	uint32_t GetVertexCount() const {
 		return static_cast<uint32_t>(modelData.vertices.size());
 	}
+	const std::vector<VertexData>& GetVertices() const { return modelData.vertices; }
 	bool GetLocalBounds(Vector3& boundsMin, Vector3& boundsMax) const;
 	const SkinClusterData& GetSkinClusterData() const {
 		return modelData.skinClusterData;

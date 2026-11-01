@@ -13,6 +13,8 @@ public:
 	void Clear();
 	void AddBody(PhysicsBody* body);
 	void AddStaticCollider(Collider* collider);
+	// Physicsとcontrolled攻撃時計が共有する秒数。非有限値は進めない。
+	static float EffectiveStepDelta(float deltaTime);
 	void Step(float deltaTime);
 
 	void SetGravity(const Vector3& gravity) { gravity_ = gravity; }

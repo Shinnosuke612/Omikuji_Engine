@@ -33,7 +33,9 @@ public:
 	);
 	void Stop(uint64_t entityId);
 	void Reset(uint64_t entityId);
-	void Update(const SceneDocument& document, float deltaTime);
+	// 対象指定時はそのEntityだけUI時計で進め、それ以外のPose/完了通知を保持する。
+	// 通常の対象別停止はdeferCompletions=false。GamePauseの既定trueでは完了を再開まで保持。
+	void Update(const SceneDocument& document, float deltaTime, const std::vector<uint64_t>* onlyEntityIds = nullptr, bool deferCompletions = true);
 	const std::unordered_map<uint64_t, SceneTextMotionPresentation>&
 	GetPresentationOverrides() const;
 	std::vector<SceneTextMotionCompletion> ConsumeCompletions();
@@ -51,4 +53,6 @@ private:
 	std::unordered_map<uint64_t, SceneTextMotionPresentation>
 		presentationOverrides_;
 	std::vector<SceneTextMotionCompletion> completions_;
+	// UI時計で完了した通知はGameplay Eventが再開して消費するまで保持する。
+	std::vector<SceneTextMotionCompletion> pausedCompletions_;
 };

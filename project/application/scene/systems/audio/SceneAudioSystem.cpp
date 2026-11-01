@@ -389,12 +389,13 @@ std::vector<uint64_t> SceneAudioSystem::ConsumeFinishedEntityIds(
 	return finishedEntityIds;
 }
 
-void SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::vector<SceneAudioRequest>& requests) {
+bool SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::vector<SceneAudioRequest>& requests) {
+	bool accepted = true;
 	for (const SceneAudioRequest& request : requests) {
 		const SceneEntity* entity = request.entityId != 0 ? document.FindEntity(request.entityId) : nullptr;
-		if (!entity || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *entity)) continue;
+		if (!entity || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *entity)) { accepted = false; continue; }
 		const SceneComponent* component = SceneEntityQuery::FindEnabledComponent(*entity, "AudioSource");
-		if (!component) continue;
+		if (!component) { accepted = false; continue; }
 		Binding& binding = bindings_[MakeBindingKey(entity->id, component->localId)];
 		const uint64_t bindingKey = MakeBindingKey(entity->id, component->localId);
 		binding.entityId = entity->id;
@@ -402,7 +403,7 @@ void SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::v
 		binding.persistent = IsPersistentBgm(*component, activeScene_);
 		if (request.type == SceneAudioRequestType::Play) {
 			if (binding.persistent) {
-				Audio::GetInstance()->ResolvePersistentBgm({
+				accepted &= Audio::GetInstance()->ResolvePersistentBgm({
 					sceneOwnerId_, bindingKey, component->audioClipPath,
 					{
 						ToAudioBus(component->audioBus), component->audioVolume,
@@ -413,6 +414,7 @@ void SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::v
 			} else {
 				Audio::GetInstance()->SoundStop(binding.handle);
 				binding.handle = Play(*component, binding);
+				accepted &= binding.handle.IsValid();
 			}
 		} else if (request.type == SceneAudioRequestType::Stop) {
 			if (binding.persistent) Audio::GetInstance()->StopPersistentBgm(sceneOwnerId_, bindingKey);
@@ -425,6 +427,7 @@ void SceneAudioSystem::ApplyRequests(const SceneDocument& document, const std::v
 			else Audio::GetInstance()->Resume(binding.handle);
 		}
 	}
+	return accepted;
 }
 
 void SceneAudioSystem::PrepareForSceneTransition() {

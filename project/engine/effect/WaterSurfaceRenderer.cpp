@@ -26,6 +26,15 @@ void WaterSurfaceRenderer::Initialize(
 	CreateResources((std::clamp)(gridResolution, 4u, 160u));
 }
 
+bool WaterSurfaceRenderer::TryInitializeReplay(DirectXCommon* dx, uint32_t resolution) {
+    if (dxCommon_ || !dx || !dx->GetDevice()) return false;
+    dxCommon_ = dx;
+    if (CreateRootSignature(true) && CreateGraphicsPipeline(true) &&
+        CreateResources((std::clamp)(resolution, 4u, 160u), true)) return true;
+    Finalize();
+    return false;
+}
+
 void WaterSurfaceRenderer::Finalize() {
 	surfaceData_ = nullptr;
 	surfaceResource_.Reset();
@@ -48,6 +57,11 @@ void WaterSurfaceRenderer::Draw(
 	const Vector3& halfSize,
 	const Settings& settings
 ) {
+    DrawAtTime(camera, center, halfSize, settings, time_);
+}
+
+void WaterSurfaceRenderer::DrawAtTime(const Camera* camera, const Vector3& center,
+    const Vector3& halfSize, const Settings& settings, float time) {
 	if (
 		!settings.enabled ||
 		!dxCommon_ ||
@@ -68,7 +82,7 @@ void WaterSurfaceRenderer::Draw(
 	const Vector3 cameraPosition = camera->GetTranslate();
 
 	surfaceData_->viewProjection = camera->GetViewProjectionMatrix();
-	surfaceData_->centerTime = { center.x, center.y, center.z, time_ };
+	surfaceData_->centerTime = { center.x, center.y, center.z, time };
 	surfaceData_->halfSizeAlpha = {
 		safeHalfX,
 		safeHalfY,
@@ -119,7 +133,7 @@ void WaterSurfaceRenderer::Draw(
 	commandList->DrawInstanced(vertexCount_, 1, 0, 0);
 }
 
-void WaterSurfaceRenderer::CreateRootSignature() {
+bool WaterSurfaceRenderer::CreateRootSignature(bool recoverable) {
 	D3D12_ROOT_PARAMETER rootParameter{};
 	rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -143,7 +157,8 @@ void WaterSurfaceRenderer::CreateRootSignature() {
 		if (errorBlob) {
 			Logger::Log(static_cast<const char*>(errorBlob->GetBufferPointer()));
 		}
-		assert(false);
+		if (!recoverable) assert(false);
+		return false;
 	}
 
 	const HRESULT createResult = dxCommon_->GetDevice()->CreateRootSignature(
@@ -152,10 +167,11 @@ void WaterSurfaceRenderer::CreateRootSignature() {
 		signatureBlob->GetBufferSize(),
 		IID_PPV_ARGS(&rootSignature_)
 	);
-	assert(SUCCEEDED(createResult));
+	if (!recoverable) assert(SUCCEEDED(createResult));
+	return SUCCEEDED(createResult);
 }
 
-void WaterSurfaceRenderer::CreateGraphicsPipeline() {
+bool WaterSurfaceRenderer::CreateGraphicsPipeline(bool recoverable) {
 	D3D12_INPUT_ELEMENT_DESC inputElements[2]{};
 	inputElements[0].SemanticName = "POSITION";
 	inputElements[0].Format = DXGI_FORMAT_R32G32B32_FLOAT;
@@ -169,16 +185,17 @@ void WaterSurfaceRenderer::CreateGraphicsPipeline() {
 		_countof(inputElements)
 	};
 
-	const auto vertexShader = dxCommon_->CompileShader(
-		L"resources/shaders/WaterSurface.VS.hlsl",
-		L"vs_6_0"
-	);
-	const auto pixelShader = dxCommon_->CompileShader(
-		L"resources/shaders/WaterSurface.PS.hlsl",
-		L"ps_6_0"
-	);
-	assert(vertexShader);
-	assert(pixelShader);
+    Microsoft::WRL::ComPtr<IDxcBlob> vertexShader, pixelShader;
+    if (recoverable) {
+        std::string diagnostic;
+        if (!dxCommon_->TryCompileShader(L"resources/shaders/WaterSurface.VS.hlsl", L"vs_6_0", vertexShader, diagnostic) ||
+            !dxCommon_->TryCompileShader(L"resources/shaders/WaterSurface.PS.hlsl", L"ps_6_0", pixelShader, diagnostic)) return false;
+    } else {
+        vertexShader = dxCommon_->CompileShader(L"resources/shaders/WaterSurface.VS.hlsl", L"vs_6_0");
+        pixelShader = dxCommon_->CompileShader(L"resources/shaders/WaterSurface.PS.hlsl", L"ps_6_0");
+        assert(vertexShader && pixelShader);
+        if (!vertexShader || !pixelShader) return false;
+    }
 
 	D3D12_BLEND_DESC blendDesc{};
 	blendDesc.RenderTarget[0].RenderTargetWriteMask =
@@ -228,10 +245,11 @@ void WaterSurfaceRenderer::CreateGraphicsPipeline() {
 			&pipelineDesc,
 			IID_PPV_ARGS(&pipelineState_)
 		);
-	assert(SUCCEEDED(result));
+	if (!recoverable) assert(SUCCEEDED(result));
+	return SUCCEEDED(result);
 }
 
-void WaterSurfaceRenderer::CreateResources(uint32_t gridResolution) {
+bool WaterSurfaceRenderer::CreateResources(uint32_t gridResolution, bool recoverable) {
 	std::vector<Vertex> vertices;
 	vertices.reserve(
 		static_cast<size_t>(gridResolution) *
@@ -268,15 +286,13 @@ void WaterSurfaceRenderer::CreateResources(uint32_t gridResolution) {
 	}
 
 	vertexCount_ = static_cast<uint32_t>(vertices.size());
-	vertexResource_ = dxCommon_->CreateBufferResource(
-		sizeof(Vertex) * vertices.size()
-	);
-	Vertex* mappedVertices = nullptr;
-	vertexResource_->Map(
-		0,
-		nullptr,
-		reinterpret_cast<void**>(&mappedVertices)
-	);
+    if (recoverable) {
+        if (!dxCommon_->TryCreateBufferResource(sizeof(Vertex) * vertices.size(), vertexResource_)) return false;
+    } else vertexResource_ = dxCommon_->CreateBufferResource(sizeof(Vertex) * vertices.size());
+    Vertex* mappedVertices = nullptr;
+    if (!vertexResource_ || FAILED(vertexResource_->Map(0, nullptr,
+        reinterpret_cast<void**>(&mappedVertices))) || !mappedVertices) return false;
+
 	std::memcpy(
 		mappedVertices,
 		vertices.data(),
@@ -290,11 +306,11 @@ void WaterSurfaceRenderer::CreateResources(uint32_t gridResolution) {
 		static_cast<UINT>(sizeof(Vertex) * vertices.size());
 	vertexBufferView_.StrideInBytes = sizeof(Vertex);
 
-	surfaceResource_ = dxCommon_->CreateBufferResource(sizeof(SurfaceData));
-	surfaceResource_->Map(
-		0,
-		nullptr,
-		reinterpret_cast<void**>(&surfaceData_)
-	);
-	surfaceData_->viewProjection = MakeIdentity4x4();
+    if (recoverable) {
+        if (!dxCommon_->TryCreateBufferResource(sizeof(SurfaceData), surfaceResource_)) return false;
+    } else surfaceResource_ = dxCommon_->CreateBufferResource(sizeof(SurfaceData));
+    if (!surfaceResource_ || FAILED(surfaceResource_->Map(0, nullptr,
+        reinterpret_cast<void**>(&surfaceData_))) || !surfaceData_) return false;
+    surfaceData_->viewProjection = MakeIdentity4x4();
+    return true;
 }

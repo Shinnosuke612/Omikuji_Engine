@@ -334,6 +334,7 @@ bool ScenePrefabAnimationSystem::Play(
 }
 
 void ScenePrefabAnimationSystem::ResetEntity(uint64_t entityId) {
+	deathClips_.erase(entityId); deathParticipants_.erase(entityId);
 	runtimes_.erase(entityId);
 }
 
@@ -481,12 +482,17 @@ bool ScenePrefabAnimationSystem::ResetPresentation(SceneDocument& document, uint
 }
 
 void ScenePrefabAnimationSystem::UpdatePresentations(SceneDocument& document, float deltaTime,
-	const std::unordered_set<uint64_t>& blockedEntityIds) {
+	const std::unordered_set<uint64_t>& blockedEntityIds, const std::unordered_set<uint64_t>& pausedEntityIds,
+	const std::unordered_set<uint64_t>& deathOwners) {
 	if (!BindPresentationDocument(document)) return;
 	const float elapsed = std::isfinite(deltaTime) ? (std::max)(deltaTime, 0.0f) : 0.0f;
 	for (auto iterator = presentationRuntimes_.begin(); iterator != presentationRuntimes_.end();) {
 		const uint64_t ownerId = iterator->first;
 		PresentationRuntime& runtime = iterator->second;
+		if (!deathOwners.contains(ownerId) && (pausedEntityIds.contains(ownerId) ||
+			std::any_of(runtime.originalPoses.begin(), runtime.originalPoses.end(), [&](const auto& pose) { return pausedEntityIds.contains(pose.entityId); }))) {
+			++iterator; continue;
+		}
 		// invalid時の復元も書込みなので、参照検証より先に所有済みtargetの停止を確認する。
 		if (blockedEntityIds.contains(ownerId) || std::any_of(runtime.originalPoses.begin(), runtime.originalPoses.end(), [&](const auto& pose) {
 			return blockedEntityIds.contains(pose.entityId);
@@ -555,6 +561,7 @@ void ScenePrefabAnimationSystem::DiscardPresentationsForEntities(const std::unor
 }
 
 void ScenePrefabAnimationSystem::Clear(SceneDocument* document) {
+	ClearDeathContinuation();
 	if (document && presentationDocumentGeneration_ != 0 &&
 		presentationDocumentGeneration_ == document->GetContentGeneration()) {
 		for (const auto& entry : presentationRuntimes_) RestorePresentation(*document, entry.second);
@@ -564,4 +571,129 @@ void ScenePrefabAnimationSystem::Clear(SceneDocument* document) {
 	}
 	DiscardPresentations();
 	runtimes_.clear();
+}
+
+void ScenePrefabAnimationSystem::BeginDeathContinuation(const SceneDocument& document,
+	const std::unordered_set<uint64_t>& participants, const std::unordered_set<uint64_t>& attackTargets) {
+	ClearDeathContinuation(); deathParticipants_ = participants;
+	for (const auto& [id, runtime] : runtimes_) {
+		if (!runtime.initialized || !participants.contains(id) || presentationRuntimes_.contains(id)) continue;
+		const auto* entity = document.FindEntity(id);
+		const auto* animator = entity ? SceneEntityQuery::FindEnabledComponent(*entity, "PrefabAnimator") : nullptr;
+		if (!animator || runtime.clipIndex >= animator->prefabAnimationClips.size()) continue;
+		auto clip = animator->prefabAnimationClips[runtime.clipIndex];
+		if (attackTargets.contains(id)) clip.loop = false;
+		for (auto& track : clip.tracks) {
+			const SceneEntity* target = nullptr;
+			if (track.targetEntityId) target = document.FindEntity(track.targetEntityId);
+			else if (track.targetEntityName.empty()) target = entity;
+			else {
+				for (const auto& candidate : document.GetEntities()) if (candidate.name == track.targetEntityName) {
+					if (target) { target = nullptr; break; } target = &candidate;
+				}
+			}
+			track.targetEntityId = target ? target->id : 0;
+			track.targetEntityName.clear();
+		}
+		deathClips_.emplace(id, std::move(clip));
+	}
+}
+void ScenePrefabAnimationSystem::UpdateDeathContinuation(SceneDocument& document, float worldDelta,
+	const std::unordered_set<uint64_t>& blockedEntityIds) {
+	if (!std::isfinite(worldDelta) || worldDelta <= 0.0f) return;
+	std::unordered_set<uint64_t> allowed;
+	for (uint64_t id : deathParticipants_) {
+		const auto* entity = document.FindEntity(id);
+		if (entity && !blockedEntityIds.contains(id) && SceneEntityQuery::IsEntityActiveInHierarchy(document, *entity)) allowed.insert(id);
+	}
+	for (const auto& [id, clip] : deathClips_) {
+		auto found = runtimes_.find(id);
+		if (!allowed.contains(id) || found == runtimes_.end() || presentationRuntimes_.contains(id)) continue;
+		auto& runtime = found->second;
+		if (!runtime.playing && runtime.transitionPoses.empty()) continue;
+		const float safeDeltaTime = (std::max)(worldDelta, 0.0f);
+		if (runtime.playing) {
+			runtime.time += safeDeltaTime;
+		}
+		const float duration = (std::max)(clip.duration, 0.001f);
+		if (runtime.playing && clip.loop) {
+			runtime.time = std::fmod(runtime.time, duration);
+		} else if (runtime.playing && runtime.time >= duration) {
+			runtime.time = duration;
+			runtime.playing = false;
+		}
+
+		ScenePrefabAnimationEvaluator::ApplyDeathContinuationClip(
+			document,
+			id,
+			clip,
+			runtime.time, allowed
+		);
+
+		if (!runtime.transitionPoses.empty()) {
+			runtime.transitionTime += safeDeltaTime;
+			const float transitionAmount = Math::SmoothStep(std::clamp(
+				runtime.transitionTime /
+					(std::max)(runtime.transitionDuration, 0.0001f),
+				0.0f,
+				1.0f
+			));
+			for (const TransitionPose& startPose : runtime.transitionPoses) {
+				SceneEntity* target = document.FindEntity(startPose.entityId);
+				if (!target || !allowed.contains(startPose.entityId)) {
+					continue;
+				}
+				if ((startPose.propertyMask & 0x1u) != 0) {
+					target->transform.translate = LerpVector(
+						startPose.transform.translate,
+						target->transform.translate,
+						transitionAmount
+					);
+				}
+				if ((startPose.propertyMask & 0x2u) != 0) {
+					target->transform.rotate = Slerp(
+						startPose.transform.rotate,
+						target->transform.rotate,
+						transitionAmount
+					);
+				}
+				if ((startPose.propertyMask & 0x4u) != 0) {
+					target->transform.scale = LerpVector(
+						startPose.transform.scale,
+						target->transform.scale,
+						transitionAmount
+					);
+				}
+			}
+			if (transitionAmount >= 1.0f) {
+				runtime.transitionPoses.clear();
+				runtime.transitionTime = 0.0f;
+				runtime.transitionDuration = 0.0f;
+			}
+		}
+	}
+}
+void ScenePrefabAnimationSystem::ClearDeathContinuation() { deathClips_.clear(); deathParticipants_.clear(); }
+
+bool ScenePrefabAnimationSystem::HasPresentationTargetsIn(const std::unordered_set<uint64_t>& ids) const {
+	for (const auto& [owner, runtime] : presentationRuntimes_) {
+		if (ids.contains(owner)) return true;
+		for (const auto& target : runtime.originalPoses) if (ids.contains(target.entityId)) return true;
+		for (const auto& target : runtime.clipTargets) if (ids.contains(target.entityId)) return true;
+	}
+	return false;
+}
+
+bool ScenePrefabAnimationSystem::HasTransformTargetsIn(const SceneDocument& document, const std::unordered_set<uint64_t>& ids) const {
+	if (HasPresentationTargetsIn(ids)) return true;
+	for (const auto& entity : document.GetEntities()) {
+		const auto* animator = SceneEntityQuery::FindEnabledComponent(entity, "PrefabAnimator");
+		if (!animator) continue;
+		for (const auto& clip : animator->prefabAnimationClips) for (const auto& track : clip.tracks) {
+			if (!TransformPropertyMask(track.property)) continue;
+			const auto* target = ResolvePresentationTarget(document, entity.id, track);
+			if (target && ids.contains(target->id)) return true;
+		}
+	}
+	return false;
 }

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
+#include <utility>
 
 namespace {
 	SceneComponent* FindHitBox(SceneEntity& entity) {
@@ -31,7 +32,7 @@ bool SceneAttackRunnerSystem::Start(
 	uint64_t attackSetEntityId,
 	const std::string& attackName
 ) {
-	if (ownerEntityId == 0 || attackSetEntityId == 0 || attackName.empty()) {
+	if (deathContinuation_ || ownerEntityId == 0 || attackSetEntityId == 0 || attackName.empty()) {
 		return false;
 	}
 	SceneEntity* attackSetEntity = document.FindEntity(attackSetEntityId);
@@ -397,11 +398,14 @@ void SceneAttackRunnerSystem::ApplyMotion(
 		if (
 			binding == bindings.end() ||
 			!binding->entity ||
-			!binding->object ||
-			!binding->body
+			!binding->object
 		) {
 			continue;
 		}
+		// Playerは表示側bindingと別のBodyをPhysicsへ登録する。同じ実体へ水平移動を渡す。
+		auto* motionBody = player && binding->object == player->GetObject()
+			? &player->GetPhysicsBody() : binding->body;
+		if (!motionBody) continue;
 		if (!runtime.axesCaptured) {
 			ResolvePlanarAxes(&*binding, runtime.forward, runtime.right);
 			runtime.startForward = runtime.forward;
@@ -455,20 +459,7 @@ void SceneAttackRunnerSystem::ApplyMotion(
 				0.0f
 			});
 		}
-		const float activeDuration = (std::max)(runtime.definition.activeTime, 0.0001f);
-		const float rawProgress = (runtime.time - runtime.definition.windup) / activeDuration;
-		float progress = std::clamp(rawProgress, 0.0f, 1.0f);
-		if (runtime.definition.motionEasing == "EaseOut") {
-			progress = Math::EaseOutCubic(progress);
-		} else if (runtime.definition.motionEasing == "EaseIn") {
-			progress = progress * progress * progress;
-		} else if (runtime.definition.motionEasing == "EaseInOut") {
-			progress = progress < 0.5f
-				? 4.0f * progress * progress * progress
-				: 1.0f - std::pow(-2.0f * progress + 2.0f, 3.0f) * 0.5f;
-		} else if (runtime.definition.motionEasing != "Linear") {
-			progress = Math::SmoothStep(progress);
-		}
+		const float progress = MotionProgress(runtime);
 		const float motionDelta = progress - runtime.appliedMotionProgress;
 		runtime.appliedMotionProgress = progress;
 		if (std::abs(motionDelta) <= 0.000001f) {
@@ -478,8 +469,8 @@ void SceneAttackRunnerSystem::ApplyMotion(
 			Math::Multiply(runtime.forward, runtime.definition.forwardDistance * motionDelta),
 			Math::Multiply(runtime.right, runtime.definition.sideDistance * motionDelta)
 		);
-		binding->body->velocity.x = displacement.x / deltaTime;
-		binding->body->velocity.z = displacement.z / deltaTime;
+		motionBody->velocity.x = displacement.x / deltaTime;
+		motionBody->velocity.z = displacement.z / deltaTime;
 	}
 }
 
@@ -517,6 +508,7 @@ void SceneAttackRunnerSystem::Stop(SceneDocument& document, uint64_t ownerEntity
 	if (found == runtimes_.end()) {
 		return;
 	}
+	deathAnimationTargets_.erase(found->second.animationTargetEntityId);
 	DeactivateActiveWindows(document, found->second);
 	runtimes_.erase(found);
 }
@@ -526,6 +518,7 @@ void SceneAttackRunnerSystem::ResetEntity(SceneDocument& document, uint64_t enti
 }
 
 void SceneAttackRunnerSystem::Clear(SceneDocument* document) {
+	ClearDeathContinuation();
 	if (document) {
 		for (auto& [ownerEntityId, runtime] : runtimes_) {
 			DeactivateActiveWindows(*document, runtime);
@@ -534,4 +527,130 @@ void SceneAttackRunnerSystem::Clear(SceneDocument* document) {
 	runtimes_.clear();
 	effectRequests_.clear();
 	nextAttackExecutionId_ = 1;
+}
+
+float SceneAttackRunnerSystem::MotionProgress(const Runtime& runtime) {
+	const float activeDuration = (std::max)(runtime.definition.activeTime, 0.0001f);
+	const float rawProgress = (runtime.time - runtime.definition.windup) / activeDuration;
+	float progress = std::clamp(rawProgress, 0.0f, 1.0f);
+	if (runtime.definition.motionEasing == "EaseOut") {
+		progress = Math::EaseOutCubic(progress);
+	} else if (runtime.definition.motionEasing == "EaseIn") {
+		progress = progress * progress * progress;
+	} else if (runtime.definition.motionEasing == "EaseInOut") {
+		progress = progress < 0.5f
+		? 4.0f * progress * progress * progress
+		: 1.0f - std::pow(-2.0f * progress + 2.0f, 3.0f) * 0.5f;
+	} else if (runtime.definition.motionEasing != "Linear") {
+		progress = Math::SmoothStep(progress);
+	}
+	return progress;
+}
+
+void SceneAttackRunnerSystem::BeginDeathContinuation(SceneDocument& document,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, const std::unordered_set<uint64_t>& participants) {
+	ClearDeathContinuation();
+	deathContinuation_ = true;
+	effectRequests_.clear();
+	for (auto& [id, runtime] : runtimes_) {
+		DeactivateActiveWindows(document, runtime);
+		runtime.loopRequested = false;
+		if (!runtime.started || runtime.finished || !participants.contains(id)) continue;
+		runtime.deathContinuing = true;
+		const auto binding = std::find_if(bindings.begin(), bindings.end(), [id](const auto& b) { return b.entityId == id; });
+		if (!runtime.axesCaptured && binding != bindings.end()) {
+			ResolvePlanarAxes(&*binding, runtime.forward, runtime.right);
+			runtime.startForward = runtime.forward; runtime.axesCaptured = true;
+		}
+		if (runtime.animationStarted && participants.contains(runtime.animationTargetEntityId))
+			deathAnimationTargets_.insert(runtime.animationTargetEntityId);
+	}
+}
+
+void SceneAttackRunnerSystem::AdvanceDeathContinuation(SceneDocument& document, float worldDelta) {
+	deathEffectRequests_.clear(); // Frame越しに未接続の要求を蓄積しない。
+	if (!deathContinuation_ || !std::isfinite(worldDelta) || worldDelta <= 0.0f) return;
+	for (auto& [id, runtime] : runtimes_) {
+		if (!runtime.deathContinuing || runtime.finished) continue;
+		const auto* owner = document.FindEntity(id);
+		if (!owner || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *owner)) {
+			runtime.deathContinuing = false; continue;
+		}
+		runtime.previousTime = runtime.time;
+		runtime.time = (std::min)(runtime.time + worldDelta, GetDuration(runtime.definition));
+		for (const SceneAttackEffectEvent& effect : runtime.definition.effectEvents) {
+			const bool crossedEffectTime = effect.time <= 0.0f
+				? runtime.previousTime <= 0.0f && runtime.time > 0.0f
+				: runtime.previousTime < effect.time && effect.time <= runtime.time;
+			if (
+				!crossedEffectTime ||
+				(effect.particleEffectPath.empty() && effect.groundEffectType == "None" && effect.groundPrefabPath.empty())
+			) {
+				continue;
+			}
+			SceneEntity* spawnEntity = ResolveEntity(
+				document, effect.spawnEntityId, effect.spawnEntityName
+			);
+			deathEffectRequests_.push_back({
+				id,
+				spawnEntity ? spawnEntity->id : runtime.attackSetEntityId,
+				effect.particleEffectPath,
+				effect.localOffset,
+				std::string{},
+				effect.groundProbeDistance,
+				effect.groundPrefabLifetime,
+				effect.groundEffectType,
+				effect.groundCrackRadius,
+				effect.groundCrackPrimaryBranchCount,
+				effect.groundCrackSegmentsPerBranch,
+				effect.groundCrackBranchProbability,
+				effect.groundCrackWidth,
+				effect.groundCrackLifetime,
+				effect.groundCrackSurfaceOffset
+			});
+		}
+		runtime.deathEndPending = runtime.time >= GetDuration(runtime.definition);
+	}
+}
+
+std::vector<uint64_t> SceneAttackRunnerSystem::ApplyDeathContinuationMotion(SceneDocument& document,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta) {
+	std::vector<uint64_t> ended;
+	if (!deathContinuation_ || !std::isfinite(worldDelta) || worldDelta <= 0.0f) return ended;
+	for (auto& [id, runtime] : runtimes_) {
+		if (!runtime.deathContinuing || runtime.finished) continue;
+		const auto found = std::find_if(bindings.begin(), bindings.end(), [id](const auto& b) { return b.entityId == id; });
+		if (found == bindings.end() || !found->body || !found->object || !found->entity ||
+			!SceneEntityQuery::IsEntityActiveInHierarchy(document, *found->entity)) continue;
+		// 設定済み回転は継続するが、入力/対象への向き直しは行わない。
+		if (runtime.definition.facingMode == "RotateByAngle") {
+			const float duration = (std::max)(GetDuration(runtime.definition), 0.0001f);
+			const float angle = runtime.definition.facingRotateAngle * std::clamp(runtime.time / duration, 0.0f, 1.0f);
+			runtime.forward = {runtime.startForward.x * std::cos(angle) + runtime.startForward.z * std::sin(angle), 0.0f,
+				-runtime.startForward.x * std::sin(angle) + runtime.startForward.z * std::cos(angle)};
+			runtime.right = {runtime.forward.z, 0.0f, -runtime.forward.x};
+			found->object->SetRotate({0.0f, std::atan2(runtime.forward.x, runtime.forward.z), 0.0f});
+		}
+		const float progress = MotionProgress(runtime);
+		const float amount = progress - runtime.appliedMotionProgress;
+		const Vector3 displacement = Math::Add(Math::Multiply(runtime.forward, runtime.definition.forwardDistance * amount),
+			Math::Multiply(runtime.right, runtime.definition.sideDistance * amount));
+		const float vx = displacement.x / worldDelta, vz = displacement.z / worldDelta;
+		// 不正な設定/極小stepから非有限速度をPhysicsへ渡さない。
+		found->body->velocity.x = std::isfinite(vx) ? vx : 0.0f;
+		found->body->velocity.z = std::isfinite(vz) ? vz : 0.0f;
+		runtime.appliedMotionProgress = progress;
+		if (runtime.deathEndPending) {
+			runtime.finished = true; ended.push_back(id);
+		}
+	}
+	return ended;
+}
+
+std::vector<SceneAttackEffectRequest> SceneAttackRunnerSystem::ConsumeDeathEffectRequests() {
+	auto result = std::move(deathEffectRequests_); deathEffectRequests_.clear(); return result;
+}
+void SceneAttackRunnerSystem::ClearDeathContinuation() {
+	deathContinuation_ = false; deathAnimationTargets_.clear(); deathEffectRequests_.clear();
+	for (auto& [id, runtime] : runtimes_) { runtime.deathContinuing = false; runtime.deathEndPending = false; }
 }

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include "../engine/scene/SceneReplayPresentation.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -39,6 +40,7 @@ public:
 	bool Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
 	// Documentはこの呼出し中だけ借用する。既存描画SystemのPreview専用資源へ同期し、
 	// UIは制作座標で描く。Event/Simulation/演出時計を進めず、原本へ書き戻さない。
+    // replayFramingもこの呼出し中だけ借用。成功結果だけ表示Cameraへ適用し、編集orbitは保持。
 	void Render(
 		const std::string& assetPath,
 		const SceneDocument& document,
@@ -49,8 +51,14 @@ public:
 		float pitch,
 		float zoom,
 		uint64_t framingSerial,
-		const OverlayOptions& overlayOptions
+		const OverlayOptions& overlayOptions,
+        const SceneReplayFramingRequest* replayFraming = nullptr
 	);
+    // 直近Renderの構図計算結果。GPU/Document参照を返さない。
+    bool GetReplayFramingResult(Camera& camera, SceneReplayViewSettings& manual) const {
+        if (!replayFramingValid_) return false;
+        camera=replayFramingCamera_; manual=replayFramingManual_; return true;
+    }
 	void Finalize();
 
 	D3D12_GPU_DESCRIPTOR_HANDLE GetTexture() const;
@@ -65,6 +73,10 @@ private:
 		std::string modelPath;
 	};
 
+    bool TryGetReplayFraming(const SceneDocument&, uint64_t owner, SceneReplayFramingBasis&) const;
+    bool replayFramingValid_=false;
+    Camera replayFramingCamera_;
+    SceneReplayViewSettings replayFramingManual_;
 	void SyncModels(const SceneDocument& document);
 	void SyncGhostModels(const SceneDocument* document);
 	void UpdateFraming(

@@ -157,6 +157,17 @@ void SceneEnvironmentSystem::Sync(
 	}
 }
 
+bool SceneEnvironmentSystem::TryGetWaterTime(const SceneDocument& document, float& out) const {
+	if (!waterSurfaceRenderer_) return false;
+	for (const auto& entity : document.GetEntities()) {
+		const auto* water = SceneEntityQuery::FindEnabledComponent(entity, "WaterVolume");
+		if (water && water->waterSurfaceEnabled && SceneEntityQuery::IsEntityActiveInHierarchy(document, entity)) {
+			out = waterSurfaceRenderer_->GetTime(); return true;
+		}
+	}
+	return false;
+}
+
 void SceneEnvironmentSystem::Update(float deltaTime) {
 	if (waterSurfaceRenderer_) {
 		waterSurfaceRenderer_->Update(deltaTime);
@@ -263,4 +274,26 @@ void SceneEnvironmentSystem::Finalize() {
 	environmentSourcePath_.clear();
 	environmentMapPath_.clear();
 	reflectionIntensity_ = 0.3f;
+}
+
+SceneEnvironmentSystem::ReplaySnapshot SceneEnvironmentSystem::CaptureReplayEnvironment(const SceneDocument& document) const {
+    ReplaySnapshot result;
+    if (skybox_) { result.skyboxKey = skybox_->GetTextureKey(); result.skyboxColor = skybox_->GetColor(); }
+    if (!waterSurfaceRenderer_) return result;
+    for (const auto& entity : document.GetEntities()) {
+        const auto* water = SceneEntityQuery::FindEnabledComponent(entity, "WaterVolume");
+        if (!water || !water->waterSurfaceEnabled || !SceneEntityQuery::IsEntityActiveInHierarchy(document, entity)) continue;
+        const auto transform = SceneTransformResolver::ResolveScene3DTransform(document, entity);
+        ReplayWater value;
+        value.center = {transform.translate.x+water->waterOffset.x, transform.translate.y+water->waterOffset.y, transform.translate.z+water->waterOffset.z};
+        value.halfSize = {(std::max)(water->waterHalfSize.x,0.05f), (std::max)(water->waterHalfSize.y,0.05f), (std::max)(water->waterHalfSize.z,0.05f)};
+        value.settings.baseColor = water->waterSurfaceBaseColor;
+        value.settings.highlightColor = water->waterSurfaceHighlightColor;
+        value.settings.alpha = water->waterSurfaceAlpha;
+        value.settings.waveScale = water->waterSurfaceWaveScale;
+        value.settings.normalStrength = water->waterSurfaceNormalStrength;
+        value.settings.fresnelPower = water->waterSurfaceFresnelPower;
+        result.waters.push_back(value);
+    }
+    return result;
 }

@@ -1,5 +1,6 @@
 // 役割: エディタとゲーム実行を統合し、フレーム更新と描画順序を管理する。
 #pragma once
+#include "../engine/scene/SceneReplayPresentation.h"
 #include "../engine/base/Framework.h"
 #include "../engine/base/BloomRenderer.h"
 #include "../engine/scene/SceneDocument.h"
@@ -44,6 +45,7 @@ public:
 	void Draw() override;
 
 private:
+	uint64_t replayDrawSerial_ = 0; // Game Drawごとの採取通知。Viewごとには発行しない。
 	struct PresentedTransitionState;
 	std::unique_ptr<PresentedTransitionState> presentedTransition_;
 	// 資源交換/取消は前Frameの全利用完了後。Drawは借用Displayへcommandを記録するだけ。
@@ -91,10 +93,18 @@ private:
 	ScenePostProcessSettings CapturePostProcessSettings() const;
 	void ApplyPostProcessSettings(const ScenePostProcessSettings& settings);
 	void ApplyRuntimePostProcessSettings();
+	// Scene更新後だけ累積秒の差分を消費。Drawは確定位相の読取のみ。
+	void UpdateViewEffectClock();
+	float GetGameViewEffectTime() const;
 	std::string GetActivePostProcessSourceKey() const;
 	void StorePostProcessSettingsToDocument();
 	void InvalidateMotionBlurHistory();
-	WaterPostEffectState ResolveWaterPostEffectState(const Camera* camera) const;
+	WaterPostEffectState ResolveWaterPostEffectState(const Camera* camera, const std::vector<WaterPostEffectState>* frozen = nullptr) const;
+    std::vector<WaterPostEffectState> CaptureWaterPostEffectStates(bool activeOnly) const;
+    std::vector<WaterPostEffectState> replayWaterStates_;
+    SceneReplayPresentationToken lastReplayToken_{};
+    bool replayWasActive_ = false, replayWasFinished_ = false;
+    Camera replayEditorCamera_;
 	void DrawModelPreview();
 	void DrawPrefabPreview();
 	// Ghost GPU資源は前Frame Fence完了後のUpdateとFinalizeだけで作成/破棄する。
@@ -248,6 +258,11 @@ private:
 	int radialBlurSamples_ = 10;
 	bool noiseAnimate_ = true;
 	float noiseTime_ = 0.0f;
+	// Active画面のruntime-only位相。instance/世代変更で破棄し保存しない。
+	bool viewEffectClockBound_ = false, resetViewEffectTimeRequested_ = false;
+	SceneInstanceId viewEffectClockInstance_ = kInvalidSceneInstanceId;
+	uint64_t viewEffectClockGeneration_ = 0;
+	double lastObservedWorldSeconds_ = 0.0, gameEffectTime_ = 0.0;
 	float noiseAmount_ = 0.25f;
 	float noiseScale_ = 1.0f;
 	float noiseSpeed_ = 1.0f;

@@ -22,4 +22,5 @@ struct SceneSpawnUpdateContext {
 	float presentationDeltaTime = 0.0f;
 	bool gameplayAllowed = true;
 	std::vector<uint64_t> preparationSpawnerIds;
+	std::unordered_set<uint64_t> blockedEntityIds;
 };

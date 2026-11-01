@@ -129,7 +129,8 @@ public:
 	);
 
 	// Persistent BGMの選曲とScene遷移中の所有をProcess lifetimeのDirectorへ委譲する。
-	void ResolvePersistentBgm(const PersistentBgmRequest& request);
+	// 要求の同期受付結果。Streamingの実再生開始/完了の保証ではない。
+	bool ResolvePersistentBgm(const PersistentBgmRequest& request);
 	void ResolveNoPersistentBgm(uint64_t sceneOwnerId);
 	void BeginPersistentBgmSceneTransition(uint64_t sceneOwnerId);
 	void ReleasePersistentBgmOwner(uint64_t sceneOwnerId);
@@ -139,6 +140,9 @@ public:
 
 	// BusとSourceのgainを乗算して各Voiceへ反映する。Master以外のBusは個別に調整する。
 	void SetBusVolume(AudioBus bus, float volume);
+	// Main Thread専用。手動Pauseを変更せず、Menuが所有する停止理由だけを置換する。
+	// 新規Voiceにも開始前から適用し、UI Busは常に対象外とする。
+	void SetGamePause(bool paused, bool pauseBgm);
 	void Pause(PlaybackHandle& handle);
 	void Resume(PlaybackHandle& handle);
 	void SetPlaybackFadeGain(const PlaybackHandle& handle, float gain);
@@ -243,6 +247,7 @@ private:
 	void DestroyPlaybackVoice(PlaybackState& playback);
 	float GetEffectiveVolume(const PlaybackState& playback) const;
 	void ApplyVolume(PlaybackState& playback);
+	bool IsGamePauseTarget(const PlaybackState& playback) const;
 
 	static Audio* instance;
 	Microsoft::WRL::ComPtr<IXAudio2> xAudio2_;
@@ -255,6 +260,7 @@ private:
 	std::unique_ptr<AudioDirector> audioDirector_;
 	uint64_t nextPlaybackId_ = 1;
 	float busVolumes_[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+	bool gamePaused_ = false, gamePauseBgm_ = false;
 	std::unordered_map<uint64_t, std::unique_ptr<PlaybackState>> playbacks_;
 	std::vector<std::unique_ptr<PlaybackState>> retiringPlaybacks_;
 	std::unordered_map<std::string, std::weak_ptr<const AudioClip>> clipCache_;

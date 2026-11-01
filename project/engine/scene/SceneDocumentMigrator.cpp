@@ -144,6 +144,9 @@ bool SceneDocumentMigrator::MigrateLegacyDocument(
 					{ "enabled", true }
 				};
 			}
+			// 旧Enemyは明示切替まで従来動作。新方式の設定値を制作データへ自動投入しない。
+			if (component.is_object() && component.value("type", std::string{}) == "EnemyBehavior" &&
+				!component.contains("movementMode")) component["movementMode"] = "Legacy";
 		}
 	}
 	errorMessage.clear();

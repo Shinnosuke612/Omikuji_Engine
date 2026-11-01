@@ -24,6 +24,10 @@ private:
 
 public:
 	void Initialize(Object3dCommon* object3dCommon, const std::string& textureFilePath);
+    // 新規instance専用。cacheだけを参照し、全buffer/Map成功後に公開する。
+    bool TryInitializeReplay(Object3dCommon* common, const std::string& textureKey);
+    const std::string& GetTextureKey() const { return textureFilePath_; }
+    Vector4 GetColor() const { return materialData_ ? materialData_->color : Vector4{}; }
 	void Update();
 	void Draw();
 

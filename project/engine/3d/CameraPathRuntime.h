@@ -36,6 +36,9 @@ public:
 	}
 
 	void Update(float deltaTime, Camera& camera);
+	// 開始済み経路だけを縮小秒で進め、段階越えの余り時間と終端姿勢を反映する。
+	// 不正/非正deltaは状態不変。通常のFinished通知は生成しない。
+	void UpdateDeathContinuation(float worldDelta, Camera& camera);
 
 	const std::vector<PointSample>& GetPoints() const { return points_; }
 	const Transform& GetCurrentTransform() const { return currentTransform_; }

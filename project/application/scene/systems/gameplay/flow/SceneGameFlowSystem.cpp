@@ -60,7 +60,7 @@ void SceneGameFlowSystem::Fail(ScenePreparationDiagnosticCode code, const std::s
 		diagnostic_ = {code, documentGeneration_, directorEntityId_, ++diagnosticSerial_, detail};
 }
 
-SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEnemySpawnerSystem& spawnerSystem, float deltaTime) {
+SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEnemySpawnerSystem& spawnerSystem, float deltaTime, bool finalize) {
 	if (documentGeneration_ != 0 && documentGeneration_ != document.GetContentGeneration()) Clear();
 	documentGeneration_ = document.GetContentGeneration();
 	SceneGameFlowResult result;
@@ -109,9 +109,9 @@ SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEn
 		}
 	}
 	// 新状態へ入ったFrameは時刻0を表示し、長いdeltaを次状態へ繰り越さない。
-	if (!enteredState) stateElapsedSeconds_ = static_cast<float>((std::min)(
+	if (!finalize && !enteredState) stateElapsedSeconds_ = static_cast<float>((std::min)(
 		static_cast<double>(stateElapsedSeconds_) + elapsed, static_cast<double>((std::numeric_limits<float>::max)())));
-	if (timerRunning_) elapsedSeconds_ += elapsed;
+	if (!finalize && timerRunning_) elapsedSeconds_ += elapsed;
 
 	// 待機中の世代/個体破損はCountdown中も検知する。準備済みを再生成で補わない。
 	if (preparedFirstWave_ && phaseIndex_ == 0 && (state_ == SceneGameFlowState::PreparingFirstWave ||
@@ -160,7 +160,11 @@ SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEn
 		stateElapsedSeconds_ = 0.0f;
 		timerRunning_ = true;
 		EnterPhase(document, *director, result);
-	} else if (state_ == SceneGameFlowState::PhaseActive) {
+		if (!finalize && state_ == SceneGameFlowState::PhaseActive) {
+			result.startedDirectorEntityId = directorEntityId_;
+			result.startedDocumentGeneration = documentGeneration_;
+		}
+	} else if (finalize && state_ == SceneGameFlowState::PhaseActive) {
 		bool complete = !activeWaveGenerations_.empty();
 		for (size_t index = 0; index < activeWaveGenerations_.size(); ++index) {
 			const auto status = spawnerSystem.GetFiniteWaveStatus(activeSpawnerIds_[index]);
@@ -176,11 +180,11 @@ SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEn
 			if (phaseIndex_ >= static_cast<int>(director->gameFlowPhases.size())) { state_ = SceneGameFlowState::ResultDelay; timerRunning_ = false; }
 			else state_ = SceneGameFlowState::PhaseGap;
 		}
-	} else if (state_ == SceneGameFlowState::PhaseGap && stateElapsedSeconds_ >= director->gameFlowInterPhaseDelaySeconds) {
+	} else if (finalize && state_ == SceneGameFlowState::PhaseGap && stateElapsedSeconds_ >= director->gameFlowInterPhaseDelaySeconds) {
 		state_ = SceneGameFlowState::PhaseActive;
 		stateElapsedSeconds_ = 0.0f;
 		EnterPhase(document, *director, result);
-	} else if (state_ == SceneGameFlowState::ResultDelay && stateElapsedSeconds_ >= director->gameFlowResultRevealDelaySeconds) {
+	} else if (finalize && state_ == SceneGameFlowState::ResultDelay && stateElapsedSeconds_ >= director->gameFlowResultRevealDelaySeconds) {
 		state_ = SceneGameFlowState::Result;
 		result.entityRequests.push_back({director->gameFlowResultRootEntityId, true});
 		result.motionRequests.push_back({director->gameFlowResultTimeTextEntityId, director->gameFlowResultMotionClipId});

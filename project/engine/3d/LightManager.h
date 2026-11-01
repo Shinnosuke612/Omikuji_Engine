@@ -74,6 +74,8 @@ public:
 
 public:
 	void Initialize(DirectXCommon* dxCommon, const std::string& jsonPath = "");
+    // 新規instance専用。Scene/JSONを読み込まず固定したlight値をコピーする。
+    bool TryInitializeReplay(DirectXCommon* dx, const LightManager& source);
 	void Reset();
 
 	void Bind(ID3D12GraphicsCommandList* commandList, UINT rootParameterIndex);

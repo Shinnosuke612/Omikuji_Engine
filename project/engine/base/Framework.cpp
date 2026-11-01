@@ -122,9 +122,7 @@ void Framework::Update() {
 			winApp_->GetClientHeight()
 		);
 	}
-#if defined(_DEBUG) || defined(DEVELOPMENT)
-	imguiManager_->BeginFrame();
-#endif
+	// EditorのFrame開始は、GameがPlay/Stop/Pauseの入力を確定した後に行う。
 }
 void Framework::Finalize() {
 	delete sceneFactory_;

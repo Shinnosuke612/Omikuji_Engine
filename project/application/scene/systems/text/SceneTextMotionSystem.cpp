@@ -178,9 +178,10 @@ void SceneTextMotionSystem::Reset(uint64_t entityId) {
 
 void SceneTextMotionSystem::Update(
 	const SceneDocument& document,
-	float deltaTime
+	float deltaTime,
+	const std::vector<uint64_t>* onlyEntityIds, bool deferCompletions
 ) {
-	completions_.clear();
+	if (!onlyEntityIds || !deferCompletions) completions_ = std::exchange(pausedCompletions_, {});
 	const float elapsedDelta = (std::max)(deltaTime, 0.0f);
 	std::unordered_set<uint64_t> requiredEntityIds;
 	for (const SceneEntity& entity : document.GetEntities()) {
@@ -193,6 +194,7 @@ void SceneTextMotionSystem::Update(
 			continue;
 		}
 		requiredEntityIds.insert(entity.id);
+		if (onlyEntityIds && std::find(onlyEntityIds->begin(), onlyEntityIds->end(), entity.id) == onlyEntityIds->end()) continue;
 		const auto runtimeIt = runtimes_.find(entity.id);
 		if (runtimeIt == runtimes_.end()) {
 			continue;
@@ -219,7 +221,8 @@ void SceneTextMotionSystem::Update(
 			runtime.elapsedSeconds
 		);
 		if (previousElapsed < duration && runtime.elapsedSeconds >= duration) {
-			completions_.push_back({
+			auto& completions = (onlyEntityIds && deferCompletions) ? pausedCompletions_ : completions_;
+			completions.push_back({
 				entity.id,
 				runtime.clipId,
 				runtime.generation
@@ -251,4 +254,5 @@ void SceneTextMotionSystem::Clear() {
 	runtimes_.clear();
 	presentationOverrides_.clear();
 	completions_.clear();
+	pausedCompletions_.clear();
 }

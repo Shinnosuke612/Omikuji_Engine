@@ -1,4 +1,4 @@
-// 役割: Agent個体とチームのRuntime状態を保持し、群れの移動を更新する。
+// 役割: Agentの群れ移動と、Enemyから受けた地上位置取り要求の速度計算を行う。
 #pragma once
 
 #include <cstdint>
@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../../../SceneRuntimeObjectBinding.h"
+#include "SceneEnemySystem.h"
 #include "../../../../../engine/math/Vector3.h"
 
 class SceneDocument;
@@ -15,11 +16,17 @@ class SceneDocument;
 // SceneDocumentとObjectは所有せず、bindingsを通して同じフレームのTransformを更新する。
 class SceneAgentSystem {
 public:
+	// 位置取り要求がある個体は従来Agent処理から除く。結果のBody速度反映はXZだけ。
+	// requestsは同Frameの借用値。追加要求なしの呼出しは従来経路を維持する。
 	void Update(
 		SceneDocument& document,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
-		float deltaTime
+		float deltaTime,
+		const std::vector<SceneEnemyPositioningRequest>& positioningRequests = {},
+		const SceneMovementProbeSnapshot* snapshot = nullptr // 同Frameだけ借用。仮候補は値形状へ適用。
 	);
+	// 同Frameの結果だけを返す。要求元Enemyが個体状態を所有する。
+	const std::vector<SceneEnemyPositioningResult>& PositioningResults() const { return positioningResults_; }
 	void Clear();
 
 private:
@@ -66,4 +73,5 @@ private:
 
 	std::unordered_map<uint64_t, AgentRuntime> agentRuntimes_;
 	std::unordered_map<std::string, TeamRuntime> teamRuntimes_;
+	std::vector<SceneEnemyPositioningResult> positioningResults_;
 };

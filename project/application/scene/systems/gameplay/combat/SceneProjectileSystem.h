@@ -18,6 +18,9 @@ public:
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
 		float deltaTime
 	);
+	// 初期化済みの弾だけを更新。戻り値のIDはこのstepのPhysics積分から除外する。
+	std::vector<uint64_t> UpdateDeathContinuation(SceneDocument& document,
+		const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta);
 	void FlushRemovals(SceneDocument& document);
 	void Clear();
 

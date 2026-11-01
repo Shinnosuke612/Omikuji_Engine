@@ -28,11 +28,11 @@ namespace {
 		EditorComponentTag::Prefab
 	}};
 
-	constexpr std::array<EditorComponentDefinition, 44> kDefinitions = {{
+	constexpr std::array<EditorComponentDefinition, 48> kDefinitions = {{
 		{
 			"GameFlowDirector", "ゲーム進行", "Game Flow Director",
-			"開始案内、敵出現待ち、カウントダウン、Phaseとクリア時間を設定します。",
-			"Configures briefing, enemy preparation, countdown, phases and clear time.",
+			"開始案内、敵出現待ち、カウントダウン、Phaseとクリア時間を設定します。初回戦闘開始をEventへ通知します。",
+			"Configures briefing, enemy preparation, countdown, phases and clear time. Emits the initial battle start event.",
 			EditorComponentCategory::EventAndFlow,
 			SceneContext, 43, -1, "",
 			EditorComponentTagBit(EditorComponentTag::Event) | EditorComponentTagBit(EditorComponentTag::Spawn)
@@ -238,11 +238,37 @@ namespace {
 			EditorComponentTagBit(EditorComponentTag::Prefab)
 		},
 		{
+			"DeathReplay", "死亡後のスロー", "Death Slow Motion",
+			"死亡後のスロー、3視点リプレイ、最後の画面保持を設定します。完了はUI Eventでメニューへ接続できます。", "Configures death slow motion, three-view replay and final-frame hold. A UI completion event can open a menu.",
+			EditorComponentCategory::Gameplay, SceneAndPrefabContext, 47, 47, "",
+			EditorComponentTagBit(EditorComponentTag::Combat)
+		},
+		{
+			"DeathResponse", "死亡時の対応", "Death Response",
+			"Healthの死亡確定・停止範囲・演出開始を設定します。", "Configures death, participation stop and presentation start.",
+			EditorComponentCategory::Gameplay, SceneAndPrefabContext, 46, 46, "",
+			EditorComponentTagBit(EditorComponentTag::Combat)
+		},
+		{
+			"StatTextDisplay", "能力値表示", "Stat Text Display",
+			"StatSetの現在値を同じEntityの文字に表示します。", "Displays a StatSet value using this Entity's text.",
+			EditorComponentCategory::Gameplay, SceneAndPrefabContext, 48, 48, "",
+			EditorComponentTagBit(EditorComponentTag::UI)
+		},
+		{
+			"Health", "被弾・無敵", "Health",
+			"StatSetのHPへの被弾受付と、攻撃者共通の無敵時間を設定します。",
+			"Configures HP damage acceptance and invulnerability shared across attackers.",
+			EditorComponentCategory::Gameplay,
+			SceneAndPrefabContext, 44, 44, "",
+			EditorComponentTagBit(EditorComponentTag::Combat)
+		},
+		{
 			"StatSet", "能力値", "Stat Set",
 			"HPやPoiseなどの値と範囲を定義します。",
 			"Defines values and ranges such as HP and poise.",
 			EditorComponentCategory::Gameplay,
-			SceneContext, 20, -1, "",
+			SceneAndPrefabContext, 20, 45, "",
 			EditorComponentTagBit(EditorComponentTag::Combat)
 		},
 		{
@@ -265,8 +291,8 @@ namespace {
 		},
 		{
 			"MenuPanel", "メニュー画面", "Menu Panel",
-			"標準構成では同じEntityにUICanvasを用意し、制作サイズ・選択肢・標準キー操作をまとめて設定します。",
-			"Standard menus add UICanvas on the same entity and combine reference size, items, and keyboard controls.",
+			"標準構成では制作サイズ・選択肢・標準キー操作を設定し、表示開始条件から死亡リプレイ完了にも接続できます。",
+			"Standard menus combine reference size, items and keyboard controls. Open Conditions can connect death replay completion.",
 			EditorComponentCategory::EventAndFlow,
 			SceneAndPrefabContext, 38, 13, "",
 			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::Event)
@@ -381,10 +407,10 @@ namespace {
 		},
 		{
 			"EnemyBehavior", "敵の基本行動", "Enemy Behavior",
-			"追跡、攻撃、停止など敵の行動段階を制御します。",
-			"Controls enemy pursuit, attack, and stop phases.",
+			"対象の探し方、位置取り・個体差・体当たり、任意の姿勢演出と中断条件を設定します。",
+			"Configures target selection, positioning, variation, charge attacks, optional poses and interruption conditions.",
 			EditorComponentCategory::Gameplay,
-			SceneContext, 31, -1, "",
+			SceneAndPrefabContext, 31, 31, "",
 			EditorComponentTagBit(EditorComponentTag::Combat) |
 			EditorComponentTagBit(EditorComponentTag::Enemy)
 		},

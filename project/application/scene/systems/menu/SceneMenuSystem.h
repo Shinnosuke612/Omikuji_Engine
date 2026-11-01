@@ -1,7 +1,8 @@
-// 役割: Menuの開閉stack・選択・決定通知と描画snapshotを所有する。
+// 役割: Menuの開閉stack・選択・決定通知と、Menuに対応するゲーム停止理由を所有する。
 #pragma once
 #include "../../../../engine/scene/SceneMenuRuntime.h"
 class SceneDocument;
+struct SceneComponent;
 
 // RuntimeScene所有。入力/描画/Document変更を行わず、IDだけを保持する。
 class SceneMenuSystem {
@@ -14,6 +15,10 @@ public:
 	bool Apply(const SceneDocument& document, const SceneMenuCommand& command);
 	bool IsSourceValid(const SceneDocument& document, const SceneMenuSource& source) const;
 	SceneMenuSource GetSource() const;
+	// 背後のPanelもOpen serialで参照し、確認画面を開いてもPause rootを保持する。
+	SceneMenuSource GetOpenSource(uint64_t panelId) const;
+	// 失効/互換Resume専用。指定rootと上の確認画面をまとめて除去する。
+	void RemoveBranch(const SceneDocument& document, uint64_t panelId);
 	// 通知は一回消費。Cancel(Close)は通知評価後に同じtopだけを閉じる。
 	std::vector<SceneMenuPulse> ConsumePulses();
 	void CompleteCancel(const SceneDocument& document, const SceneMenuPulse& pulse);
@@ -40,4 +45,20 @@ private:
 	std::vector<uint64_t> order_;
 	std::vector<uint64_t> eligible_;
 	bool initialRejected_ = false;
+};
+
+// Menu用停止理由だけを所有する。Entity/ComponentのpointerやAuthoring値は保持しない。
+// 同じファイルに実装を置き、既存のビルド登録を利用する。
+class SceneGamePauseSystem {
+public:
+	// nullは通常Menu、error非空は不正構成。既存外部GamePause参照も共通解決する。
+	static const SceneComponent* FindSettings(const SceneDocument& document, uint64_t panelId, std::string& error);
+	// 開いているrootが不正ならそのIDを返す。callerがbranchを除去し診断する。
+	uint64_t Sync(const SceneDocument& document, const SceneMenuSystem& menus, bool supported, std::string& error);
+	bool IsPaused() const { return root_.panelId != 0; }
+	bool PausesBgm() const { return IsPaused() && pauseBgm_; }
+	void Clear() { root_ = {}; pauseBgm_ = false; }
+private:
+	SceneMenuSource root_;
+	bool pauseBgm_ = false;
 };

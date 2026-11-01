@@ -48,6 +48,8 @@ public:
 		SrvManager* srvManager,
 		uint32_t shadowMapSize
 	);
+    // 新規instance専用。失敗したinstanceは描画せず破棄する（descriptorもdestructorで返却）。
+    bool TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, uint32_t size);
 	void Render(const LightManager& lightManager, Object3d* const* objects, uint32_t objectCount);
 	void Bind(ID3D12GraphicsCommandList* commandList, UINT shadowTextureRootIndex, UINT shadowDataRootIndex);
 
@@ -56,7 +58,7 @@ public:
 
 private:
 	bool CreateResources();
-	bool CreateDsv();
+	bool CreateDsv(bool recoverable = false);
 	bool CreateSrv();
 	bool CreateShadowDataResource();
 	void ResetShadowData();

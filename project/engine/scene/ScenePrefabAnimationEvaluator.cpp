@@ -231,3 +231,31 @@ void ScenePrefabAnimationEvaluator::ApplyClip(
 		}
 	}
 }
+
+void ScenePrefabAnimationEvaluator::ApplyDeathContinuationClip(SceneDocument& document, uint64_t ownerEntityId,
+	const ScenePrefabAnimationClip& clip, float time, const std::unordered_set<uint64_t>& allowedTargets) {
+	// 通常Evaluatorのsample式を再利用し、入口で副作用をTRSに限定する。
+	ScenePrefabAnimationClip filtered = clip;
+	filtered.tracks.clear();
+	for (const auto& track : clip.tracks) {
+		if (track.property != "LocalPosition" && track.property != "LocalRotation" && track.property != "LocalScale") continue;
+		if (track.targetEntityId == 0 || !allowedTargets.contains(track.targetEntityId) || !document.FindEntity(track.targetEntityId)) continue;
+		filtered.tracks.push_back(track);
+	}
+	ApplyClip(document, ownerEntityId, filtered, time);
+}
+
+QuaternionTransform ScenePrefabAnimationEvaluator::EvaluateAttackPose(const QuaternionTransform& base,
+	const Quaternion& rotation, const Vector3& pivot, const Vector3& offset) {
+	const Matrix4x4 baseRotation = MakeRotateMatrix(base.rotate);
+	const Matrix4x4 combined = Multiply(MakeRotateMatrix(rotation), baseRotation);
+	auto rotate = [](const Vector3& v, const Matrix4x4& m) -> Vector3 {
+		return {v.x*m.m[0][0]+v.y*m.m[1][0]+v.z*m.m[2][0],
+			v.x*m.m[0][1]+v.y*m.m[1][1]+v.z*m.m[2][1], v.x*m.m[0][2]+v.y*m.m[1][2]+v.z*m.m[2][2]};
+	};
+	QuaternionTransform result = base;
+	result.rotate = Normalize(MakeQuaternionFromRotationMatrix(combined));
+	const Vector3 scaledPivot{pivot.x * base.scale.x, pivot.y * base.scale.y, pivot.z * base.scale.z};
+	result.translate = Math::Add(Math::Add(base.translate, offset), Math::Subtract(rotate(scaledPivot, baseRotation), rotate(scaledPivot, combined)));
+	return result;
+}

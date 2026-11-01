@@ -9,6 +9,7 @@
 #include "../../../../../engine/scene/SceneEntityQuery.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -57,7 +58,8 @@ void SceneHitReactionSystem::Update(
 	SceneStatSystem& statSystem,
 	SceneStateMachineSystem& stateMachineSystem,
 	const std::vector<SceneCombatHitEvent>& events,
-	float deltaTime
+	float deltaTime,
+	const std::vector<SceneHitReactionDecision>& decisions
 ) {
 	// Bodyへの書込みは次FrameのPhysics直前へ分離した。
 	static_cast<void>(bindings);
@@ -90,8 +92,12 @@ void SceneHitReactionSystem::Update(
 	for (size_t eventIndex = 0; eventIndex < events.size(); ++eventIndex) {
 		const SceneCombatHitEvent& event = events[eventIndex];
 		const ReactionKey reactionKey{ event.targetEntityId, event.attackExecutionId };
-		const bool isReactionWinner = event.attackExecutionId == 0 ||
-			reactionWinners.at(reactionKey) == eventIndex;
+		SceneHitReactionDecision decision{event.acceptedHitSerial};
+		for (const auto& candidate : decisions) if (candidate.acceptedHitSerial == event.acceptedHitSerial) { decision = candidate; break; }
+		const bool suppressed = decision.policy == SceneHitReactionPolicy::Suppress;
+		const bool forced = decision.policy == SceneHitReactionPolicy::Interrupt;
+		const bool isReactionWinner = !suppressed && (forced || event.attackExecutionId == 0 ||
+			reactionWinners.at(reactionKey) == eventIndex);
 		SceneEntity* target = document.FindEntity(event.targetEntityId);
 		if (!target || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *target)) {
 			continue;
@@ -102,6 +108,14 @@ void SceneHitReactionSystem::Update(
 			SceneEntityQuery::FindEnabledComponent(*target, "DeathPresentation");
 		const bool hasStateMachine =
 			SceneEntityQuery::FindEnabledComponent(*target, "StateMachine") != nullptr;
+		// custom耐性で反応を抑えても、Poiseの回復時計は一度だけ開始する。
+		if (decision.managePoiseRecovery && reaction && event.poiseValid && event.poiseDamage > 0 &&
+			event.poiseStatId == reaction->hitReactionPoiseStatId &&
+			event.poiseAfter <= event.poiseMinimum && !poiseRecoveries_.contains(target->id)) {
+			const float delay = (std::max)(0.0f, reaction->hitReactionPoiseRecoveryDelay);
+			if (delay > 0) poiseRecoveries_[target->id] = {reaction->hitReactionPoiseStatId, delay};
+			else statSystem.Modify(target->id, reaction->hitReactionPoiseStatId, "RestoreToMax", 0);
+		}
 		if (isReactionWinner && reaction &&
 			(event.knockback > 0.0f || event.verticalKnockback > 0.0f)) {
 			const float amount = event.knockback *
@@ -201,7 +215,7 @@ void SceneHitReactionSystem::Update(
 					reaction->hitReactionMinimumPoiseDamage;
 			}
 			if (
-				shouldReact &&
+				(shouldReact || forced) &&
 				hasStateMachine &&
 				!reaction->hitReactionStateName.empty()
 			) {
@@ -269,6 +283,7 @@ SceneHitReactionSystem::ConsumeDeathEffectRequests() {
 }
 
 void SceneHitReactionSystem::ResetEntity(uint64_t entityId) {
+	deathParticipants_.erase(entityId);
 	pendingDeactivateTimes_.erase(entityId);
 	knockbackRuntimes_.erase(entityId);
 	poiseRecoveries_.erase(entityId);
@@ -284,8 +299,33 @@ void SceneHitReactionSystem::ResetEntity(uint64_t entityId) {
 }
 
 void SceneHitReactionSystem::Clear() {
+	ClearDeathContinuation();
 	pendingDeactivateTimes_.clear();
 	knockbackRuntimes_.clear();
 	poiseRecoveries_.clear();
 	deathEffectRequests_.clear();
 }
+
+void SceneHitReactionSystem::DiscardBlocked(const std::unordered_set<uint64_t>& ids) {
+	for (uint64_t id : ids) ResetEntity(id);
+}
+
+void SceneHitReactionSystem::BeginDeathContinuation(const std::unordered_set<uint64_t>& participants) {
+	deathParticipants_ = participants;
+	std::erase_if(knockbackRuntimes_, [&](const auto& entry) { return !participants.contains(entry.first); });
+}
+std::vector<uint64_t> SceneHitReactionSystem::ApplyDeathContinuationMotion(const SceneDocument& document,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta) {
+	std::vector<uint64_t> before, ended;
+	if (!std::isfinite(worldDelta) || worldDelta <= 0.0f) return ended;
+	std::vector<SceneRuntimeObjectBinding> eligible;
+	for (const auto& binding : bindings) if (deathParticipants_.contains(binding.entityId)) {
+		eligible.push_back(binding);
+		if (knockbackRuntimes_.contains(binding.entityId)) before.push_back(binding.entityId);
+	}
+	// この入口ではPoise/被弾/死亡Updateを実行しない。
+	ApplyMotionOverrides(document, eligible, worldDelta);
+	for (uint64_t id : before) if (!knockbackRuntimes_.contains(id)) ended.push_back(id);
+	return ended;
+}
+void SceneHitReactionSystem::ClearDeathContinuation() { deathParticipants_.clear(); }

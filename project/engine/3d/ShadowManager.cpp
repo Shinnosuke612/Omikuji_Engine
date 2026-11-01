@@ -93,6 +93,17 @@ void ShadowManager::Initialize(
 	initialized_ = true;
 }
 
+bool ShadowManager::TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, uint32_t size) {
+    if (!dx || !srv || dxCommon_) return false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> constant; ShadowForGPU* data = nullptr;
+    if (!dx->TryCreateBufferResource(sizeof(ShadowForGPU), constant) ||
+        FAILED(constant->Map(0, nullptr, reinterpret_cast<void**>(&data))) || !data) return false;
+    dxCommon_ = dx; srvManager_ = srv; shadowMapSize_ = NormalizeShadowMapSize(size);
+    shadowDataResource_ = std::move(constant); shadowData_ = data; ResetShadowData();
+    if (!CreateResources() || !CreateDsv(true) || !CreateSrv()) return false;
+    initialized_ = true; return true;
+}
+
 void ShadowManager::SetShadowMapSize(uint32_t shadowMapSize) {
 	const uint32_t normalizedSize = NormalizeShadowMapSize(shadowMapSize);
 	if (shadowMapSize_ == normalizedSize) {
@@ -145,8 +156,14 @@ bool ShadowManager::CreateResources() {
 	return true;
 }
 
-bool ShadowManager::CreateDsv() {
-	dsvHeap_ = dxCommon_->CreateDescriptorHeap(
+bool ShadowManager::CreateDsv(bool recoverable) {
+    if (recoverable) {
+        // 既存共通helperはassert前提。Replayの未公開heapだけHRESULTを検査する。
+        D3D12_DESCRIPTOR_HEAP_DESC description{};
+        description.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        description.NumDescriptors = kShadowMapCount;
+        if (FAILED(dxCommon_->GetDevice()->CreateDescriptorHeap(&description, IID_PPV_ARGS(&dsvHeap_)))) return false;
+    } else dsvHeap_ = dxCommon_->CreateDescriptorHeap(
 		D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
 		kShadowMapCount,
 		false

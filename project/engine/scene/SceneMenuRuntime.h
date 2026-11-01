@@ -38,10 +38,13 @@ struct SceneMenuPulse {
 	uint64_t itemId = 0;
 	bool closeAfterNotification = false;
 };
-// engineはMenu Componentを解釈せず、このFrameの入力許可だけを各Instanceへ配る。
+// engineはMenu Componentを解釈せず、入力許可とゲーム内停止の値だけを各Instanceへ配る。
 struct SceneUiControlFrame {
 	uint64_t instanceId = 0, generation = 0;
 	bool blockGameplayInput = false;
+	// Menu rootが生存する間だけ有効。Editor Pauseとは独立した非保存の理由。
+	bool gamePaused = false;
+	bool pauseBgm = false;
 };
 struct SceneMenuMove {
 	uint64_t instanceId = 0;

@@ -19,6 +19,17 @@ struct SceneEntity;
 class SceneCameraSystem {
 public:
 	void Reset();
+	// Runtimeの死亡継続開始/世代破棄と対で呼ぶ。IDのみ固定しScene/Cameraを所有しない。
+	// 未開始追従は開始せず、対象欠落時は最後の画を保持する。
+	void BeginDeathContinuation(const SceneDocument& document);
+	void ClearDeathContinuation();
+	// 正のworldDeltaだけで既存Path/追従を進める。Before/AfterはPhysicsの前後に一回ずつ。
+	void UpdateDeathBeforeSimulation(SceneDocument& document, Camera* camera, Player* player,
+		const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta);
+	void UpdateDeathAfterSimulation(SceneDocument& document, Camera* camera, Player* player,
+		const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta);
+	// 追従/入力/Player dissolveを評価せず行列だけ確定する。
+	void HoldDeathCamera(Camera* camera);
 	// 入力とCameraPathを先に評価する。入力非許可でも追従と既存Pathの時計は継続する。
 	void UpdateBeforeSimulation(
 		SceneDocument& document,
@@ -83,6 +94,8 @@ public:
 	);
 
 private:
+	enum class DeathCameraMode { Hold, Fixed, Follow, Path };
+	bool ValidateDeathCamera(const SceneDocument& document);
 	void ApplyActiveCamera(
 		const SceneDocument& document,
 		Camera* camera
@@ -134,6 +147,11 @@ private:
 	);
 	void InitializePauseDebugCamera(Camera* camera, Camera* debugCamera);
 
+	bool deathContinuation_ = false;
+	DeathCameraMode deathCameraMode_ = DeathCameraMode::Hold;
+	uint64_t deathCameraEntityId_ = 0;
+	uint64_t deathTargetEntityId_ = 0;
+	uint64_t deathPathEntityId_ = 0;
 	ThirdPersonCameraController playerCameraController_;
 	CameraPathRuntime cameraPathRuntime_;
 	bool playerCameraInitialized_ = false;

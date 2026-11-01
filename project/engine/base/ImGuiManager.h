@@ -2,6 +2,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include <utility>
@@ -18,6 +19,8 @@
 #include "../scene/SceneUIEditorView.h"
 #include "../scene/ScenePreparationDiagnostic.h"
 #include "EditorLocalization.h"
+#include "PlayerCombatEditor.h"
+#include "../scene/SceneReplayPresentation.h"
 
 #include <d3d12.h>
 #include "../../externals/imgui/imgui.h"
@@ -244,8 +247,14 @@ public:
 	// 初期化
 	void Initialize(WinApp* winApp, DirectXCommon* dxCommon, SrvManager* srvManager);
 
-	// フレーム開始
+	// Input更新とPlay/Stop/Pauseの確定後、一Frameに一度呼ぶ。
 	void BeginFrame();
+	// Play/Resumeの入口で要求する。Sceneへフォーカスを移し、Editorの編集中入力を解除する。
+	// DocumentやDirectInputのキー状態は変更しない。
+	void RequestGameInputFocus();
+	// Editorの入力遮断を適用済みで、ゲームUI/cursor captureへ入力を渡せる状態。
+	// 非active・Alt・Modal・表示不能中はfalse。各Componentの生入力経路は変更しない。
+	bool IsGameInputOwned() const { return gameInputOwned_; }
 
 	// フレーム終了
 	void EndFrame(bool deferPlatformWindows = false);
@@ -256,13 +265,24 @@ public:
 	bool IsUIEditorViewRenderable() const { return sceneUIEditorRenderable_; }
 	uint32_t GetUIEditorViewWidth() const { return sceneUIEditorWidth_; }
 	uint32_t GetUIEditorViewHeight() const { return sceneUIEditorHeight_; }
-	// 描画済みpacketも保持し、操作後に古い画像をPickingしない。
-	void SetUIEditorViewTexture(D3D12_GPU_DESCRIPTOR_HANDLE texture, const SceneUIEditorView& view) {
+	// 描画済みpacketと実寸を保持し、内容/サイズ変更後の旧画像をPickingしない。
+	// width/heightは渡したTextureの実寸。無効Textureでは0にして操作を禁止する。
+	void SetUIEditorViewTexture(D3D12_GPU_DESCRIPTOR_HANDLE texture, const SceneUIEditorView& view, uint32_t width, uint32_t height) {
 		sceneUIEditorTexture_ = texture; sceneUIEditorRenderedView_ = view;
+		sceneUIEditorRenderedWidth_ = texture.ptr ? width : 0;
+		sceneUIEditorRenderedHeight_ = texture.ptr ? height : 0;
 	}
 	bool IsSceneViewRenderable() const { return sceneViewRenderable_; }
 	// Runtimeからの一時表示。Scene/Prefab/Editor設定へ保存しない。
 	void SetPresentedTransitionStatus(const std::string& status, bool active = false) {
+		// 失敗は既存の警告窓口へ一回だけ渡す。UI要求の診断も同じPopupで扱う。
+		if (!active && !status.empty() && (status != presentedTransitionStatus_ || presentedTransitionActive_)) {
+			spawnWarningRequested_ = true;
+			spawnWarningRuntime_ = true;
+			spawnWarningEntityId_ = 0;
+			spawnWarningIssue_ = "SceneTransition:";
+			spawnWarningDetail_ = status;
+		}
 		presentedTransitionStatus_ = status; presentedTransitionActive_ = active;
 	}
 	bool ConsumePresentedTransitionStopRequest() {
@@ -276,6 +296,9 @@ public:
 		const char* sceneName
 	);
 
+    // 選択変更では解除しない。Scene世代/対象消失/Play開始で古いrequestを破棄する。
+    bool GetReplayFramingRequest(bool prefab, SceneReplayFramingRequest& out);
+    void SetReplayFramingResult(const SceneReplayFramingRequest&, bool success, const SceneReplayViewSettings& manual);
 	// 終了処理
 	void Finalize();
 	// GameのUpdateから一回、秒単位。Preview評価だけではAuthoring値を変更しない。
@@ -291,6 +314,7 @@ public:
 		spatialPreparedCount_ = prepared; spatialSubmittedCount_ = submitted;
 	}
 
+	// 次のCamera/RT更新用の整数寸法。Min/Maxは現在表示した画像の実際の画面座標。
 	uint32_t GetSceneViewWidth() const { return sceneViewWidth_; }
 	uint32_t GetSceneViewHeight() const { return sceneViewHeight_; }
 	float GetSceneViewMinX() const { return sceneViewMinX_; }
@@ -382,6 +406,10 @@ private:
 	bool deferredPlatformWindows_ = false, sceneViewRenderable_ = false;
 	bool presentedTransitionActive_ = false, presentedTransitionStopRequested_ = false;
 	std::string presentedTransitionStatus_;
+    SceneReplayFramingRequest replayFramingRequest_;
+    SceneReplayViewSettings replayFramingManualResult_, replayFramingResultSource_;
+    uint64_t replayFramingSerial_=0, replayFramingResultSerial_=0, replayFramingWarningSerial_=0;
+    bool replayFramingManualReady_=false;
 	struct SpatialPreviewValidation {
 		bool hasTransformKeys = false;
 		std::vector<uint64_t> targetIds, meshIds;
@@ -532,6 +560,31 @@ private:
 	void BuildDefaultLayout();
 	void DrawHierarchyWindow(const char* sceneName);
 	void DrawInspectorWindow();
+	// 要求は値で保持し、各Inspectorの構造操作が終わってから既存Undo枠へ適用する。
+	PlayerCombatEditor::DocumentToken MakePlayerCombatToken(const SceneDocument& document, bool prefab) const;
+	void DrawPlayerCombatSection(const SceneDocument& document, uint64_t entityId, bool prefab);
+	void DrawPlayerCombatFields(const SceneDocument& document, uint64_t entityId,
+		const SceneComponent& component, bool prefab, const std::string* attackName = nullptr);
+	void QueuePlayerCombatRequest(PlayerCombatEditor::Request request, bool prefab);
+	void ApplyPlayerCombatRequests(SceneDocument& document, bool prefab);
+	void DrawPlayerCombatDialogs();
+	void WarnPlayerCombat(const PlayerCombatEditor::Request& request, const PlayerCombatEditor::Issue& issue);
+	struct PlayerCombatContext {
+		PlayerCombatEditor::Request mutation, navigation;
+		int requestFrame = -1;
+		bool reveal = false;
+		std::unordered_map<std::string, PlayerCombatEditor::Selection> selections;
+		PlayerCombatEditor::DocumentToken returnSource;
+		uint64_t returnActor = 0, returnFromEntity = 0;
+		std::string returnDestination, returnActorName;
+		bool returnOpenPending = false;
+		uint64_t returnSerial = 0;
+	};
+	PlayerCombatContext playerCombatContexts_[2];
+	uint64_t playerCombatSerial_ = 0, playerCombatWarningSerial_ = 0;
+	bool playerCombatWarningRequested_ = false, playerCombatReferenceRequested_ = false;
+	PlayerCombatEditor::Issue playerCombatIssue_;
+	PlayerCombatEditor::Operation playerCombatWarningOperation_ = PlayerCombatEditor::Operation::None;
 	void DrawSceneUIEditorControls(SceneDocument& document);
 	void DrawSceneUIEditorWindow();
 	void StartSceneUIEditorView(SceneDocument& document, uint64_t entityId);
@@ -544,6 +597,8 @@ private:
 	bool sceneUIEditorDocked_ = false, sceneUIEditorRenderable_ = false;
 	bool drawingUIEditorView_ = false;
 	uint32_t sceneUIEditorWidth_ = 1280, sceneUIEditorHeight_ = 720;
+	bool sceneUIEditorFixedAspect_ = true; // 通常Sceneとは独立したEditor表示設定。
+	uint32_t sceneUIEditorRenderedWidth_ = 0, sceneUIEditorRenderedHeight_ = 0;
 	uint32_t sceneDockId_ = 0;
 	D3D12_GPU_DESCRIPTOR_HANDLE sceneUIEditorTexture_{};
 	SceneUIEditorView sceneUIEditorRenderedView_;
@@ -561,6 +616,17 @@ private:
 		const char* requiredType, uint64_t rootId = 0, bool includeRoot = true,
 		const std::vector<uint64_t>* allowedIds = nullptr, const char* unsetLabel = nullptr);
 	bool DrawUiEventBinding(SceneDocument& document, SceneEventBinding& binding);
+	// 呼出し元のbinding ID/Lock/Play/Undo境界を使い、通常/UI・Scene/Prefabでキー一覧を共通編集する。
+	bool DrawEventTriggerKeys(SceneEventBinding& binding, const std::vector<std::string>& blockedKeys = {}, bool standard = false);
+	// 候補はpreview中だけ所有し、原本の世代/改訂が変わったら適用を拒否する。
+	void PrepareMenuInputConversion(SceneDocument& document, uint64_t panelId, bool prefab, const std::string& mode);
+	void DrawMenuInputConversion();
+	// 前方宣言のまま破棄できる保持型。候補を他の所有者へ共有/公開しない。
+	std::shared_ptr<SceneDocument> menuInputCandidate_;
+	uint64_t menuInputGeneration_ = 0, menuInputRevision_ = 0;
+	bool menuInputPrefab_ = false, menuInputPreviewRequested_ = false, menuInputConversionBlocked_ = false;
+	std::vector<std::string> menuInputPreview_;
+	std::string eventKeySearch_; // 追加Popupを開くたび初期化し、Documentへ保存しない。
 	// 表示文字はMenuItemへ複製せず、参照先TextRendererの基本設定を編集する。
 	// 呼出し元がLock/Playを制限し、trueなら同じDocumentをDirtyにする。
 	bool DrawMenuTextFields(SceneComponent& text);
@@ -578,6 +644,10 @@ private:
 	std::string LocalizeMenuIssue(const std::string& error) const;
 	void DrawMenuAuthoringWarning();
 	void DrawProjectAccessWarning();
+	// 通常/UI Event共通。原因/対処は選択言語、技術診断は開いた詳細だけへ表示する。
+	void DrawTransitionReferenceWarning(const std::string& detail);
+	void DrawPresentedTransitionStatus();
+	const char* LocalizeTransitionFailure(const std::string& detail) const;
 	// 呼出し元がLock/Playを制限する。入力確定時だけ検証し、失敗時は値を戻す。
 	bool DrawEnemySpawnAppearance(SceneDocument& document, uint64_t entityId, SceneComponent& component);
 	// Scene Inspectorの編集枠内で設定だけを変更する。Wave/Phaseの配列操作は走査後へ遅延する。
@@ -590,6 +660,10 @@ private:
 	std::vector<std::string> gameFlowValidationIssues_;
 	std::string LocalizeSpawnIssue(const std::string& issue) const;
 	void DrawSpawnPreparationWarning();
+	// Component配列の描画終了後に追加/Inspector移動を処理し、参照の無効化を避ける。
+	void ApplyStatTextAuthoringRequest(SceneDocument& document, uint64_t ownerId, bool prefab, bool addText, uint64_t inspectId, const std::string& inspectType);
+	// Component走査後だけ実行する死亡演出の追加・Inspector移動。
+	void ApplyDeathAuthoringRequest(SceneDocument& document, uint64_t ownerId, bool prefab, bool addReplay, const std::string& inspect, const std::string& issue, int previewCut, int manualCut, bool endPreview);
 	bool spawnWarningRequested_ = false;
 	bool spawnWarningRuntime_ = false;
 	uint64_t spawnWarningEntityId_ = 0;
@@ -690,6 +764,25 @@ private:
 	void RequestOpenPrefab(const std::string& filePath, int historyIndex = -1);
 	bool OpenPrefab(const std::string& filePath, int historyIndex = -1);
 	void DrawPrefabOpenConfirmation();
+	// 表示状態だけを保持する。Prefab原本/Undo/再生中のDocumentは保存しない。
+	struct PrefabWorkspaceState {
+		bool windowOpen = false;
+		PrefabAssetReference asset;
+		uint64_t selectedEntityId = 0;
+		float yaw = 0.65f, pitch = 0.25f, zoom = 1.0f;
+		bool skeleton = true, jointAxes = false, colliders = true, combatVolumes = true;
+		bool clipFocus = true;
+		bool operator==(const PrefabWorkspaceState& other) const;
+	};
+	PrefabWorkspaceState CapturePrefabWorkspace() const;
+	void ApplyPrefabWorkspaceView(const PrefabWorkspaceState& state);
+	// 初回復元中/失敗直後は保存候補を保持。forceはOpen/Close確定と正常終了時に使う。
+	void PersistPrefabWorkspace(bool force = false);
+	void RestorePrefabWorkspace();
+	void RevealPrefabInspector();
+	void ClosePrefabWorkspace();
+	void QueuePrefabWorkspaceWarning(bool restoring, const std::string& path, const std::string& detail);
+	void DrawPrefabWorkspaceDialogs();
 	void SelectPrefabAssetInProject(const std::string& filePath);
 	uint64_t InstantiatePrefabInEditScene(
 		const std::string& filePath,
@@ -812,6 +905,12 @@ private:
 	SrvManager* srvManager_ = nullptr;
 	uint32_t sceneViewWidth_ = 1;
 	uint32_t sceneViewHeight_ = 1;
+	bool sceneViewFixedAspect_ = true; // Editor設定だけに保存する16:9表示。
+	bool sceneViewHasImage_ = false; // 初期の仮矩形でcursor captureを開始しない。
+	bool gameInputOwned_ = false;
+	bool gameInputFocusRequested_ = false;
+	bool editorWasPlaying_ = false;
+	void SynchronizeGameInput();
 	float sceneViewMinX_ = 0.0f;
 	float sceneViewMinY_ = 0.0f;
 	float sceneViewMaxX_ = 1.0f;
@@ -863,8 +962,20 @@ private:
 	EditorSession* editorSession_ = nullptr;
 	PrefabEditorSession* prefabEditorSession_ = nullptr;
 	uint64_t prefabSelectedEntityId_ = 0;
+	PrefabWorkspaceState prefabWorkspaceState_;
+	bool prefabWorkspaceDirty_ = false;
+	bool prefabWorkspaceRestorePending_ = false;
+	bool prefabWorkspaceRestoring_ = false;
+	bool prefabWorkspaceRestoreFailed_ = false;
+	bool prefabInspectorRevealRequested_ = false;
+	uint64_t prefabInspectorObservedEntityId_ = 0;
+	bool prefabWorkspaceWarningRequested_ = false;
+	bool prefabWorkspaceWarningIsRestore_ = false;
+	std::string prefabWorkspaceWarningPath_, prefabWorkspaceWarningDetail_;
+	bool prefabWorkspaceReferenceRequested_ = false;
 	ComponentPickerState prefabComponentPicker_;
 	bool prefabClosePopupRequested_ = false;
+	bool prefabCloseSaveFailed_ = false;
 	bool prefabOpenPopupRequested_ = false;
 	int prefabFocusFramesRemaining_ = 0;
 	std::string pendingPrefabOpenPath_;

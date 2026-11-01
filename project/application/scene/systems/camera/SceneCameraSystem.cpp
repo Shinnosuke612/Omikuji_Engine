@@ -73,6 +73,7 @@ namespace {
 }
 
 void SceneCameraSystem::Reset() {
+	ClearDeathContinuation();
 	cameraPathRuntime_.Stop();
 	playerCameraController_ = ThirdPersonCameraController{};
 	playerCameraInitialized_ = false;
@@ -82,6 +83,103 @@ void SceneCameraSystem::Reset() {
 	thirdPersonCameraEntityId_ = 0;
 	activeCameraPathEntityId_ = 0;
 	completedCameraPathEntityId_ = 0;
+}
+
+void SceneCameraSystem::BeginDeathContinuation(const SceneDocument& document) {
+	if (deathContinuation_) return;
+	// 通常resolverは有効なCameraをfallbackできる。入口で一度だけ解決する。
+	const SceneEntity* selected = ResolveActiveCameraEntity(document);
+	const bool pathPlaying = cameraPathRuntime_.IsPlaying();
+	if (pathPlaying) {
+		const auto* pathEntity = document.FindEntity(activeCameraPathEntityId_);
+		const auto* path = pathEntity ? FindEnabledComponent(*pathEntity, "CameraPath") : nullptr;
+		if (path && !path->cameraPathTargetCameraName.empty()) {
+			selected = document.FindEntityByName(path->cameraPathTargetCameraName);
+		}
+	}
+	deathCameraEntityId_ = selected ? selected->id : 0;
+	deathPathEntityId_ = pathPlaying ? activeCameraPathEntityId_ : 0;
+	deathTargetEntityId_ = 0;
+	deathCameraMode_ = DeathCameraMode::Hold;
+	if (selected && IsEntityActiveInHierarchy(document, *selected) && FindEnabledComponent(*selected, "Camera")) {
+		if (pathPlaying) {
+			deathCameraMode_ = DeathCameraMode::Path;
+		} else if (const auto* thirdPerson = FindEnabledComponent(*selected, "ThirdPersonCamera")) {
+			if (playerCameraInitialized_ && thirdPersonCameraEntityId_ == selected->id) {
+				if (const auto* target = ResolveThirdPersonTarget(document, *selected, *thirdPerson)) {
+					deathTargetEntityId_ = target->id;
+					deathCameraMode_ = DeathCameraMode::Follow;
+				}
+			}
+		} else {
+			deathCameraMode_ = DeathCameraMode::Fixed;
+		}
+	}
+	deathContinuation_ = true;
+	completedCameraPathEntityId_ = 0;
+	cameraPathRuntime_.ConsumeFinishedThisFrame();
+}
+
+void SceneCameraSystem::ClearDeathContinuation() {
+	deathContinuation_ = false;
+	deathCameraMode_ = DeathCameraMode::Hold;
+	deathCameraEntityId_ = deathTargetEntityId_ = deathPathEntityId_ = 0;
+}
+
+bool SceneCameraSystem::ValidateDeathCamera(const SceneDocument& document) {
+	if (!deathContinuation_ || deathCameraMode_ == DeathCameraMode::Hold) return false;
+	const auto* selected = document.FindEntity(deathCameraEntityId_);
+	bool valid = selected && IsEntityActiveInHierarchy(document, *selected) && FindEnabledComponent(*selected, "Camera");
+	if (valid && deathCameraMode_ == DeathCameraMode::Follow) {
+		const auto* target = document.FindEntity(deathTargetEntityId_);
+		valid = FindEnabledComponent(*selected, "ThirdPersonCamera") && playerCameraInitialized_ &&
+			thirdPersonCameraEntityId_ == deathCameraEntityId_ && target && IsEntityActiveInHierarchy(document, *target);
+	}
+	if (valid && deathCameraMode_ == DeathCameraMode::Path) {
+		const auto* path = document.FindEntity(deathPathEntityId_);
+		valid = path && IsEntityActiveInHierarchy(document, *path) && FindEnabledComponent(*path, "CameraPath");
+	}
+	// 一度失った対象を再取得しない。途中復活や同名Entityで画面が飛ぶのを防ぐ。
+	if (!valid) deathCameraMode_ = DeathCameraMode::Hold;
+	return valid;
+}
+
+void SceneCameraSystem::HoldDeathCamera(Camera* camera) {
+	// 通常UpdateはOrbit入力も読むため、保持中は行列専用の既存経路を使う。
+	if (camera) camera->UpdatePreviewMatrices();
+}
+
+void SceneCameraSystem::UpdateDeathBeforeSimulation(SceneDocument& document, Camera* camera, Player* player,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta) {
+	if (!camera) return;
+	if (!std::isfinite(worldDelta) || worldDelta <= 0.0f || !ValidateDeathCamera(document)) {
+		HoldDeathCamera(camera);
+		return;
+	}
+	if (deathCameraMode_ == DeathCameraMode::Path) {
+		cameraPathRuntime_.UpdateDeathContinuation(worldDelta, *camera);
+		cameraPathRuntime_.ConsumeFinishedThisFrame();
+		if (!cameraPathRuntime_.IsPlaying()) deathCameraMode_ = DeathCameraMode::Hold;
+	} else if (deathCameraMode_ == DeathCameraMode::Follow) {
+		UpdateThirdPersonCamera(document, camera, player, bindings, worldDelta * 0.5f, true, false);
+	} else {
+		ApplyActiveCamera(document, camera);
+	}
+	HoldDeathCamera(camera);
+}
+
+void SceneCameraSystem::UpdateDeathAfterSimulation(SceneDocument& document, Camera* camera, Player* player,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta) {
+	if (!camera) return;
+	if (std::isfinite(worldDelta) && worldDelta > 0.0f && ValidateDeathCamera(document)) {
+		if (deathCameraMode_ == DeathCameraMode::Follow) {
+			UpdateThirdPersonCamera(document, camera, player, bindings, worldDelta * 0.5f, true, false);
+		} else if (deathCameraMode_ == DeathCameraMode::Fixed) {
+			ApplyActiveCamera(document, camera);
+		}
+	}
+	// PathはBeforeだけで進める。終端後に通常追従へ復帰させない。
+	HoldDeathCamera(camera);
 }
 
 uint64_t SceneCameraSystem::ConsumeCompletedCameraPathEntityId() {
@@ -253,6 +351,11 @@ bool SceneCameraSystem::ApplyComponentToCamera(
 const SceneEntity* SceneCameraSystem::ResolveActiveCameraEntity(
 	const SceneDocument& document
 ) const {
+	if (deathContinuation_) {
+		const auto* selected = document.FindEntity(deathCameraEntityId_);
+		return selected && IsEntityActiveInHierarchy(document, *selected) && FindEnabledComponent(*selected, "Camera")
+			? selected : nullptr;
+	}
 	if (activeCameraEntityId_ != 0) {
 		if (const SceneEntity* selected = document.FindEntity(activeCameraEntityId_);
 			selected &&
@@ -383,6 +486,10 @@ const SceneEntity* SceneCameraSystem::ResolveThirdPersonTarget(
 	const SceneEntity& cameraEntity,
 	const SceneComponent& thirdPerson
 ) const {
+	if (deathContinuation_) {
+		const auto* target = document.FindEntity(deathTargetEntityId_);
+		return target && IsEntityActiveInHierarchy(document, *target) ? target : nullptr;
+	}
 	if (
 		const SceneEntity* configured = ResolveEntityReference(
 			document,
@@ -730,6 +837,7 @@ void SceneCameraSystem::ApplyEventRequests(
 	Player* player,
 	const std::vector<SceneCameraRequest>& requests
 ) {
+	if (deathContinuation_) return; // 死亡継続中の選択/開始/停止要求を後へqueueしない。
 	for (const SceneCameraRequest& request : requests) {
 		const SceneEntity* target = ResolveEntityReference(
 			document, request.entityId, request.entityName

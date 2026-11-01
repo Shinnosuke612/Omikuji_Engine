@@ -16,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -41,6 +42,7 @@
 #include "../scene/PrefabEditorSession.h"
 #include "../scene/SceneCatalog.h"
 #include "../scene/SceneDocument.h"
+#include "../scene/SceneEnemyChargeEvaluator.h"
 #include "../scene/SceneEntityQuery.h"
 #include "../scene/SceneInputKey.h"
 #include "../scene/SceneManager.h"
@@ -65,6 +67,7 @@
 #include <sstream>
 #include <cfloat>
 #include <iomanip>
+#include <locale>
 #include <map>
 
 namespace {
@@ -145,6 +148,695 @@ namespace {
 		}
 		value = buffer;
 		return true;
+	}
+
+
+	std::string LocalizeStatFlagIssue(EditorLanguage language, const std::string& issue) {
+		const char* message = issue.starts_with("StatFlags:InvalidId")
+			? SelectEditorText(language,"StatSetの識別名が空欄または重複しています。数値とフラグを通して一意の名前にしてください。","StatSet IDs must be nonempty and unique across numbers and flags.")
+			: issue.starts_with("StatFlags:InvalidNumber")
+			? SelectEditorText(language,"数値の範囲または初期値が不正です。有限の値を指定してください。","Invalid numeric range or initial value. Use finite numbers.")
+			: SelectEditorText(language,"フラグの参照先または型が不正です。Gameplay EventでStatSetとフラグを選び直してください。","Invalid flag reference or type. Select a StatSet and flag in a Gameplay event.");
+		return std::string(message) + " [" + issue + "]";
+	}
+
+	const char* GameFlowEventIssue(EditorLanguage language, const std::string& code) {
+		if (code == "GameFlowEvent:Domain") return SelectEditorText(language,"ゲーム開始条件はGameplay専用です。実行対象をGameplayにしてください。","Game start requires the Gameplay domain. Select Gameplay.");
+		if (code == "GameFlowEvent:Owner") return SelectEditorText(language,"このEventは無効です。非表示HUDではなく、有効なEntityにEventを置き、有効にしてください。","This event is inactive. Enable it on an active Entity, not the hidden HUD.");
+		return SelectEditorText(language,"開始通知を受け取れません。有効なGameFlowDirectorを選んでください。","Cannot receive game start. Select an active, enabled GameFlowDirector.");
+	}
+	void DrawGameFlowEventReference(EditorLanguage language) {
+		if (ImGui::Button(SelectEditorText(language,"ゲーム開始Eventの説明","Game start event reference"), ImVec2(-1,0))) ImGui::OpenPopup("GameFlowStartReference");
+		if (ImGui::BeginPopup("GameFlowStartReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+ImGui::GetFontSize()*30.0f);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"開始案内 → 敵出現 → カウントダウン → START! → ゲーム開始Event・タイマー表示\n初回の戦闘開始だけ通知します。OnStart（Entityの開始）とは異なり、Phase変更やポーズ復帰では通知しません。\nHP表示例：Player HUDを無効で保存し、有効なGame Flow DirectorのEventTriggerで「ゲームが始まったとき」→ SetEntityActive → Player HUDを有効にします。Event自身を非表示HUDへ置かないでください。\nリトライでは保存状態から読み直し、再び開始時に表示します。",
+				"Briefing -> Spawn -> Countdown -> START! -> Game start event and timer\nEmitted only at the first battle start, unlike OnStart (Entity start). Phase changes and pause resume do not emit it.\nHP example: save Player HUD inactive. On an active Game Flow Director, add EventTrigger: On game started -> SetEntityActive -> enable Player HUD. Do not place this event on the hidden HUD.\nRetry reloads the saved state and shows the HUD at the next start."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+	}
+	bool DrawGameFlowEventTarget(EditorLanguage language, const SceneDocument& document, const SceneEntity& owner,
+		SceneEventBinding& binding, bool enabled) {
+		const SceneEntity* target = binding.targetEntityId ? document.FindEntity(binding.targetEntityId) : nullptr;
+		if (!binding.targetEntityId) {
+			if (binding.targetEntityName.empty()) target = &owner;
+			else for (const auto& e : document.GetEntities()) if (e.name == binding.targetEntityName) {
+				if (target) { target = nullptr; break; } target = &e;
+			}
+		}
+		bool changed = false;
+		ImGui::TextUnformatted(SelectEditorText(language,"開始通知のGameFlowDirector","GameFlowDirector source"));
+		ImGui::SetNextItemWidth(-1);
+		const bool self = !binding.targetEntityId && binding.targetEntityName.empty();
+		const char* preview = self ? SelectEditorText(language,"自分","Self") : target ? target->name.c_str() : SelectEditorText(language,"参照先を選択","Select source");
+		if (ImGui::BeginCombo("##GameFlowStartSource",preview)) {
+			if (ImGui::Selectable(SelectEditorText(language,"自分","Self"),self)) { binding.targetEntityId=0; binding.targetEntityName.clear(); changed=true; }
+			for (const auto& e : document.GetEntities()) if (SceneEntityQuery::FindComponent(e,"GameFlowDirector")) {
+				ImGui::PushID(static_cast<int>(e.id));
+				if (ImGui::Selectable(e.name.c_str(),binding.targetEntityId==e.id)) { binding.targetEntityId=e.id; binding.targetEntityName.clear(); changed=true; }
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		if (!target || !SceneEntityQuery::FindEnabledComponent(*target,"GameFlowDirector") || !SceneEntityQuery::IsEntityActiveInHierarchy(document,*target))
+			ImGui::TextWrapped("%s",GameFlowEventIssue(language,"GameFlowEvent:Source"));
+		if (!enabled || !SceneEntityQuery::IsEntityActiveInHierarchy(document,owner)) ImGui::TextWrapped("%s",GameFlowEventIssue(language,"GameFlowEvent:Owner"));
+		DrawGameFlowEventReference(language);
+		return changed;
+	}
+
+	void DrawExitGameReference(EditorLanguage language) {
+		if (ImGui::Button(SelectEditorText(language,"ゲーム終了の説明","Game exit reference"),ImVec2(-1,0))) ImGui::OpenPopup("ExitGameReference");
+		if (ImGui::BeginPopup("ExitGameReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+ImGui::GetFontSize()*28.0f);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"Editorのプレイ中はプレイだけを停止します。単独起動したゲームは通常の終了処理でウィンドウを閉じます。追加の対象設定は不要です。\n確認を挟む場合：「ゲーム終了」で確認Panelを開き、「はい」にゲームを終了、「いいえ」にメニューを閉じるを設定します。終了処理自体は確認画面を自動表示しません。\nScene遷移・再起動・終了は先に受理された操作が優先されます。",
+				"During Editor Play this stops Play only. A standalone game closes its window through normal shutdown. No target is required.\nFor confirmation, open a confirmation panel from Quit, assign Exit game to Yes and Close Menu to No. Exit game does not create a confirmation dialog.\nThe first accepted scene transition, restart or exit takes priority."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+	}
+	const char* FlagEventLabel(EditorLanguage language, const std::string& type) {
+		if (type == "ExitGame") return SelectEditorText(language,"ゲームを終了","Exit game");
+		if (type == "OnGameFlowStarted") return SelectEditorText(language,"ゲームが始まったとき","On game started");
+		if (type == "OnFlagChanged") return SelectEditorText(language, "フラグが変わったとき", "On flag changed");
+		if (type == "OnFlagCompare") return SelectEditorText(language, "フラグが指定値になったとき", "On flag matching value");
+		if (type == "OnHealthDamaged") return SelectEditorText(language,"被弾したとき","On damage accepted");
+		if (type == "ApplyDamage") return SelectEditorText(language,"被弾を要求","Apply damage");
+		if (type == "SetFlag") return SelectEditorText(language, "フラグを設定", "Set flag");
+		return type.c_str();
+	}
+
+	// 数値とboolの選択肢を混在させず、未解決参照は無断で先頭項目へ置換しない。
+	bool DrawStatReference(EditorLanguage language, const SceneDocument& document, uint64_t owner,
+		uint64_t& targetId, std::string& targetName, std::string& key, bool flag) {
+		bool changed = false;
+		const SceneEntity* target = targetId ? document.FindEntity(targetId) :
+			(targetName.empty() ? document.FindEntity(owner) : document.FindEntityByName(targetName));
+		ImGui::TextUnformatted(SelectEditorText(language, "値の管理先", "Value owner"));
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo("##StatOwner", target ? target->name.c_str() : SelectEditorText(language,"参照先がありません","Missing target"))) {
+			for (const auto& e : document.GetEntities()) {
+				if (!SceneEntityQuery::FindEnabledComponent(e,"StatSet")) continue;
+				ImGui::PushID(std::to_string(e.id).c_str());
+				if (ImGui::Selectable(e.name.c_str(), target && target->id == e.id)) {
+					targetId = e.id; targetName.clear(); key.clear(); target = &e; changed = true;
+				}
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		const auto* stats = target ? SceneEntityQuery::FindEnabledComponent(*target,"StatSet") : nullptr;
+		ImGui::TextUnformatted(SelectEditorText(language,flag ? "フラグ" : "数値項目",flag ? "Flag" : "Number"));
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo("##StatKey",key.empty() ? SelectEditorText(language,"選択してください","Select...") : key.c_str())) {
+			const auto draw = [&](const auto& values) {
+				for (const auto& v : values) {
+					const std::string label = v.displayName.empty() ? v.id : v.displayName + " (" + v.id + ")";
+					if (ImGui::Selectable(label.c_str(), key == v.id)) { key=v.id; changed=true; }
+				}
+			};
+			if (stats) { if (flag) draw(stats->flags); else draw(stats->stats); }
+			ImGui::EndCombo();
+		}
+		return changed;
+	}
+
+	// 参照先を厳密に解決し、同名の別Entityへ黙って結び直さない。
+	const SceneEntity* StatTextTarget(const SceneDocument& document, const SceneEntity& owner, const SceneComponent& c) {
+		if (c.statTextStatsEntityId) return document.FindEntity(c.statTextStatsEntityId);
+		if (c.statTextStatsEntityName.empty()) return &owner;
+		const SceneEntity* result = nullptr;
+		for (const auto& e : document.GetEntities()) if (e.name == c.statTextStatsEntityName) {
+			if (result) return nullptr;
+			result = &e;
+		}
+		return result;
+	}
+	const char* StatTextIssue(EditorLanguage language, const std::string& code) {
+		if (code == "StatText:Duplicate") return SelectEditorText(language,"能力値表示が重複しています。一つだけ残してください。","Duplicate stat displays. Keep only one.");
+		if (code == "StatText:TextMissing") return SelectEditorText(language,"文字表示がありません。同じEntityに有効なTextRendererを追加してください。","Missing text. Add an enabled TextRenderer to this Entity.");
+		if (code == "StatText:Format") return SelectEditorText(language,"表示形式と小数桁数（0〜3）を選び直してください。","Select a display mode and decimal places (0-3).");
+		if (code == "StatText:Conflict") return SelectEditorText(language,"他の処理もこの文字を更新します。能力値表示には専用の文字を使ってください。","Another system writes this text. Use separate text for the stat display.");
+		return SelectEditorText(language,"能力値を取得できません。有効なStatSetの参照先と数値項目を選び直してください。","Cannot read the stat. Select an enabled StatSet and a number.");
+	}
+	struct StatTextAuthoringRequest {
+		bool addText = false;
+		uint64_t inspectId = 0;
+		std::string inspectType;
+	};
+	bool DrawStatSetFields(EditorLanguage language, SceneComponent& component,
+		const SceneManager* runtime, const SceneDocument* runtimeDocument, uint64_t entityId, bool editable) {
+		bool changed = false, reject = false;
+		const auto idUsed = [&](const std::string& id, const std::string* current = nullptr) {
+			if (id.empty()) return true;
+			for (const auto& n : component.stats) if (&n.id != current && n.id == id) return true;
+			for (const auto& f : component.flags) if (&f.id != current && f.id == id) return true;
+			return false;
+		};
+		const auto field = [&](const char* label, std::string& value, bool id) {
+			ImGui::TextWrapped("%s",label); ImGui::SetNextItemWidth(-1);
+			char buffer[256]{}; CopyTextBuffer(buffer,sizeof(buffer),value);
+			if (ImGui::InputText(id ? "##Id" : "##Name",buffer,sizeof(buffer),ImGuiInputTextFlags_EnterReturnsTrue)) {
+				if (id && idUsed(buffer,&value)) reject=true;
+				else { value=buffer; changed=true; }
+			}
+		};
+		ImGui::SeparatorText(SelectEditorText(language,"数値","Numbers"));
+		int remove = -1;
+		for (size_t i=0;i<component.stats.size();++i) {
+			auto& stat=component.stats[i]; ImGui::PushID(static_cast<int>(i));
+			if (ImGui::TreeNodeEx("Number",ImGuiTreeNodeFlags_DefaultOpen,"%s",stat.id.c_str())) {
+				ImGui::BeginDisabled(!editable);
+				field(SelectEditorText(language,"識別名（Enterで確定）","ID (Enter to apply)"),stat.id,true);
+				field(SelectEditorText(language,"表示名（Enterで確定）","Display name (Enter to apply)"),stat.displayName,false);
+				float values[3]={stat.minValue,stat.maxValue,stat.initialValue};
+				const char* labels[3]={SelectEditorText(language,"最小値","Minimum"),SelectEditorText(language,"最大値","Maximum"),SelectEditorText(language,"保存する初期値","Saved initial value")};
+				for(int j=0;j<3;++j) {
+					ImGui::TextUnformatted(labels[j]); ImGui::SetNextItemWidth(-1); ImGui::PushID(j);
+					if(ImGui::DragFloat("##Value",&values[j],0.1f)) {
+						if(!std::isfinite(values[j]) || values[1]<values[0]) reject=true;
+						else { stat.minValue=values[0]; stat.maxValue=values[1]; stat.initialValue=std::clamp(values[2],values[0],values[1]); changed=true; }
+					}
+					ImGui::PopID();
+				}
+				if(ImGui::Button(SelectEditorText(language,"削除","Remove"))) remove=static_cast<int>(i);
+				ImGui::EndDisabled();
+				float current=0;
+				if(runtime && runtimeDocument && runtime->TryGetRuntimeStat(*runtimeDocument,entityId,stat.id,current)) ImGui::Text("%s: %.3f",SelectEditorText(language,"現在値（読取専用）","Current (read only)"),current);
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+		if(remove>=0){ component.stats.erase(component.stats.begin()+remove); changed=true; }
+		ImGui::BeginDisabled(!editable);
+		if(ImGui::Button(SelectEditorText(language,"数値を追加","Add number"))) {
+			SceneStatDefinition stat; size_t i=1; do {stat.id="stat"+std::to_string(i++);} while(idUsed(stat.id));
+			stat.displayName=stat.id; component.stats.push_back(std::move(stat)); changed=true;
+		}
+		ImGui::EndDisabled();
+		ImGui::SeparatorText(SelectEditorText(language,"フラグ（ON / OFF）","Flags (ON / OFF)"));
+		remove=-1; ImGui::PushID("Flags");
+		for(size_t i=0;i<component.flags.size();++i) {
+			auto& flag=component.flags[i]; ImGui::PushID(static_cast<int>(i));
+			if(ImGui::TreeNodeEx("Flag",ImGuiTreeNodeFlags_DefaultOpen,"%s",flag.id.c_str())) {
+				ImGui::BeginDisabled(!editable);
+				field(SelectEditorText(language,"識別名（Enterで確定）","ID (Enter to apply)"),flag.id,true);
+				field(SelectEditorText(language,"表示名（Enterで確定）","Display name (Enter to apply)"),flag.displayName,false);
+				changed |= ImGui::Checkbox(SelectEditorText(language,"保存する初期値：ON","Saved initial: ON"),&flag.initialValue);
+				if(ImGui::Button(SelectEditorText(language,"削除","Remove"))) remove=static_cast<int>(i);
+				ImGui::EndDisabled();
+				bool current=false;
+				if(runtime && runtimeDocument && runtime->TryGetRuntimeFlag(*runtimeDocument,entityId,flag.id,current)) ImGui::Text("%s: %s",SelectEditorText(language,"現在値（読取専用）","Current (read only)"), current ? "ON" : "OFF");
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+		ImGui::PopID();
+		if(remove>=0){component.flags.erase(component.flags.begin()+remove);changed=true;}
+		ImGui::BeginDisabled(!editable);
+		if(ImGui::Button(SelectEditorText(language,"フラグを追加","Add flag"))) {
+			SceneFlagDefinition f; size_t i=1; do {f.id="flag"+std::to_string(i++);} while(idUsed(f.id));
+			f.displayName=f.id; component.flags.push_back(std::move(f)); changed=true;
+		}
+		ImGui::EndDisabled();
+		const char* warningTitle = SelectEditorText(language,"設定を変更できません###StatEditWarning","Cannot change settings###StatEditWarning");
+		if(reject) ImGui::OpenPopup(warningTitle);
+		if(ImGui::BeginPopupModal(warningTitle,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::TextWrapped("%s",SelectEditorText(language,"変更できません。識別名は空欄・重複を避け、有限の数値と最小値以下でない最大値を指定してください。","Cannot apply this change. Use a unique nonempty ID and finite numbers, with maximum at least minimum."));
+			if (ImGui::Button("OK")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		if(ImGui::Button(SelectEditorText(language,"StatSetのリファレンス","StatSet reference"))) ImGui::OpenPopup("StatReference");
+		if(ImGui::BeginPopup("StatReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+400.0f);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"数値とON/OFFフラグを別々に登録します。識別名は共通で重複できません。名前はEnterで確定します。\n保存するのは初期値です。Play中の現在値は読取専用で、Sceneへ保存されません。\nEventでは管理先と項目を選択します。SetFlagでON/OFFを指定し、OnFlagCompareは指定値への条件成立時、OnFlagChangedは実際の値変更後の評価で発火します。初回観測を基準にします。初期値や同値Setは変更ではありません。\n一度の評価までの複数変更は一回にまとまります。繰り返す場合は『一度だけ』をOFFにしてください。クールタイム中の変更は保留再生されません。\nisDeadも通常フラグです。死亡・復活処理はまだ接続していません。",
+				"Register numbers and ON/OFF flags separately. IDs must be unique across both lists. Press Enter to apply names.\nOnly initial values are saved. Runtime values are read only and are never saved to the Scene.\nIn Events, choose an owner and a typed entry. SetFlag assigns ON/OFF. OnFlagCompare fires on entering a matching condition; OnFlagChanged fires after actual changes. The first observation establishes the baseline. Initialization and same-value writes are not changes.\nMultiple changes before evaluation are coalesced. Disable Once to repeat. Changes during cooldown are not replayed later.\nisDead is an ordinary flag; death and revival behavior is not connected yet."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+		return changed;
+	}
+
+	const char* EnemyPositioningIssue(EditorLanguage language, const std::string& issue) {
+		if (issue == "EnemyCharge:TargetMode") return SelectEditorText(language, "対象の探し方を認識できません。「プレイヤーを自動で探す」などの有効な方式へ切り替えてください。", "Unknown target mode. Select a supported mode such as Auto Player.");
+		if (issue == "EnemyCharge:TargetAmbiguous") return SelectEditorText(language, "対象名を適用できません。同名のEntityが複数あります。一意の名前か「プレイヤーを自動で探す」を使用してください。", "Cannot apply this name: multiple Entities match. Use a unique name or Auto Player.");
+		if (issue == "EnemyCharge:LegacyTarget") return SelectEditorText(language, "保存されたIDと対象名が一致していません。現在はID側が優先されます。プレイヤーを狙う場合は自動方式へ切り替えてください。", "The saved ID and name disagree. The ID currently wins. Use Auto Player to target the player.");
+		if (issue == "EnemyCharge:UnusedPose") return SelectEditorText(language, "保持している姿勢対象が存在しません。演出OFFの攻撃には影響しません。ONにする前に「姿勢の設定」で選び直してください。", "The retained pose target is missing. Attacks with pose disabled are unaffected. Select a valid target in Pose settings before enabling it.");
+		if (issue == "EnemyCharge:Parent") return SelectEditorText(language,"親の座標変換を戻せないため突進できません。親Entityの拡縮を0以外の有限値へ直してください。","The parent transform cannot be inverted. Use finite nonzero parent scale values.");
+		if (issue == "EnemyCharge:Target") return SelectEditorText(language,"体当たりの対象を設定できません。自分や自分の子を除き、有効なPlayerBehaviorを持つ実プレイヤーを指定してください。Prefabでは「プレイヤーを自動で探す」を使用してください。","Choose the actual player with an enabled PlayerBehavior, outside this enemy branch. Use Auto Player in prefabs.");
+		if (issue == "EnemyCharge:StartDistance" || issue == "EnemyCharge:ManualStartDistance") return SelectEditorText(language,
+			"開始距離を適用できません。手動では有限の正数かつ突進の最大距離以下にしてください。自動はプルダウンで選べます。",
+			"Cannot apply the start distance. Manual values must be finite, positive and no greater than maximum charge distance. Select automatic mode in the dropdown.");
+		if (issue == "EnemyCharge:Easing") return SelectEditorText(language, "未対応の速度曲線のため攻撃できません。「速度の変化」で対応する曲線を選び直してください。保存名はそのまま保持しています。", "The saved speed curve is unsupported, so charging is disabled. Select a supported curve in Speed change. The saved name is retained.");
+		if (issue == "EnemyCharge:Path") return SelectEditorText(language, "突進経路を計算できないため停止しました。平均速度・最大距離を有限の正数にし、極端に短い突進時間を避けてください。", "The charge stopped because its path could not be represented. Use finite positive average speed and maximum distance; avoid extremely short charge durations.");
+		if (issue == "EnemyCharge:Settings") return SelectEditorText(language, "攻撃設定を適用できません。数値は有限、時間・ばらつきは0以上、速度・距離は正数、回転軸は0以外にしてください。時間はばらつき以上にしてください。条件は重複なしの1〜6件で、閾値は正数、回数は整数、対象段階は1件以上が必要です。", "Cannot apply attack settings. Use finite nonnegative times/variation, positive speed/distance, and a nonzero axis. Times must cover variation. Choose 1-6 distinct conditions with positive thresholds (integer hit counts) and at least one phase.");
+		if (issue == "EnemyCharge:Pose") return SelectEditorText(language, "姿勢演出を適用できません。「姿勢の設定」で敵の見た目の子Entityを先に選んでください。見た目の準備前は「姿勢演出を使用」をOFFにできます。", "Cannot apply pose animation. First select a visual child in Pose settings. Leave Use pose animation OFF until the visual is ready.");
+		if (issue == "EnemyCharge:HitBox") return SelectEditorText(language, "攻撃判定を設定できません。敵の子にある有効なHitBoxと、有効なTrigger Colliderを用意してください。", "Choose an enabled child HitBox with an active trigger collider.");
+		if (issue == "EnemyCharge:HitOwner") return SelectEditorText(language, "攻撃の所有者が敵自身になっていません。参照HitBoxの所有Entityをこの敵に指定するか、敵rootにFactionを設定してください。", "Set the referenced HitBox owner to this enemy, or put Faction on the enemy root.");
+		if (issue == "EnemyCharge:PoseConflict") return SelectEditorText(language, "姿勢の所有が競合しています。見た目の枝からCollider・物理・攻撃判定・Attachment・行動制御を分け、同じ枝を動かすTransformアニメーションを解除してください。", "Pose ownership conflicts. Separate collision, physics, hit/hurt boxes, attachments and behavior from the visual branch; remove competing transform animation.");
+		if (issue == "EnemyCharge:Reaction") return SelectEditorText(language, "条件付き中断を設定できません。同じ敵に有効なHitReactionを追加し、時間・倍率・Poise回復待機を有限の0以上にしてください。", "Add an enabled HitReaction to this enemy. Its duration, multiplier and poise recovery delay must be finite and nonnegative.");
+		if (issue == "EnemyCharge:Health") return SelectEditorText(language, "条件付き中断のHP参照が不正です。同じ敵rootにStatSetとHealthを用意し、HP識別名を一致させ、子のHurtBoxもそのrootを参照してください。", "Use StatSet and Health on the enemy root with matching HP IDs. Child HurtBoxes must resolve to that same root.");
+		if (issue == "EnemyCharge:Poise") return SelectEditorText(language, "怯み耐性の条件を設定できません。HitReactionで指定したPoise識別名を、敵自身のStatSetの数値へ合わせてください。", "Match the HitReaction poise ID to a numeric stat on this enemy.");
+		if (issue == "EnemyCharge:HitState") return SelectEditorText(language, "中断後の状態が存在しません。HitReactionの状態名を同じ敵のStateMachineにある状態へ合わせるか、状態名を空にしてください。", "Match the HitReaction state name to a state in this enemy StateMachine, or clear the name.");
+		if (issue == "EnemyPositioning:Body") return SelectEditorText(language,
+			"位置取りへ切り替えられません。同じEntityにDynamicのPhysicsBodyと、有効でTriggerではない移動Colliderを用意してください。突進にはX/Zの移動固定も解除してください。",
+			"Cannot enable positioning. Add a Dynamic PhysicsBody and an active non-trigger movement collider to this Entity. Charge also requires unfrozen X/Z axes.");
+		if (issue == "EnemyPositioning:DetectionLoss") return SelectEditorText(language,
+			"対象を見失う距離が索敵距離より小さいため適用できません。見失う距離を索敵距離以上にするか、索敵距離を小さくしてください。",
+			"The target loss range is smaller than the detection range. Increase the loss range or reduce the detection range.");
+		if (issue == "EnemyPositioning:Range") return SelectEditorText(language,
+			"保ちたい距離帯が対象を見失う距離を超えます。体の大きさも考慮して、索敵解除距離を広げるか保ちたい距離を短くしてください。",
+			"The holding band exceeds the target loss range. Increase the loss range or reduce the holding distance, allowing for body size.");
+		if (issue == "EnemyPositioning:Mode") return SelectEditorText(language,
+			"敵の行動方式を認識できません。従来か位置取り＋体当たりを選び直してください。",
+			"Unknown enemy movement mode. Select Legacy or Positioning + Charge again.");
+		return SelectEditorText(language,
+			"位置取り設定を適用できません。値は有限・非負、速度と加減速は正数、速度比は0〜1、速度ばらつきは1未満にしてください。保ちたい距離は許容幅＋距離ばらつき以上、追加間隔は間隔ばらつき以上が必要です。",
+			"Cannot apply positioning settings. Use finite nonnegative values, positive speed/acceleration, ratios from 0 to 1, and speed variation below 1. Holding distance must cover tolerance plus distance variation; spacing must cover its variation.");
+	}
+
+	std::string LocalizeDeathIssue(EditorLanguage language, const std::string& issue) {
+		const char* ja = "死亡設定を適用できません。自分のHealth、HP初期値（0より大きい）、同じStatSetのfalseフラグを確認してください。";
+		const char* en = "Cannot apply death settings. Check self Health, positive initial HP, and a false flag in the same StatSet.";
+        if (issue.starts_with("DeathResponse:ReplayViewSettings")) { ja="リプレイ設定を適用できません。再生速度は0より大きい有限値、視点は3件、画角は1〜179度にしてください。距離倍率は正数、位置・角度は有限値にしてください。"; en="Cannot apply replay settings. Use positive finite playback speed, exactly three views, FOV 1–179 degrees, positive distance scale and finite positions/angles."; }
+        else if (issue.starts_with("DeathResponse:ReplayCamera")) { ja="構図を確認・再生できません。対象と子のモデルが表示可能で高さを持つこと、視点と注視点が異なることを確認してください。PrefabではPreviewも開いてください。設定を修正し、実行中ならSceneを再開始してください。"; en="Cannot preview or play this framing. Check that the target and child models have valid bounds and height, and that camera and target positions differ. Open Preview when editing a Prefab. Correct the settings and restart the Scene if playing."; }
+        else if (issue.starts_with("DeathResponse:RenderPreparation")) { ja="リプレイ表示を準備できません。記録のCPU予算、モデル・画像Asset、GPU資源の空き容量を確認し、Sceneを再開始してください。死亡後の停止画面は維持しています。"; en="Cannot prepare replay rendering. Check the recording CPU budget, model/texture assets and available GPU resources, then restart the Scene. The frozen death view is preserved."; }
+        else if (issue.starts_with("DeathResponse:HistorySettings")) { ja="記録設定を適用・開始できません。記録頻度は0より大きく60以下、CPU予算は正の整数MiB（byte換算できる範囲）にしてください。"; en="Cannot apply or start recording. Use a finite frequency above zero up to 60 Hz and a positive whole MiB budget that fits in bytes."; }
+		else if (issue.starts_with("DeathResponse:HistoryBudget") || issue.starts_with("DeathResponse:HistoryAllocation")) { ja="履歴記録を停止しました。始点・最新点・採取用のCPU容量が不足しています。予算を増やすか記録対象のモデルを軽量化し、Sceneを再開始してください。"; en="History recording stopped: insufficient CPU capacity for endpoints and capture scratch. Increase the budget or reduce model complexity, then restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:HistoryMissingStart")) { ja="履歴記録を停止しました。開始時の描画前採取より先に世界が進もうとしました。ゲーム画面を表示してSceneを再開始してください。"; en="History recording stopped before the world could advance without its initial sample. Display the game view and restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:HistoryPose")) { ja="履歴記録を停止しました。モデル・材質・骨格の確定姿勢を採取できません。対象Assetと描画設定を確認し、Sceneを再開始してください。"; en="History recording stopped: model, material or skeleton pose could not be captured. Check assets and rendering settings, then restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:HistoryIdentity")) { ja="履歴記録を停止しました。操作中のScene・内容世代・死亡対象または時刻が一致しません。Sceneを再開始してください。"; en="History recording stopped: active Scene, content generation, owner or timestamp no longer matches. Restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:Duplicate")) { ja = "死亡設定が重複しています。同じEntityと死亡フラグには一つだけ設定してください。"; en = "Duplicate death ownership. Use one response per Entity and per flag."; }
+		else if (issue.starts_with("DeathResponse:LegacyConflict")) { ja = "旧DeathPresentationと競合します。移行する対象では旧Componentを無効化してください。"; en = "Conflicts with legacy DeathPresentation. Disable the legacy component on the migrated target."; }
+		else if (issue.starts_with("DeathResponse:InvalidScope")) { ja = "停止範囲を選び直してください。この対象のみ、またはゲーム全体の敗北を選択できます。"; en = "Select Target only or Scene defeat as the stop scope."; }
+		else if (issue.starts_with("DeathResponse:InvalidEvent") || issue.starts_with("DeathResponse:InvalidAction")) { ja = "死亡Eventを適用できません。DeathResponseを持つ対象と死亡時の条件を選び、音・文字・Transform演出の開始だけを登録してください。"; en = "Invalid death event. Select a DeathResponse target and On death; use only audio, text or Transform presentation starts."; }
+		else if (issue.starts_with("DeathResponse:StartFailed")) { ja = "死亡演出を開始できません。再生対象、Clip、音声Asset、Transformの所有競合を確認し、修正後にSceneを再開始してください。死亡停止は維持しています。"; en = "Could not start death presentation. Check target, clip, audio asset and Transform ownership; fix settings and restart the Scene. Death remains stopped."; }
+		else if (issue.starts_with("DeathResponse:PauseBlocked")) { ja="死亡確定後は通常のポーズ画面を開けません。EditorではF1で停止し、Sceneを再開始してください。"; en="The normal pause menu cannot open after death. In the Editor, stop with F1 and restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:ManagedWrite")) { ja = "死亡フラグを解除できません。HPの回復だけでは復活しません。Sceneを再開始してください。"; en = "Cannot clear a managed death flag. Healing alone does not revive. Restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:ReplayDuplicate")) { ja="死亡後のスロー設定が重複しています。Entityごとに一つ、Scene内で有効な対象も一つにしてください。"; en="Duplicate death slow-motion settings. Use one component per Entity and one active owner per Scene."; }
+		else if (issue.starts_with("DeathResponse:ReplayInvalidSettings")) { ja="死亡後のスロー設定を適用・開始できません。同じEntityの有効なHealthとDeathResponse（ゲーム全体の敗北）、HP・死亡フラグを確認してください。速度は0より大きく1以下、時間は0より大きい有限値にしてください。"; en="Cannot apply or start death slow motion. Check self enabled Health and DeathResponse (Scene defeat), HP and death flag. Use finite speed above zero up to one, and positive duration."; }
+		else if (issue.starts_with("DeathResponse:ReplayInactiveScene")) { ja="死亡後のスローを開始できません。このSceneは操作中のSceneではありません。Active Sceneを確認して再開始してください。"; en="Cannot start death slow motion in a non-active Scene. Check the active Scene and restart."; }
+		else if (issue.starts_with("DeathResponse:ReplayTransformConflict")) { ja="死亡後のスローを開始できません。世界の対象とTransform演出の操作先が重複しています。演出対象を分けてSceneを再開始してください。"; en="Cannot start death slow motion: a Transform presentation writes a world participant. Separate presentation targets and restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:ReplayOwnerLost")) { ja="死亡後のスローを停止しました。死亡対象またはComponentが無効・欠落しています。設定を戻してSceneを再開始してください。"; en="Death slow motion stopped because its owner or component became missing or disabled. Restore settings and restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:ReplayStartFailed")) { ja="死亡後のスローを開始できません。継続対象の移動・攻撃・アニメーション・物理設定を確認し、Sceneを再開始してください。"; en="Cannot start death slow motion. Check participant movement, attack, animation and physics settings, then restart the Scene."; }
+		else if (issue.starts_with("DeathResponse:ReplayAuthoringDenied")) { ja="死亡演出を追加できません。編集状態でロックされていない通常Entityを選び、有効なDeathResponseの影響をゲーム全体の敗北にしてください。既存のDeathReplayは再追加せず編集してください。"; en="Cannot add death slow motion. In Edit mode select an unlocked non-folder Entity with enabled DeathResponse set to Scene defeat. Edit an existing DeathReplay instead of adding another."; }
+		return SelectEditorText(language, ja, en);
+	}
+	bool DrawDeathBinding(EditorLanguage language, SceneDocument& document, SceneEventBinding& binding) {
+		bool changed = false;
+		ImGui::TextUnformatted(SelectEditorText(language, "死亡する対象", "Death target"));
+		const auto* selected = document.FindEntity(binding.targetEntityId);
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo("##DeathTarget", selected ? selected->name.c_str() : SelectEditorText(language, "自分 / 選択", "Self / select"))) {
+			for (const auto& e : document.GetEntities()) if (SceneEntityQuery::FindEnabledComponent(e, "DeathResponse")) {
+				ImGui::PushID(static_cast<int>(e.id));
+				if (ImGui::Selectable(e.name.c_str(), e.id == binding.targetEntityId)) { binding.targetEntityId=e.id; binding.targetEntityName.clear(); changed=true; }
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		int remove = -1;
+		for (size_t i=0; i<binding.actions.size(); ++i) {
+			ImGui::PushID(static_cast<int>(i)); auto& a=binding.actions[i];
+			ImGui::SetNextItemWidth(-1);
+			const char* label = a.type=="PlayAudio" ? SelectEditorText(language,"音を再生","Play audio") : a.type=="PlayTextMotion" ? SelectEditorText(language,"文字演出を再生","Play text motion") : SelectEditorText(language,"Transform演出を再生","Play Transform presentation");
+			if (ImGui::BeginCombo("##DeathAction",label)) {
+				for (const char* type : {"PlayAudio","PlayTextMotion","PlayPresentationClip"}) {
+					const char* name=std::string(type)=="PlayAudio" ? SelectEditorText(language,"音を再生","Play audio") : std::string(type)=="PlayTextMotion" ? SelectEditorText(language,"文字演出を再生","Play text motion") : SelectEditorText(language,"Transform演出を再生","Play Transform presentation");
+					if (ImGui::Selectable(name,a.type==type)) { a=SceneEventAction{}; a.type=type; changed=true; }
+				}
+				ImGui::EndCombo();
+			}
+			const char* component = a.type=="PlayAudio" ? "AudioSource" : a.type=="PlayTextMotion" ? "TextMotion" : "PrefabAnimator";
+			const auto* target=document.FindEntity(a.targetEntityId);
+			ImGui::SetNextItemWidth(-1);
+			if (ImGui::BeginCombo("##DeathActionTarget",target ? target->name.c_str() : SelectEditorText(language,"再生対象を選択","Select playback target"))) {
+				for (const auto& e : document.GetEntities()) if (SceneEntityQuery::FindEnabledComponent(e,component)) {
+					ImGui::PushID(static_cast<int>(e.id));
+					if (ImGui::Selectable(e.name.c_str(),e.id==a.targetEntityId)) { a.targetEntityId=e.id; a.targetEntityName.clear(); changed=true; }
+					ImGui::PopID();
+				}
+				ImGui::EndCombo();
+			}
+			const auto* c=target ? SceneEntityQuery::FindEnabledComponent(*target,component) : nullptr;
+			if (a.type!="PlayAudio") {
+				auto& clip=a.type=="PlayTextMotion" ? a.textMotionClipId : a.presentationClipName;
+				ImGui::SetNextItemWidth(-1);
+				if (ImGui::BeginCombo("##DeathClip",clip.empty() ? SelectEditorText(language,"Clipを選択","Select clip") : clip.c_str())) {
+					if (c && a.type=="PlayTextMotion") for (const auto& entry : c->textMotionClips) { if(ImGui::Selectable(entry.id.c_str(),clip==entry.id)){clip=entry.id;changed=true;} }
+					if (c && a.type=="PlayPresentationClip") for (const auto& entry : c->prefabAnimationClips) { if(ImGui::Selectable(entry.name.c_str(),clip==entry.name)){clip=entry.name;changed=true;} }
+					ImGui::EndCombo();
+				}
+			}
+			if (ImGui::SmallButton(SelectEditorText(language,"操作を削除","Remove action"))) remove=static_cast<int>(i);
+			ImGui::Spacing(); ImGui::PopID();
+		}
+		if(remove>=0){binding.actions.erase(binding.actions.begin()+remove);changed=true;}
+		if(ImGui::Button(SelectEditorText(language,"演出を追加","Add presentation"))){SceneEventAction a; a.type="PlayTextMotion";binding.actions.push_back(a);changed=true;}
+		return changed;
+	}
+	// Component配列の追加はcallerの走査終了後に行う。描画中の参照を無効化しない。
+	void AddDeathEvent(SceneDocument& document, uint64_t id) {
+		if (!document.AddComponent(id,"EventTrigger")) {
+			const auto* e=document.FindEntity(id);
+			if(!e || !SceneEntityQuery::FindEnabledComponent(*e,"EventTrigger")) return;
+		}
+		auto* e=document.FindEntity(id); if(!e)return;
+		for(auto& c:e->components) if(c.type=="EventTrigger") {
+			SceneEventBinding b; b.executionDomain="Death"; b.triggerType="OnDeathStarted"; b.targetEntityId=id; b.triggerOnce=false; b.cooldown=0;
+			c.eventBindings.push_back(b); document.MarkDirty(); return;
+		}
+	}
+	// 配列追加とInspector移動は走査後へ渡す。数値編集は既存のframe単位Undoに含める。
+	struct DeathAuthoringRequest {
+        int previewCut=-1, manualCut=-1;
+        bool endPreview=false;
+		bool addReplay = false;
+		std::string inspect;
+		std::string issue;
+	};
+	bool DrawDeathReplayFields(EditorLanguage language, SceneDocument& document, SceneEntity& owner,
+		SceneComponent& component, bool editable, bool inlineView, DeathAuthoringRequest& request, const SceneManager* runtime) {
+		auto text = [&](const char* ja, const char* en) { return SelectEditorText(language, ja, en); };
+		ImGui::PushID("DeathReplayFields");
+		bool changed = false;
+		const auto* response = SceneEntityQuery::FindEnabledComponent(owner, "DeathResponse");
+		ImGui::TextWrapped("%s", text("死亡対象: このEntity", "Death target: this Entity"));
+		if (!response || response->deathResponseScope != "Scene")
+			ImGui::TextWrapped("%s", text("有効なDeathResponseで「ゲーム全体の敗北」を設定してください。", "Enable self DeathResponse and select Scene defeat."));
+		ImGui::BeginDisabled(!editable);
+		if (inlineView) changed |= ImGui::Checkbox(text("有効", "Enabled"), &component.enabled);
+		// Enter/編集終了まで入力を保持し、不正値は保存せず理由をPopupへ渡す。
+		auto number = [&](const char* label, const char* idLabel, float& value, bool scale, bool capture = false, bool replaySpeed = false) {
+			ImGui::TextUnformatted(label);
+			ImGui::SetNextItemWidth(-1);
+			auto* storage = ImGui::GetStateStorage();
+			const ImGuiID id = ImGui::GetID(idLabel);
+			float buffer = storage->GetFloat(id, value);
+			const bool entered = ImGui::InputFloat(idLabel, &buffer, 0, 0, "%.3f", ImGuiInputTextFlags_EnterReturnsTrue);
+			if (entered || ImGui::IsItemDeactivatedAfterEdit()) {
+				if (!std::isfinite(buffer) || buffer <= 0 || (scale && buffer > 1) || (capture && buffer > 60)) request.issue = replaySpeed ? "DeathResponse:ReplayViewSettings" : capture ? "DeathResponse:HistorySettings" : "DeathResponse:ReplayInvalidSettings";
+				else if (value != buffer) { value = buffer; changed = true; }
+				buffer = value;
+			} else if (!ImGui::IsItemActive()) buffer = value;
+			storage->SetFloat(id, buffer);
+		};
+		number(text("スロー速度（倍）", "Slow-motion speed (scale)"), "##SlowScale", component.deathReplaySlowScale, true);
+		number(text("スローの表示時間（実秒）", "Slow duration (real seconds)"), "##SlowDuration", component.deathReplaySlowDuration, false);
+		changed |= ImGui::Checkbox(text("3視点リプレイを再生", "Play three-view replay"), &component.deathReplayEnabled);
+		if (component.deathReplayEnabled) {
+            size_t completions=0;
+            for (const auto& entity : document.GetEntities()) {
+                if (!SceneEntityQuery::IsEntityActiveInHierarchy(document,entity)) continue;
+                const auto* events=FindEnabledComponent(entity,"EventTrigger");
+                if (!events) continue;
+                for (const auto& binding : events->eventBindings)
+                    if (binding.executionDomain=="UI" && binding.triggerType=="OnDeathReplayCompleted" &&
+                        (binding.targetEntityId ? binding.targetEntityId : entity.id)==owner.id) ++completions;
+            }
+            if (completions==0) ImGui::TextWrapped("%s",text("完了後に開く画面は未設定です。MenuPanelの表示開始条件から設定できます。","No completion screen is configured. Connect it from MenuPanel Open Conditions."));
+            else if (completions>1) ImGui::TextWrapped("%s",text("完了条件が複数あります。一件に整理してください。","Multiple completion bindings exist. Keep one for this target."));
+            number(text("リプレイ速度（倍）", "Replay speed (scale)"), "##ReplaySpeed",component.deathReplaySpeed,false,false,true);
+            if (component.deathReplayViews.size()!=3) {
+                ImGui::TextWrapped("%s",text("視点の数が不正です。3視点へ戻してください。","Invalid view count. Restore three views."));
+                if (ImGui::Button(text("3視点の初期設定へ戻す","Restore three default views"),ImVec2(-1,0))) {
+                    component.deathReplayViews=DefaultReplayViews(); changed=true;
+                }
+            }
+            for (size_t cut=0;cut<component.deathReplayViews.size() && cut<3;++cut) {
+                ImGui::PushID(static_cast<int>(cut));
+                const char* namesJa[]={"視点A","視点B","視点C"};
+                const char* namesEn[]={"View A","View B","View C"};
+                if (ImGui::TreeNodeEx(text(namesJa[cut],namesEn[cut]),ImGuiTreeNodeFlags_DefaultOpen)) {
+                    auto& view=component.deathReplayViews[cut];
+                    if (!IsValidReplayView(view) && ImGui::Button(text("この視点を初期値へ戻す","Reset this view"),ImVec2(-1,0))) {
+                        view=DefaultReplayViews()[cut]; changed=true;
+                    }
+                    ImGui::TextUnformatted(view.mode=="Auto" ? text("自動構図","Automatic framing") : text("手動構図","Manual framing"));
+                    auto viewNumber=[&](const char* label,const char* idLabel,float& value) {
+                        ImGui::TextUnformatted(label); ImGui::SetNextItemWidth(-1);
+                        auto* storage=ImGui::GetStateStorage(); const auto id=ImGui::GetID(idLabel);
+                        float buffer=storage->GetFloat(id,value);
+                        const bool entered=ImGui::InputFloat(idLabel,&buffer,0,0,"%.3f",ImGuiInputTextFlags_EnterReturnsTrue);
+                        if (entered || ImGui::IsItemDeactivatedAfterEdit()) {
+                            const float old=value; value=buffer;
+                            if (!IsValidReplayView(view)) { value=old; request.issue="DeathResponse:ReplayViewSettings"; }
+                            else changed |= old!=value;
+                            buffer=value;
+                        } else if (!ImGui::IsItemActive()) buffer=value;
+                        storage->SetFloat(id,buffer);
+                    };
+                    if (view.mode=="Auto") {
+                        viewNumber(text("水平角度（度）","Horizontal angle (degrees)"),"##Yaw",view.yaw);
+                        viewNumber(text("距離（身長の倍率）","Distance (height scale)"),"##Distance",view.distanceInHeights);
+                        viewNumber(text("カメラの高さ（身長の倍率）","Camera height (height scale)"),"##Height",view.cameraHeightInHeights);
+                        viewNumber(text("注視点の高さ（身長の倍率）","Target height (height scale)"),"##LookHeight",view.lookHeightInHeights);
+                    } else {
+                        viewNumber(text("左右のずれ","Side offset"),"##OffsetX",view.localOffset.x);
+                        viewNumber(text("高さのずれ","Height offset"),"##OffsetY",view.localOffset.y);
+                        viewNumber(text("前後のずれ","Forward offset"),"##OffsetZ",view.localOffset.z);
+                        viewNumber(text("注視点の高さ","Target height"),"##Target",view.targetHeight);
+                        if (ImGui::Button(text("自動構図へ戻す","Use automatic framing"),ImVec2(-1,0))) { view.mode="Auto"; changed=true; }
+                    }
+                    viewNumber(text("画角（度）","Field of view (degrees)"),"##Fov",view.fovYDegrees);
+                    if (view.mode=="Auto" && ImGui::Button(text("現在の自動構図を手動へ","Use current automatic framing as manual"),ImVec2(-1,0)))
+                        request.manualCut=static_cast<int>(cut);
+                    if (ImGui::Button(text("この視点で確認","Preview this view"),ImVec2(-1,0))) request.previewCut=static_cast<int>(cut);
+                    if (ImGui::Button(text("編集視点へ戻る","Return to editing view"),ImVec2(-1,0))) request.endPreview=true;
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            if (ImGui::TreeNode(text("記録の詳細","Recording details"))) {
+			number(text("記録頻度（Hz）", "Capture frequency (Hz)"), "##CaptureHz", component.deathReplayCaptureHz, false, true);
+			ImGui::TextUnformatted(text("CPU予算（MiB）", "CPU budget (MiB)"));
+			ImGui::SetNextItemWidth(-1);
+			// 64bit入力中の値はUI storageだけに保持し、確定するまで保存値を変更しない。
+			auto* storage = ImGui::GetStateStorage();
+			const auto lowId = ImGui::GetID("HistoryBudgetLow"), highId = ImGui::GetID("HistoryBudgetHigh");
+			int64_t buffer = static_cast<int64_t>(static_cast<uint32_t>(storage->GetInt(lowId, static_cast<int>(component.deathReplayHistoryBudgetMiB))) |
+				(static_cast<uint64_t>(static_cast<uint32_t>(storage->GetInt(highId, static_cast<int>(component.deathReplayHistoryBudgetMiB >> 32)))) << 32));
+			const bool entered = ImGui::InputScalar("##HistoryBudget", ImGuiDataType_S64, &buffer, nullptr, nullptr, "%lld", ImGuiInputTextFlags_EnterReturnsTrue);
+			if (entered || ImGui::IsItemDeactivatedAfterEdit()) {
+				if (buffer <= 0 || static_cast<uint64_t>(buffer) > (std::numeric_limits<uint64_t>::max)() / (1024 * 1024)) request.issue = "DeathResponse:HistorySettings";
+				else if (buffer != component.deathReplayHistoryBudgetMiB) { component.deathReplayHistoryBudgetMiB = buffer; changed = true; }
+				buffer = component.deathReplayHistoryBudgetMiB;
+			} else if (!ImGui::IsItemActive()) buffer = component.deathReplayHistoryBudgetMiB;
+			storage->SetInt(lowId, static_cast<int>(buffer)); storage->SetInt(highId, static_cast<int>(buffer >> 32));
+                ImGui::TreePop();
+            }
+		}
+		ImGui::EndDisabled();
+		ImGui::TextWrapped("%s: %.3f", text("世界が進む時間（秒）", "World time advanced (seconds)"),
+			static_cast<double>(component.deathReplaySlowScale) * component.deathReplaySlowDuration);
+		if (ImGui::Button(inlineView ? text("DeathReplayのInspectorを開く", "Open DeathReplay Inspector") : text("DeathResponseのInspectorを開く", "Open DeathResponse Inspector"), ImVec2(-1, 0)))
+			request.inspect = inlineView ? "DeathReplay" : "DeathResponse";
+		SceneDeathReplayStatus status;
+		if (runtime && runtime->TryGetDeathReplayStatus(document, owner.id, status)) {
+			const char* label = text("待機", "Waiting");
+			switch (status.phase) {
+			case SceneDeathReplayPhase::LiveSlow: label = text("スロー再生中", "Live slow motion"); break;
+			case SceneDeathReplayPhase::Frozen: label = text("停止して保持", "Frozen hold"); break;
+			case SceneDeathReplayPhase::Failed: label = text("開始・継続失敗", "Start/continuation failed"); break;
+            case SceneDeathReplayPhase::Preparing: label=text("リプレイ準備中","Preparing replay"); break;
+            case SceneDeathReplayPhase::ReplayA: label=text("視点A","View A"); break;
+            case SceneDeathReplayPhase::ReplayB: label=text("視点B","View B"); break;
+            case SceneDeathReplayPhase::ReplayC: label=text("視点C","View C"); break;
+            case SceneDeathReplayPhase::FinishedHold: label=text("リプレイ終了・最終画保持","Replay finished / final hold"); break;
+			default: break;
+			}
+			ImGui::TextWrapped("%s: %s", text("演出実行状態", "Presentation state"), label);
+			if (status.phase == SceneDeathReplayPhase::LiveSlow) ImGui::TextWrapped("%s: %.3f", text("残り表示時間（秒）", "Remaining real seconds"), status.remainingRealSeconds);
+            if (status.replayDuration>0) {
+                ImGui::Text("%.3f / %.3f s",status.replaySeconds,status.replayDuration);
+                if (status.awaitingPresentation) ImGui::TextUnformatted(text("端点の表示完了待ち","Waiting for endpoint presentation"));
+                if (status.staticClip) ImGui::TextUnformatted(text("一点の履歴: 各視点で1秒静止","Single sample: one second hold per view"));
+                ImGui::TextWrapped("%s: %.2f MiB / %s: %llu",text("表示用GPU推定量","Estimated display GPU"),status.gpuBytes/(1024.0*1024.0),
+                    text("Descriptor数","Descriptors"),static_cast<unsigned long long>(status.descriptors));
+            }
+			if (!status.diagnostic.empty()) ImGui::TextWrapped("%s", LocalizeDeathIssue(language, status.diagnostic).c_str());
+		}
+		SceneReplayHistoryStatus history;
+		if (runtime && runtime->TryGetReplayHistoryStatus(document, owner.id, history)) {
+			const char* label = text("未記録", "Not recorded");
+			switch (history.phase) {
+			case SceneReplayHistoryPhase::Recording: label = text("記録中", "Recording"); break;
+			case SceneReplayHistoryPhase::Sealed: label = text("記録確定", "Sealed"); break;
+			case SceneReplayHistoryPhase::Failed: label = text("失敗", "Failed"); break;
+			default: break;
+			}
+			ImGui::TextWrapped("%s: %s", text("履歴", "History"), label);
+			ImGui::TextWrapped("%s: %.3f / %s: %llu", text("実秒", "Real seconds"), history.realSeconds,
+				text("記録点", "Samples"), static_cast<unsigned long long>(history.sampleCount));
+			ImGui::TextWrapped("%s: %.2f MiB / %s: %llu", text("計数CPU容量", "Counted CPU capacity"), history.countedBytes / (1024.0 * 1024.0),
+				text("間引き", "Pruned samples"), static_cast<unsigned long long>(history.thinningCount));
+			if (!history.diagnostic.empty()) ImGui::TextWrapped("%s", LocalizeDeathIssue(language, history.diagnostic).c_str());
+		}
+		if (ImGui::Button(text("死亡演出のリファレンス", "Death slow-motion reference"), ImVec2(-1, 0))) ImGui::OpenPopup("ReplayReference");
+		if (ImGui::BeginPopup("ReplayReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420);
+			ImGui::TextUnformatted(text(
+				"1. HealthとDeathResponseを同じEntityに用意し、HPと初期falseの死亡フラグを設定します。\n2. DeathResponseの影響を「ゲーム全体の敗北」にして、「死亡後のスロー」から追加します。\n3. 有効・再生速度・表示時間を設定します。初期値0.2倍、1.5実秒では世界が0.3秒進みます。\n画面構成: 死亡後のスロー → 有効 / 速度 / 実秒 / 世界の秒数 / Inspector移動。Play中は実行状態と残秒を読み取れます。\n既存の被弾操作で死亡すると、一度だけスローを開始して静止保持します。未付与・無効なら即時停止。Scene再開始で初期化し、HP回復では復活しません。\n音・文字は別時計です。Worldと同じ対象へのTransform演出は競合します。3視点リプレイを有効にすると、死亡からスロー終了までのCPU姿勢を記録します。初期値30Hz・256MiB。最初と最後は必ず採取し、容量不足では中間点を間引きます。端点と採取容量も不足すると警告して停止します。容量はallocator管理領域を除く計数値です。モデル・画像は記録中に差し替えないでください。記録状態・実秒・点数・容量・間引き数はPlay中に確認できます。3視点リプレイを有効にすると、スロー終了後にA→B→Cの順で記録を再生し、Cの最終画を保持します。リプレイ速度の初期値は1倍で、スロー倍率を二重適用しません。各視点の冒頭と終端は表示完了まで待ちます。Editor Pause・画面非表示では時計が止まります。視点の距離と高さは対象の身長を基準にします。「この視点で確認」は編集姿勢の構図確認で、履歴再生ではありません。「現在の自動構図を手動へ」で解決済みの位置を取り込み、左右・高さ・前後を調整できます。「編集視点へ戻る」で解除します。選択変更では終了せず、対象消失・Scene変更・Play開始で解除します。敗北画面はMenuPanelの「表示を開始する条件」から死亡対象を選んで接続します。実体は同じEntityのUI EventTriggerです。パネルは開始時に閉じ、GamePauseを付けません。Panel直下の独立画像に白テクスチャを指定して黒・半透明の全画面背景を作り、選択不可の赤いDefeatと、選択可能な「タイトルに戻る」を置きます。標準操作の決定にSPACE/ENTER、キャンセルにNoneを設定し、戻る項目の決定処理をSceneTransitionにします（一度だけOFF）。C終端に敗北画面が一度表示されてから、離して押し直したキーで決定できます。同時押しは一回です。遷移失敗時は画面を保持し、警告後に再試行できます。CloseMenu/ResumeGameは不要です。粒子の同期は後続です。EditorではF1で停止できます。",
+				"1. Configure Health and DeathResponse on the same Entity, including HP and an initially false death flag.\n2. Select Scene defeat in DeathResponse and add slow motion under After death.\n3. Set enabled, speed and real duration. Defaults of 0.2x and 1.5 real seconds advance the world by 0.3 seconds.\nLayout: After death → Enabled / Speed / Real duration / World duration / Inspector navigation. During Play, state and remaining time are read only.\nUse existing damage controls to cause death. Slow motion starts once, then holds. Missing or disabled means immediate freeze. Scene restart resets; healing does not revive.\nAudio and text use separate clocks. Transform presentations targeting world participants conflict. Enable three-view replay to capture CPU poses from death through the end of slow motion. Defaults: 30 Hz, 256 MiB. Endpoints are mandatory; intermediate samples are pruned to fit. If endpoints and capture scratch do not fit, recording stops with a warning. Counted capacity excludes allocator bookkeeping. Do not replace models or textures during recording. Play exposes state, real seconds, samples, capacity and pruning. Enable three-view replay to play the recording as A, B, C after slow motion, then hold the final C frame. Default replay speed is 1x; the slow scale is not applied twice. Each cut waits for its first and last presentation. Editor Pause and a hidden view freeze playback. Automatic camera distance and height use the target height. Preview this view shows the edited pose, not replay history. Use current automatic framing as manual copies the resolved offset for adjustment. Return to editing view exits. Selection changes keep preview; target removal, Scene changes and Play start clear it. Connect the death target from MenuPanel / Open Conditions. This edits the UI EventTrigger on the same Entity. Start the panel closed without GamePause. Use an independent child image with a white texture tinted translucent black for the full-screen background, a non-selectable red Defeat item, and a selectable Return to Title item. Set standard confirm keys to SPACE/ENTER and cancel to None. Assign SceneTransition to the return item, with Trigger Once off. Confirmation starts after the final C frame and panel have been presented; held keys must be released and pressed again. Simultaneous keys confirm once. Failed transitions retain the screen and allow retry after the warning. CloseMenu/ResumeGame are unnecessary. Particle synchronization comes later. Stop with F1 in the Editor."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+		ImGui::PopID();
+		return changed;
+	}
+	bool DrawHealthFields(EditorLanguage language, SceneDocument& document, const SceneEntity& owner, SceneComponent& component, bool editable);
+	bool DrawDeathFields(EditorLanguage language, SceneDocument& document, SceneEntity& owner,
+		SceneComponent& component, bool editable, bool& addEvent, DeathAuthoringRequest& request, const SceneManager* runtime) {
+		bool changed=false;
+		ImGui::BeginDisabled(!editable);
+		ImGui::SeparatorText(SelectEditorText(language,"死亡判定","Death detection"));
+		if (ImGui::TreeNode(SelectEditorText(language,"自分のHealthを編集","Edit self Health"))) {
+			for (auto& c : owner.components) if (c.type == "Health" && c.enabled) {
+				ImGui::PushID("DeathHealth"); changed |= DrawHealthFields(language,document,owner,c,editable); ImGui::PopID(); break;
+			}
+			ImGui::TreePop();
+		}
+		const auto* health=SceneEntityQuery::FindEnabledComponent(owner,"Health");
+		auto* target=health ? (health->healthStatsEntityId ? document.FindEntity(health->healthStatsEntityId) : health->healthStatsEntityName.empty() ? &owner : document.FindEntityByName(health->healthStatsEntityName)) : nullptr;
+		SceneComponent* stats=nullptr;
+		if(target)for(auto& c:target->components)if(c.type=="StatSet" && c.enabled){stats=&c;break;}
+		ImGui::TextWrapped("%s: %s",SelectEditorText(language,"自分のHealth / HP","Self Health / HP"),health ? health->healthStatId.c_str() : SelectEditorText(language,"未設定","Missing"));
+		ImGui::TextUnformatted(SelectEditorText(language,"死亡フラグ","Death flag")); ImGui::SetNextItemWidth(-1);
+		if(ImGui::BeginCombo("##DeathFlag",component.deathResponseFlagId.empty()?SelectEditorText(language,"選択してください","Select..."):component.deathResponseFlagId.c_str())) {
+			if(stats)for(const auto& f:stats->flags) if(ImGui::Selectable(f.id.c_str(),f.id==component.deathResponseFlagId)){component.deathResponseFlagId=f.id;changed=true;}
+			ImGui::EndCombo();
+		}
+		if(stats && ImGui::TreeNode(SelectEditorText(language,"参照先のStatSetを編集","Edit referenced StatSet"))) {
+			changed|=DrawStatSetFields(language,*stats,nullptr,nullptr,target->id,editable && !target->locked);ImGui::TreePop();
+		}
+		ImGui::Spacing();ImGui::SeparatorText(SelectEditorText(language,"死亡時の影響","On death"));
+		ImGui::SetNextItemWidth(-1);
+		if(ImGui::BeginCombo("##DeathScope",component.deathResponseScope=="Scene"?SelectEditorText(language,"ゲーム全体の敗北（このScene）","Scene defeat"):SelectEditorText(language,"この対象のみ","This target only"))) {
+			if(ImGui::Selectable(SelectEditorText(language,"この対象のみ","This target only"),component.deathResponseScope=="Target")){component.deathResponseScope="Target";changed=true;}
+			if(ImGui::Selectable(SelectEditorText(language,"ゲーム全体の敗北（このScene）","Scene defeat"),component.deathResponseScope=="Scene")){component.deathResponseScope="Scene";changed=true;}
+			ImGui::EndCombo();
+		}
+		ImGui::EndDisabled();
+		ImGui::Spacing(); ImGui::SeparatorText(SelectEditorText(language,"死亡後のスロー","After death: slow motion"));
+		SceneComponent* replay = nullptr;
+		for (auto& c : owner.components) if (c.type == "DeathReplay") { replay = &c; break; }
+		if (replay) changed |= DrawDeathReplayFields(language, document, owner, *replay, editable, true, request, runtime);
+		else if (ImGui::Button(SelectEditorText(language,"死亡演出を追加","Add death slow motion"), ImVec2(-1, 0))) request.addReplay = true;
+		ImGui::BeginDisabled(!editable);
+		ImGui::Spacing();ImGui::SeparatorText(SelectEditorText(language,"追加の死亡Event","Additional death events"));
+		for(auto& c:owner.components)if(c.type=="EventTrigger" && c.enabled)for(size_t i=0;i<c.eventBindings.size();++i){auto& b=c.eventBindings[i];
+			if(b.executionDomain!="Death" || (b.targetEntityId && b.targetEntityId!=owner.id))continue;
+			ImGui::PushID(static_cast<int>(i)); changed|=DrawDeathBinding(language,document,b); ImGui::PopID();
+		}
+		if(ImGui::Button(SelectEditorText(language,"死亡時のEventを追加","Add death event")))addEvent=true;
+		ImGui::EndDisabled();
+		if(runtime){const int status=runtime->GetDeathResponseStatus(document,owner.id);
+			const char* ja[]={"生存","死亡 / 演出なし","死亡 / 開始待ち","死亡 / 開始要求を受理","死亡 / 開始失敗"};
+			const char* en[]={"Alive","Dead / no presentation","Dead / start pending","Dead / start accepted","Dead / start failed"};
+			if(status>=0 && status<5)ImGui::TextWrapped("%s",SelectEditorText(language,ja[status],en[status]));
+		}
+		if(ImGui::Button(SelectEditorText(language,"死亡設定のリファレンス","Death response reference")))ImGui::OpenPopup("DeathReference");
+		if(ImGui::BeginPopup("DeathReference")){ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+420);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"同じEntityにStatSet・Health・DeathResponseを付与します。HealthのHP初期値を正にし、同じStatSetに初期falseのフラグを用意して選択します。外部StatSetも利用可能です。\n"
+				"HP0またはフラグtrueで一度死亡。HP回復だけでは復活せず、フラグfalseは拒否します。再開始で初期化します。\n"
+				"この対象のみは自分と子の参加を停止。ゲーム全体の敗北はこのSceneの進行も停止します。Entityと最後の姿は保持し、発生済み粒子は寿命まで動きます。\n"
+				"死亡Eventをここから追加し音・文字・独立したTransform演出を指定できます。受理は完了ではありません。失敗時は設定を修正して再開始してください。\n"
+				"死亡後のスローは同EntityのDeathReplayで設定できます。3視点リプレイも同じInspectorで設定します。完了後はMenuPanelの表示開始条件から敗北画面へ接続し、項目決定のSceneTransitionで戻れます。旧DeathPresentationと併用できません。Scene/Play中の参照変更による復活は非対応です。",
+				"Add StatSet, Health and DeathResponse to one Entity. Use positive initial HP and a false flag in Health's StatSet; external StatSets are supported.\n"
+				"HP zero or flag true confirms death once. Healing does not revive; clearing the flag is rejected. Restart resets runtime.\n"
+				"Target only stops this Entity and descendants. Scene defeat also stops this Scene's progression. Entities and final poses remain; existing particles run to expiry.\n"
+				"Add death events here for audio, text or independent Transform presentations. Acceptance is not completion. Fix failed starts and restart.\n"
+				"Configure slow motion with DeathReplay on this Entity. Configure three-view replay in the same Inspector. Connect the completion from MenuPanel Open Conditions, then use the return item's SceneTransition action. Do not combine with legacy DeathPresentation. Editing references during Play does not revive."));
+			ImGui::PopTextWrapPos();ImGui::EndPopup();}
+		return changed;
+	}
+
+	std::string LocalizeHealthIssue(EditorLanguage language, const std::string& issue) {
+		const char* ja = "被弾設定が不正です。Healthの参照と設定を確認してください。";
+		const char* en = "Invalid health configuration. Check Health references and settings.";
+		if (issue == "Health:InvalidHP") { ja = "HPを参照できません。Healthで有効なStatSetの数値を選び、最小0・最大0より大きい範囲にしてください。"; en = "Cannot resolve HP. Select an enabled StatSet number with minimum zero and maximum above zero."; }
+		else if (issue == "Health:InvalidDuration") { ja = "無敵時間が不正です。0以上の有限の秒数を指定してください。"; en = "Invalid invulnerability duration. Use finite seconds at or above zero."; }
+		else if (issue == "Health:DuplicateOwner" || issue == "Health:DuplicateComponent") { ja = "Healthの所有が重複しています。1つのEntityに1個、同じHPへの有効なHealthも1個にしてください。"; en = "Duplicate Health ownership. Use one Health per Entity and one enabled owner per HP entry."; }
+		else if (issue == "Health:InvalidEventTarget") { ja = "被弾Eventの対象が不正です。GameplayのEventで有効なHealthを持つEntityを選び直してください。"; en = "Invalid damage event target. Use a Gameplay event and select an Entity with enabled Health."; }
+		else if (issue == "Health:InvalidDamage") { ja = "ダメージ量が不正です。0より大きい有限の数値を指定してください。"; en = "Invalid damage amount. Use a finite number greater than zero."; }
+		return SelectEditorText(language, ja, en);
+	}
+
+	bool DrawHealthTarget(EditorLanguage language, const SceneDocument& document, uint64_t owner,
+		uint64_t& id, std::string& name) {
+		bool changed = false;
+		const auto* target = id ? document.FindEntity(id) : name.empty() ? document.FindEntity(owner) : document.FindEntityByName(name);
+		ImGui::TextUnformatted(SelectEditorText(language, "被弾を管理するEntity", "Health Entity"));
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo("##HealthTarget", target ? target->name.c_str() : SelectEditorText(language, "選択してください", "Select..."))) {
+			for (const auto& candidate : document.GetEntities()) {
+				if (!SceneEntityQuery::FindEnabledComponent(candidate, "Health")) continue;
+				ImGui::PushID(static_cast<int>(candidate.id));
+				if (ImGui::Selectable(candidate.name.c_str(), target && target->id == candidate.id)) {
+					id = candidate.id; name.clear(); changed = true;
+				}
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		return changed;
+	}
+
+	bool DrawHealthFields(EditorLanguage language, SceneDocument& document, const SceneEntity& owner,
+		SceneComponent& component, bool editable) {
+		bool changed = false;
+		const auto oldId = component.healthStatsEntityId;
+		const auto oldName = component.healthStatsEntityName;
+		const auto oldKey = component.healthStatId;
+		const float oldDuration = component.healthInvulnerabilityDuration;
+		ImGui::BeginDisabled(!editable);
+		ImGui::SeparatorText(SelectEditorText(language, "HPの管理先", "HP source"));
+		changed |= DrawStatReference(language, document, owner.id, component.healthStatsEntityId,
+			component.healthStatsEntityName, component.healthStatId, false);
+		ImGui::SeparatorText(SelectEditorText(language, "被弾後の保護", "After damage"));
+		ImGui::TextUnformatted(SelectEditorText(language, "無敵時間（秒）", "Invulnerability (seconds)"));
+		ImGui::SetNextItemWidth(-1);
+		changed |= ImGui::DragFloat("##HealthDuration", &component.healthInvulnerabilityDuration, 0.01f, 0.0f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		SceneEntity* target = component.healthStatsEntityId ? document.FindEntity(component.healthStatsEntityId)
+			: component.healthStatsEntityName.empty() ? document.FindEntity(owner.id) : document.FindEntityByName(component.healthStatsEntityName);
+		SceneComponent* stats = nullptr;
+		if (target) for (auto& c : target->components) if (c.type == "StatSet" && c.enabled) { stats = &c; break; }
+		const bool validHP = stats && std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& stat) {
+			return stat.id == component.healthStatId && stat.minValue == 0.0f && std::isfinite(stat.maxValue) && stat.maxValue > 0.0f;
+		});
+		const bool validDuration = std::isfinite(component.healthInvulnerabilityDuration) && component.healthInvulnerabilityDuration >= 0.0f;
+		const char* popup = SelectEditorText(language, "Healthを変更できません###HealthWarning", "Cannot change Health###HealthWarning");
+		if (changed && ((!component.healthStatId.empty() && !validHP) || !validDuration)) {
+			component.healthStatsEntityId = oldId; component.healthStatsEntityName = oldName;
+			component.healthStatId = oldKey; component.healthInvulnerabilityDuration = oldDuration;
+			changed = false;
+			ImGui::OpenPopup(popup);
+		}
+		if (stats && (validHP || component.healthStatId.empty()) && ImGui::TreeNode(SelectEditorText(language, "参照先のStatSetを編集", "Edit referenced StatSet"))) {
+			ImGui::PushID("HealthStats");
+			changed |= DrawStatSetFields(language, *stats, nullptr, nullptr, target->id, editable && !target->locked);
+			ImGui::PopID(); ImGui::TreePop();
+		}
+		ImGui::EndDisabled();
+		if (ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"設定を適用できません。HPは有効なStatSetの数値（最小0・最大0より大きい）を選び、無敵時間は0以上にしてください。",
+				"Cannot apply settings. Select a number in an enabled StatSet (minimum zero, maximum above zero), and use a nonnegative invulnerability duration."));
+			ImGui::PopTextWrapPos();
+			if (ImGui::Button("OK")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		if (!validHP) ImGui::TextWrapped("%s", LocalizeHealthIssue(language, "Health:InvalidHP").c_str());
+		if (ImGui::Button(SelectEditorText(language, "Healthのリファレンス", "Health reference"))) ImGui::OpenPopup("HealthReference");
+		if (ImGui::BeginPopup("HealthReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440.0f);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"1. StatSetを付与しHPを登録（最小0・最大は正の値）。\n2. Healthで管理先と数値項目を選択。同じEntityなら管理先の初期状態は自分です。\n3. 無敵時間を調整（初期0.5秒、0ならなし）。参照先のStatSetもここで編集できます。\n例: HP=100 / 無敵=0.5秒。25の被弾を同時に二つ要求するとHP=75。0.5秒後の被弾で50。\nCombatはHurtBoxのHP管理先/HP項目に一致するHealthを使用します。同じHPの有効Healthは1個。拒否した被弾は反応・弾・命中履歴を消費しません。Healthなしは旧動作です。\nGameplay Eventの『被弾を要求』はHealthを対象にします。直接ModifyStatは無敵を迂回し、被弾通知は出しません。『被弾したとき』は評価までの受理を一回に集約します。繰返す場合は一度だけをOFF。cooldown中の通知は再送しません。\n無敵時計はゲームのPause/HitStop/遷移Hold中に止まります。HP0は被弾拒否。DeathResponse未付与なら直接HPを回復すれば再受付可能です。付与済みでは死亡フラグも受付判定に使い、HP回復だけでは復活しません。Scene再開始で初期化。",
+				"1. Add StatSet and define HP (minimum zero, positive maximum).\n2. Select the source and number in Health. The default source is self.\n3. Set invulnerability (default 0.5 seconds; zero disables it). Edit the referenced StatSet inline.\nExample: HP 100, invulnerability 0.5s. Two simultaneous requests of 25 leave HP 75; another after 0.5s leaves 50.\nCombat resolves Health by the HurtBox HP owner and entry. Only one enabled Health can own an HP entry. Rejected hits do not consume reactions, projectiles or hit history. No Health preserves legacy behavior.\nGameplay Apply damage targets Health. Direct ModifyStat bypasses invulnerability and does not emit damage events. On damage accepted coalesces hits before evaluation. Disable Once for repeats. Events during cooldown are not replayed.\nInvulnerability freezes during game Pause, HitStop and transition hold. HP zero rejects damage. Without DeathResponse, direct healing permits damage again. With DeathResponse, a managed death flag also rejects damage; healing does not revive. Scene restart resets runtime state."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+		return changed;
 	}
 
 	// 演出pathは長いUTF-8も保持し、上限超過を切り詰めず診断できるようにする。
@@ -1380,20 +2072,61 @@ void ImGuiManager::ConfigureEditorFont(ImGuiIO& io, float dpiScale) {
 	}
 }
 
-void ImGuiManager::BeginFrame(){
+void ImGuiManager::RequestGameInputFocus() {
+	gameInputFocusRequested_ = true;
+	sceneUIEditorFocus_ = false;
+}
+
+void ImGuiManager::SynchronizeGameInput() {
 	ImGuiIO& io = ImGui::GetIO();
 	Input* input = Input::GetInstance();
 	const bool altHeld = input &&
 		(input->PushKey(DIK_LMENU) || input->PushKey(DIK_RMENU));
-	const bool blockEditorMouse =
-		editorSession_ && editorSession_->IsPlaying() && !altHeld;
-	if (blockEditorMouse) {
+	const bool playing = editorSession_ && editorSession_->IsPlaying();
+	// AltやModalから復帰したときも、別の編集タブへ残らずSceneへ入力を戻す。
+	if (playing && (!editorWasPlaying_ || (!altHeld && !gameInputOwned_))) RequestGameInputFocus();
+	editorWasPlaying_ = playing;
+	if (!playing) gameInputFocusRequested_ = false;
+	ImGuiWindow* scene = ImGui::FindWindowByName("Scene");
+	POINT clientOrigin{};
+	const bool foreground = winApp_ && GetForegroundWindow() == winApp_->GetHwnd() && !IsIconic(winApp_->GetHwnd()) &&
+		ClientToScreen(winApp_->GetHwnd(), &clientOrigin);
+	const bool modal = ImGui::GetTopMostPopupModal() != nullptr;
+	const bool validCapture = sceneViewHasImage_ && std::floor(sceneViewMaxX_) > std::ceil(sceneViewMinX_) &&
+		std::floor(sceneViewMaxY_) > std::ceil(sceneViewMinY_);
+	// 別タブからの移管時だけ最後の有効矩形を使う。表示タブ自体が狭すぎる場合は取得しない。
+	const bool drawable = scene && !scene->Collapsed && validCapture &&
+		(sceneViewRenderable_ || (gameInputFocusRequested_ && sceneViewHasImage_ && scene->DockNode && !scene->DockTabIsVisible));
+	const bool takeInput = playing && !altHeld && foreground && !modal && drawable;
+	if (takeInput && (!gameInputOwned_ || gameInputFocusRequested_)) {
+		ImGui::ClearActiveID();
+		ImGui::ClosePopupsOverWindow(scene, false);
+		ImGui::FocusWindow(scene);
+		io.ClearInputKeys();
+		io.WantTextInput = false;
+		// dockのタブ選択はSceneのBeginでも要求し、実際に表示されるまで要求を残す。
+	}
+	gameInputOwned_ = takeInput;
+	if (gameInputOwned_) {
 		io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
 		io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+		io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
+		sceneViewInputActive_ = true;
+		// ImGuiの画面座標をInputのclient座標へ変換する。Drawで矩形が変わった場合も追従する。
+		if (input) input->SetCursorCaptureRect(sceneViewMinX_ - clientOrigin.x, sceneViewMinY_ - clientOrigin.y,
+			sceneViewMaxX_ - clientOrigin.x, sceneViewMaxY_ - clientOrigin.y);
 	} else {
 		io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
 		io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+		io.ConfigFlags &= ~ImGuiConfigFlags_NoKeyboard;
+		if (playing) sceneViewInputActive_ = false;
+		if (input && editorSession_) input->SetCursorCapture(false);
 	}
+}
+
+void ImGuiManager::BeginFrame(){
+	// NewFrameのnavigation/文字入力評価より前に、ゲームへの移管とEditor入力遮断を行う。
+	SynchronizeGameInput();
 	ApplyPendingEditorFont();
 	ImGui_ImplDX12_NewFrame();
 	ImGui_ImplWin32_NewFrame();
@@ -1401,6 +2134,8 @@ void ImGuiManager::BeginFrame(){
 	ImGuizmo::BeginFrame();
 
 	CreateDockSpace();
+	// Play/Resumeボタンと、同じFrameで開いたModalにも同じ所有権判定を適用する。
+	SynchronizeGameInput();
 }
 
 void ImGuiManager::LoadEditorSettings() {
@@ -1411,6 +2146,41 @@ void ImGuiManager::LoadEditorSettings() {
 
 	try {
 		const json settings = json::parse(text);
+		if (settings.contains("prefabWorkspace") && settings["prefabWorkspace"].is_object()) {
+			const auto& source = settings["prefabWorkspace"];
+			auto& state = prefabWorkspaceState_;
+			auto readBool = [&](const char* key, bool& value) {
+				if (source.contains(key) && source[key].is_boolean()) value = source[key].get<bool>();
+			};
+			auto readFloat = [&](const char* key, float& value, float minimum, float maximum) {
+				if (!source.contains(key) || !source[key].is_number()) return;
+				const double number = source[key].get<double>();
+				if (std::isfinite(number) && number >= minimum && number <= maximum) value = static_cast<float>(number);
+			};
+			readBool("windowOpen", state.windowOpen);
+			// 復元候補は値だけ読む。Assetの解決/OpenはEdit状態の最初のFrameまで保留する。
+			if (source.contains("asset") && source["asset"].is_object()) {
+				const auto& asset = source["asset"];
+				if (asset.contains("assetId") && asset["assetId"].is_string()) state.asset.assetId = asset["assetId"].get<std::string>();
+				if (asset.contains("fallbackPath") && asset["fallbackPath"].is_string()) state.asset.fallbackPath = asset["fallbackPath"].get<std::string>();
+			}
+			if (source.contains("selectedEntityId")) {
+				const auto& id = source["selectedEntityId"];
+				if (id.is_number_unsigned()) state.selectedEntityId = id.get<uint64_t>();
+				else if (id.is_number_integer() && id.get<int64_t>() >= 0) state.selectedEntityId = static_cast<uint64_t>(id.get<int64_t>());
+			}
+			readFloat("yaw", state.yaw, -(std::numeric_limits<float>::max)(), (std::numeric_limits<float>::max)());
+			readFloat("pitch", state.pitch, -1.45f, 1.45f);
+			readFloat("zoom", state.zoom, 0.02f, 1.75f);
+			readBool("skeleton", state.skeleton);
+			readBool("jointAxes", state.jointAxes);
+			readBool("colliders", state.colliders);
+			readBool("combatVolumes", state.combatVolumes);
+			readBool("clipFocus", state.clipFocus);
+			// 閉じた状態で起動しても表示の好みは保持する。Document/選択はOpen成功後に復元する。
+			ApplyPrefabWorkspaceView(state);
+			prefabWorkspaceRestorePending_ = state.windowOpen;
+		}
 		if (settings.contains("language") && settings["language"].is_string()) {
 			editorLanguage_ = ParseEditorLanguage(
 				settings["language"].get<std::string>()
@@ -1420,6 +2190,10 @@ void ImGuiManager::LoadEditorSettings() {
 			"fontPreset",
 			"msGothic"
 		);
+		sceneViewFixedAspect_ = !settings.contains("sceneViewAspect") || !settings["sceneViewAspect"].is_string() ||
+			settings["sceneViewAspect"].get<std::string>() != "free";
+		sceneUIEditorFixedAspect_ = !settings.contains("uiEditorViewAspect") || !settings["uiEditorViewAspect"].is_string() ||
+			settings["uiEditorViewAspect"].get<std::string>() != "free";
 		if (preset == "yuGothicUi" || preset == "unifiedCjk") {
 			editorFontPreset_ = EditorFontPreset::YuGothicUi;
 		} else if (preset == "meiryo") {
@@ -1620,6 +2394,8 @@ void ImGuiManager::SaveEditorSettings() const {
 		{ "fontSize", editorFontSize_ },
 		{ "startFullscreen", startFullscreen_ },
 		{ "sceneGridVisible", sceneGridVisible_ },
+		{ "sceneViewAspect", sceneViewFixedAspect_ ? "16:9" : "free" },
+		{ "uiEditorViewAspect", sceneUIEditorFixedAspect_ ? "16:9" : "free" },
 		{ "prefabGridVisible", prefabGridVisible_ },
 		{ "sceneAxisVisible", sceneAxisVisible_ },
 		{ "prefabAxisVisible", prefabAxisVisible_ },
@@ -1633,12 +2409,228 @@ void ImGuiManager::SaveEditorSettings() const {
 		},
 		{ "favoriteComponentTypes", std::move(favoriteComponentTypeValues) },
 		{ "recentPrefabs", std::move(recentPrefabs) },
-		{ "favoritePrefabs", std::move(favoritePrefabs) }
+		{ "favoritePrefabs", std::move(favoritePrefabs) },
+		{ "prefabWorkspace", {
+			{ "windowOpen", prefabWorkspaceState_.windowOpen },
+			{ "asset", {
+				{ "assetId", prefabWorkspaceState_.asset.assetId },
+				{ "fallbackPath", prefabWorkspaceState_.asset.fallbackPath }
+			} },
+			{ "selectedEntityId", prefabWorkspaceState_.selectedEntityId },
+			{ "yaw", prefabWorkspaceState_.yaw }, { "pitch", prefabWorkspaceState_.pitch },
+			{ "zoom", prefabWorkspaceState_.zoom }, { "skeleton", prefabWorkspaceState_.skeleton },
+			{ "jointAxes", prefabWorkspaceState_.jointAxes }, { "colliders", prefabWorkspaceState_.colliders },
+			{ "combatVolumes", prefabWorkspaceState_.combatVolumes }, { "clipFocus", prefabWorkspaceState_.clipFocus }
+		} }
 	};
 	EditableResourcePath::WriteTextAtomically(
 		kEditorSettingsPath,
 		settings.dump(2)
 	);
+}
+
+bool ImGuiManager::PrefabWorkspaceState::operator==(const PrefabWorkspaceState& other) const {
+	return windowOpen == other.windowOpen && asset.assetId == other.asset.assetId &&
+		asset.fallbackPath == other.asset.fallbackPath && selectedEntityId == other.selectedEntityId &&
+		yaw == other.yaw && pitch == other.pitch && zoom == other.zoom && skeleton == other.skeleton &&
+		jointAxes == other.jointAxes && colliders == other.colliders && combatVolumes == other.combatVolumes &&
+		clipFocus == other.clipFocus;
+}
+
+ImGuiManager::PrefabWorkspaceState ImGuiManager::CapturePrefabWorkspace() const {
+	PrefabWorkspaceState state = prefabWorkspaceState_;
+	state.windowOpen = showPrefab_;
+	const bool hasPrefab = prefabEditorSession_ && prefabEditorSession_->IsOpen();
+	if (!hasPrefab) state.asset = {};
+	state.selectedEntityId = hasPrefab ? prefabSelectedEntityId_ : 0;
+	if (std::isfinite(prefabPreviewYaw_)) state.yaw = prefabPreviewYaw_;
+	if (std::isfinite(prefabPreviewPitch_)) state.pitch = std::clamp(prefabPreviewPitch_, -1.45f, 1.45f);
+	if (std::isfinite(prefabPreviewZoom_)) state.zoom = std::clamp(prefabPreviewZoom_, 0.02f, 1.75f);
+	state.skeleton = prefabPreviewShowSkeleton_;
+	state.jointAxes = prefabPreviewShowJointAxes_;
+	state.colliders = prefabPreviewShowColliders_;
+	state.combatVolumes = prefabPreviewShowCombatVolumes_;
+	state.clipFocus = prefabClipFocusEnabled_;
+	return state;
+}
+
+void ImGuiManager::PersistPrefabWorkspace(bool force) {
+	// 復元失敗を「利用者が閉じた」と解釈しない。次の明示操作まで元の参照を保持する。
+	if (!prefabEditorSession_ || prefabWorkspaceRestorePending_ || prefabWorkspaceRestoring_ || prefabWorkspaceRestoreFailed_) return;
+	const auto next = CapturePrefabWorkspace();
+	if (!(next == prefabWorkspaceState_)) {
+		prefabWorkspaceState_ = next;
+		prefabWorkspaceDirty_ = true;
+	}
+	if (!prefabWorkspaceDirty_) return;
+	if (!force && (ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+		ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) || ImGuizmo::IsUsing())) return;
+	SaveEditorSettings();
+	prefabWorkspaceDirty_ = false;
+}
+
+void ImGuiManager::RevealPrefabInspector() {
+	showPrefabInspector_ = true;
+	prefabInspectorRevealRequested_ = true;
+}
+
+void ImGuiManager::ApplyPrefabWorkspaceView(const PrefabWorkspaceState& state) {
+	prefabPreviewYaw_ = state.yaw;
+	prefabPreviewPitch_ = state.pitch;
+	prefabPreviewZoom_ = state.zoom;
+	prefabPreviewShowSkeleton_ = state.skeleton;
+	prefabPreviewShowJointAxes_ = state.jointAxes;
+	prefabPreviewShowColliders_ = state.colliders;
+	prefabPreviewShowCombatVolumes_ = state.combatVolumes;
+	prefabClipFocusEnabled_ = state.clipFocus;
+}
+
+void ImGuiManager::RestorePrefabWorkspace() {
+	if (!prefabWorkspaceRestorePending_ || !prefabEditorSession_ || !editorSession_ || !editorSession_->IsEditing()) return;
+	prefabWorkspaceRestorePending_ = false;
+	if (prefabEditorSession_->IsOpen()) return;
+	const auto saved = prefabWorkspaceState_;
+	prefabWorkspaceRestoring_ = true;
+	bool opened = false;
+	std::string detail;
+	try {
+		if (saved.asset.assetId.empty() && saved.asset.fallbackPath.empty()) {
+			opened = true; // Asset未選択のPrefab Windowも表示状態として復元できる。
+		} else {
+			const std::string path = PrefabAssetRegistry::ResolvePath(saved.asset);
+			if (!path.empty() && IsPrefabAssetPath(PathFromUtf8(path))) opened = OpenPrefab(path);
+			if (!opened) detail = prefabEditorSession_->GetLastError();
+		}
+	} catch (const std::exception& error) {
+		// Editor設定に由来する参照が壊れていてもSceneの起動を失敗させない。
+		detail = error.what();
+	}
+	prefabWorkspaceRestoring_ = false;
+	if (!opened) {
+		prefabWorkspaceRestoreFailed_ = true;
+		QueuePrefabWorkspaceWarning(true, saved.asset.fallbackPath.empty() ? saved.asset.assetId : saved.asset.fallbackPath, detail);
+		return;
+	}
+
+	ApplyPrefabWorkspaceView(saved);
+	prefabAnimationPreviewPlaying_ = false;
+	prefabAnimationPreviewActive_ = false;
+	prefabAnimationPreviewTime_ = 0.0f;
+	if (prefabEditorSession_->IsOpen()) {
+		const auto& document = prefabEditorSession_->GetDocument();
+		prefabSelectedEntityId_ = document.FindEntity(saved.selectedEntityId) ? saved.selectedEntityId : 0;
+		if (!prefabSelectedEntityId_) {
+			for (const auto& entity : document.GetEntities()) {
+				if (!entity.parentId) { prefabSelectedEntityId_ = entity.id; break; }
+			}
+		}
+	}
+	showPrefab_ = true;
+	prefabFocusFramesRemaining_ = 2;
+	++prefabPreviewFramingSerial_;
+	RevealPrefabInspector();
+	PersistPrefabWorkspace(true);
+}
+
+void ImGuiManager::ClosePrefabWorkspace() {
+	if (prefabEditorSession_) prefabEditorSession_->Close(true);
+	showPrefab_ = false;
+	prefabSelectedEntityId_ = 0;
+	prefabInspectorRevealRequested_ = false;
+	prefabAnimationPreviewPlaying_ = false;
+	prefabAnimationPreviewActive_ = false;
+	prefabWorkspaceRestorePending_ = false;
+	prefabWorkspaceRestoreFailed_ = false;
+	PersistPrefabWorkspace(true);
+}
+
+void ImGuiManager::QueuePrefabWorkspaceWarning(bool restoring, const std::string& path, const std::string& detail) {
+	prefabWorkspaceWarningIsRestore_ = restoring;
+	prefabWorkspaceWarningPath_ = path;
+	prefabWorkspaceWarningDetail_ = detail;
+	prefabWorkspaceWarningRequested_ = true;
+}
+
+void ImGuiManager::DrawPrefabWorkspaceDialogs() {
+	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	// Windowが非表示/折りたたみでも、Closeの確認を処理してCancelで元の編集を続けられるようにする。
+	DrawPrefabOpenConfirmation();
+	const char* closeLabel = text("Prefabを閉じますか？###ClosePrefabWorkspace", "Close Prefab?###ClosePrefabWorkspace");
+	if (prefabClosePopupRequested_) {
+		ImGui::OpenPopup(closeLabel);
+		prefabClosePopupRequested_ = false;
+		prefabCloseSaveFailed_ = false;
+	}
+	if (ImGui::BeginPopupModal(closeLabel, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextUnformatted(text("現在のPrefabには未保存の変更があります。", "The current Prefab has unsaved changes."));
+		if (ImGui::Button(text("保存して閉じる###SaveClosePrefab", "Save and Close###SaveClosePrefab"))) {
+			if (CanSaveAnimationRotationMode(true)) {
+				prefabCloseSaveFailed_ = !prefabEditorSession_->Save();
+				if (!prefabCloseSaveFailed_) {
+					ClosePrefabWorkspace();
+					ImGui::CloseCurrentPopup();
+				}
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(text("変更を破棄して閉じる###DiscardClosePrefab", "Discard and Close###DiscardClosePrefab"))) {
+			ClosePrefabWorkspace();
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(text("キャンセル###CancelClosePrefab", "Cancel###CancelClosePrefab"))) ImGui::CloseCurrentPopup();
+		if (prefabCloseSaveFailed_) {
+			ImGui::TextWrapped("%s", text("保存できませんでした。保存先とPrefabの構成を確認して再試行してください。",
+				"Saving failed. Check the destination and Prefab structure, then retry."));
+			if (ImGui::TreeNode(text("診断の詳細", "Diagnostic details"))) {
+				ImGui::TextWrapped("%s", prefabEditorSession_->GetLastError().c_str()); ImGui::TreePop();
+			}
+		}
+		ImGui::EndPopup();
+	}
+
+	const char* warningLabel = text("Prefabを開けませんでした###PrefabWorkspaceWarning", "Unable to open Prefab###PrefabWorkspaceWarning");
+	if (prefabWorkspaceWarningRequested_) {
+		ImGui::OpenPopup(warningLabel);
+		prefabWorkspaceWarningRequested_ = false;
+	}
+	ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(warningLabel, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s", prefabWorkspaceWarningIsRestore_
+			? text("前回のPrefabを復元できませんでした。", "The previous Prefab could not be restored.")
+			: text("指定したPrefabを開けませんでした。", "The selected Prefab could not be opened."));
+		ImGui::TextWrapped("%s", text("参照先が見つからないか、読み込めない内容です。ProjectからPrefabの場所と内容を確認し、もう一度開いてください。",
+			"The asset could not be resolved or loaded. Check its location and contents in Project, then open it again."));
+		ImGui::TextWrapped("%s", prefabWorkspaceWarningPath_.c_str());
+		if (!prefabWorkspaceWarningDetail_.empty() && ImGui::TreeNode(text("診断の詳細", "Diagnostic details"))) {
+			ImGui::TextWrapped("%s", prefabWorkspaceWarningDetail_.c_str()); ImGui::TreePop();
+		}
+		if (ImGui::Button(text("閉じる###DismissPrefabWarning", "Close###DismissPrefabWarning"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+
+	const char* referenceLabel = text("Prefab編集のリファレンス###PrefabWorkspaceReference", "Prefab editing reference###PrefabWorkspaceReference");
+	if (prefabWorkspaceReferenceRequested_) {
+		ImGui::OpenPopup(referenceLabel);
+		prefabWorkspaceReferenceRequested_ = false;
+	}
+	ImGui::SetNextWindowSize(ImVec2(580.0f, 0.0f), ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(referenceLabel, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::SeparatorText(text("編集を再開する", "Resume editing"));
+		ImGui::TextWrapped("%s", text(
+			"Prefabを開いたままエディターを終了すると、次回は同じPrefabと選択Entityを開きます。カメラ角度・ズーム・判定表示・Clip Focusも保持します。Prefab画面を明示的に閉じた場合は、次回も閉じた状態です。",
+			"Leaving the Prefab window open restores that asset and selected Entity on restart, together with camera angles, zoom, overlays and Clip Focus. Explicitly closing the window keeps it closed next time."));
+		ImGui::SeparatorText(text("Inspectorの表示", "Inspector selection"));
+		ImGui::TextWrapped("%s", text(
+			"Prefabを開く、またはPrefab内のEntityを選択すると、Prefab Inspectorも表示します。その後は別のタブへ自由に切り替えられます。",
+			"Opening a Prefab or selecting an Entity inside it also reveals Prefab Inspector. You can then switch to another tab freely."));
+		ImGui::SeparatorText(text("保存する内容", "What is saved"));
+		ImGui::TextWrapped("%s", text(
+			"表示設定はEditor設定へ保存します。Prefabの内容はSaveで保存してください。未保存の変更、確認用の途中姿勢、再生時刻は復元しません。再起動後のプレビューは停止状態です。",
+			"View preferences are stored in Editor settings. Use Save for Prefab contents. Unsaved edits, preview poses and playback time are not restored; playback starts stopped."));
+		if (ImGui::Button(text("閉じる###ClosePrefabReference", "Close###ClosePrefabReference"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
 }
 
 bool ImGuiManager::DrawPersistentInspectorHeader(
@@ -1708,6 +2700,7 @@ void ImGuiManager::DrawEditorWorkspace(
 	const char* sceneName
 ) {
 	prefabKeyboardFocusThisFrame_ = false;
+	RestorePrefabWorkspace();
 	UpdateAnimationRotationModeDraft();
 	spatialToolbarHovered_ = false;
 	if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) spatialCancelledGesture_ = false;
@@ -1732,6 +2725,7 @@ void ImGuiManager::DrawEditorWorkspace(
 	}
 
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	if (gameInputOwned_ && gameInputFocusRequested_) ImGui::SetNextWindowFocus();
 	const bool sceneVisible = ImGui::Begin(
 		"Scene",
 		nullptr,
@@ -1741,22 +2735,55 @@ void ImGuiManager::DrawEditorWorkspace(
 
 	sceneDockId_ = ImGui::GetWindowDockID();
 	if (sceneVisible) {
+    if (replayFramingRequest_.preview && !replayFramingRequest_.prefab &&
+        ImGui::Button(SelectEditorText(editorLanguage_,"編集視点へ戻る##ReplaySceneReturn","Return to editing view##ReplaySceneReturn")))
+        { replayFramingRequest_={}; replayFramingManualReady_=false; }
+	const char* aspectLabel = SelectEditorText(editorLanguage_, "表示比率", "View Aspect");
+	const float toolbarWidth = (std::max)(1.0f, ImGui::GetContentRegionAvail().x);
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + toolbarWidth);
+	ImGui::TextUnformatted(aspectLabel);
+	ImGui::PopTextWrapPos();
+	const float labelWidth = ImGui::CalcTextSize(aspectLabel).x + ImGui::GetStyle().ItemSpacing.x;
+	if (toolbarWidth - labelWidth > 130.0f) ImGui::SameLine();
+	ImGui::SetNextItemWidth((std::max)(1.0f, (std::min)(180.0f, ImGui::GetContentRegionAvail().x)));
+	if (ImGui::BeginCombo("##SceneViewAspect", sceneViewFixedAspect_ ? "16:9" : SelectEditorText(editorLanguage_, "自由比率", "Free"))) {
+		if (ImGui::Selectable("16:9", sceneViewFixedAspect_)) { sceneViewFixedAspect_ = true; SaveEditorSettings(); }
+		if (ImGui::Selectable(SelectEditorText(editorLanguage_, "自由比率", "Free"), !sceneViewFixedAspect_)) { sceneViewFixedAspect_ = false; SaveEditorSettings(); }
+		ImGui::EndCombo();
+	}
+	if (editorSession_ && editorSession_->IsPlaying()) ImGui::TextWrapped("%s", gameInputOwned_
+		? SelectEditorText(editorLanguage_, "ゲーム操作中（Altを押している間はEditor操作）", "Game Input (hold Alt for Editor controls)")
+		: SelectEditorText(editorLanguage_, "Editor操作中", "Editor Input"));
 	const ImVec2 availableSize = ImGui::GetContentRegionAvail();
+	const ImVec2 areaOrigin = ImGui::GetCursorScreenPos();
 	uiSourceTextureWidth_=textureWidth; uiSourceTextureHeight_=textureHeight;
 	sceneViewRenderable_ = sceneVisible && std::isfinite(availableSize.x) && std::isfinite(availableSize.y) &&
-		availableSize.x > 0 && availableSize.y > 0;
-	sceneViewWidth_ = static_cast<uint32_t>(
-		(std::max)(availableSize.x, 1.0f)
-	);
-	sceneViewHeight_ = static_cast<uint32_t>(
-		(std::max)(availableSize.y, 1.0f)
-	);
+		availableSize.x >= 1 && availableSize.y >= 1;
+	if (sceneViewRenderable_) {
+	if (gameInputOwned_) gameInputFocusRequested_ = false;
+	ImVec2 targetSize = availableSize;
+	if (sceneViewFixedAspect_) {
+		targetSize.x = (std::min)(availableSize.x, availableSize.y * (16.0f / 9.0f));
+		targetSize.y = targetSize.x * (9.0f / 16.0f);
+	}
+	// 次UpdateのCameraと次DrawのRT群へ渡す寸法。画像の画面座標は描画済み実寸から求める。
+	sceneViewWidth_ = static_cast<uint32_t>((std::max)(std::floor(targetSize.x), 1.0f));
+	sceneViewHeight_ = static_cast<uint32_t>((std::max)(std::floor(targetSize.y), 1.0f));
+	// RT更新までの一Frameも、渡された画像の実寸比を維持して歪ませない。
+	const float textureAspect = static_cast<float>((std::max)(textureWidth, 1u)) / (std::max)(textureHeight, 1u);
+	ImVec2 imageSize;
+	imageSize.x = (std::min)(targetSize.x, targetSize.y * textureAspect);
+	imageSize.y = imageSize.x / textureAspect;
+	ImGui::GetWindowDrawList()->AddRectFilled(areaOrigin,
+		ImVec2(areaOrigin.x + availableSize.x, areaOrigin.y + availableSize.y), IM_COL32(0, 0, 0, 255));
+	ImGui::SetCursorScreenPos(ImVec2(areaOrigin.x + (availableSize.x - imageSize.x) * 0.5f,
+		areaOrigin.y + (availableSize.y - imageSize.y) * 0.5f));
 
 	const ImTextureID textureId =
 		static_cast<ImTextureID>(sceneTexture.ptr);
 	ImGui::Image(
 		ImTextureRef(textureId),
-		availableSize,
+		imageSize,
 		ImVec2(0.0f, 0.0f),
 		ImVec2(1.0f, 1.0f)
 	);
@@ -1767,6 +2794,7 @@ void ImGuiManager::DrawEditorWorkspace(
 	sceneViewMinY_ = sceneMin.y;
 	sceneViewMaxX_ = sceneMax.x;
 	sceneViewMaxY_ = sceneMax.y;
+	sceneViewHasImage_ = true;
 	if (Camera* camera = Object3dCommon::GetInstance()
 		? Object3dCommon::GetInstance()->GetDefaultCamera()
 		: nullptr) {
@@ -2011,9 +3039,13 @@ void ImGuiManager::DrawEditorWorkspace(
 	}
 
 	sceneViewInputActive_ =
-		(sceneImageHovered || ImGui::IsWindowFocused()) &&
+		(gameInputOwned_ || sceneImageHovered || ImGui::IsWindowFocused()) &&
 		!ImGuizmo::IsUsing() &&
 		!ImGuizmo::IsOver();
+	// 黒帯もレイアウト上のitemで確保し、SetCursorScreenPosの未確定境界を残さない。
+	ImGui::SetCursorScreenPos(areaOrigin);
+	ImGui::Dummy(availableSize);
+	} else { sceneViewInputActive_ = false; }
 
 	} else { sceneViewRenderable_ = false; sceneViewInputActive_ = false; }
 	ImGui::End();
@@ -2038,10 +3070,15 @@ void ImGuiManager::DrawEditorWorkspace(
 	if (showPrefab_) {
 		DrawPrefabWindow();
 	}
+	DrawPrefabWorkspaceDialogs();
 	DrawUIReparentConfirmation();
+	DrawMenuInputConversion();
 	DrawMenuAuthoringWarning();
+	DrawPlayerCombatDialogs();
 	DrawSpawnPreparationWarning();
 	DrawProjectAccessWarning();
+	// タブ非表示や同Frameの警告Popupをcaptureへ反映する。
+	SynchronizeGameInput();
 	DrawSceneSpatialPreviewControls();
 	if (prefabKeyboardFocusThisFrame_ && spatialDraft_.kind != SpatialDraftKind::None)
 		CancelSceneSpatialDraft(true);
@@ -2073,6 +3110,7 @@ void ImGuiManager::DrawEditorWorkspace(
 			RefreshSceneSpatialPreviewAfterEdit();
 	}
 	HandleEditShortcuts();
+	PersistPrefabWorkspace();
 
 	(void)textureWidth;
 	(void)textureHeight;
@@ -2900,6 +3938,55 @@ void ImGuiManager::DrawProjectAccessWarning() {
 	ImGui::PopTextWrapPos();
 	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
 	ImGui::EndPopup();
+}
+
+const char* ImGuiManager::LocalizeTransitionFailure(const std::string& detail) const {
+	if (detail.find("Active Scene changed") != std::string::npos) {
+		return SelectEditorText(editorLanguage_, "切替中に現在のSceneが変わったため演出を中止しました。移動元のSceneを確認してから再操作してください。",
+			"The active scene changed during the transition. Check the source scene, then retry.");
+	}
+	if (detail.find("resize") != std::string::npos || detail.find("dimensions") != std::string::npos ||
+		detail.find("Scene/display") != std::string::npos || detail.find("Transition render failed") != std::string::npos) {
+		return SelectEditorText(editorLanguage_, "演出の表示領域または描画を準備できません。Scene表示のサイズ・可視状態を確認し、診断原文の原因を解消してから再操作してください。",
+			"The transition display or rendering could not be prepared. Check the scene view size and visibility, resolve the diagnostic cause, then retry.");
+	}
+	if (detail.find("audioCues") != std::string::npos || detail.find("cue playback failed") != std::string::npos) {
+		return SelectEditorText(editorLanguage_, "演出の音声を準備または再生できません。演出Assetの音源参照と音声設定を確認してください。",
+			"Transition audio could not be prepared or played. Check the audio references and settings in the transition asset.");
+	}
+	return SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました。移動先Sceneと演出Assetの参照・設定を確認し、診断原文の原因を解消してから再操作してください。",
+		"A scene transition problem occurred. Check the destination scene and transition asset references/settings, resolve the diagnostic cause, then retry.");
+}
+
+void ImGuiManager::DrawTransitionReferenceWarning(const std::string& detail) {
+	if (detail.empty()) return;
+	const char* message = SelectEditorText(editorLanguage_, "遷移演出を参照できません。Project内の有効な演出Assetを選び直してください。",
+		"Cannot resolve the transition. Select a valid transition asset in this project.");
+	if (detail == "Invalid transition asset path" || detail == "Parent path is not allowed" ||
+		detail == "Use resources/.../*.transition.json") {
+		message = SelectEditorText(editorLanguage_, "演出Assetのパスが不正です。Project内のresourcesから始まる.transition.jsonを指定し、親フォルダーへの参照や絶対パスを取り除いてください。",
+			"The transition path is invalid. Use a project-relative resources/.../*.transition.json path without parent-folder references or an absolute path.");
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.6f, 0.3f, 1));
+	ImGui::TextWrapped("%s", message);
+	ImGui::PopStyleColor();
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）###TransitionReferenceDetails", "Diagnostic Details###TransitionReferenceDetails"))) {
+		ImGui::TextWrapped("%s", detail.c_str());
+		ImGui::TreePop();
+	}
+}
+
+void ImGuiManager::DrawPresentedTransitionStatus() {
+	if (presentedTransitionActive_)
+		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "Sceneの切替演出を再生中です。", "The scene transition is in progress."));
+	if (presentedTransitionStatus_.empty() || presentedTransitionStatus_ == "Scene transition is active") return;
+	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.6f, 0.3f, 1));
+	ImGui::TextWrapped("%s", LocalizeTransitionFailure(presentedTransitionStatus_));
+	ImGui::PopStyleColor();
+	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）###TransitionStatusDetails", "Diagnostic Details###TransitionStatusDetails"))) {
+		ImGui::TextWrapped("%s", presentedTransitionStatus_.c_str());
+		ImGui::TreePop();
+	}
 }
 
 bool ImGuiManager::ConsumeProjectLauncherRequest(ProjectLauncherRequest& request) {
@@ -4692,6 +5779,10 @@ void ImGuiManager::DrawSceneGizmo(
 }
 
 void ImGuiManager::Finalize(){
+	// Game側のEditorSessionは既に解放経路に入っている。所有しているPrefab sessionを消す前に表示だけ保存する。
+	PersistPrefabWorkspace(true);
+	menuInputCandidate_.reset();
+	menuInputPreview_.clear(); menuInputPreviewRequested_ = false;
 	ClearUIMigrationSnapshots();
 	delete prefabUILayoutPreviewDocument_; prefabUILayoutPreviewDocument_ = nullptr;
 	delete spatialBaseDocument_; spatialBaseDocument_ = nullptr;
@@ -5451,7 +6542,10 @@ void ImGuiManager::DrawSettingsMenu() {
 		ImGui::MenuItem(SelectEditorText(editorLanguage_, "Hierarchy###ShowHierarchyWindow", "Hierarchy###ShowHierarchyWindow"), nullptr, &showHierarchy_);
 		ImGui::MenuItem(SelectEditorText(editorLanguage_, "Inspector###ShowInspectorWindow", "Inspector###ShowInspectorWindow"), nullptr, &showInspector_);
 		ImGui::MenuItem(SelectEditorText(editorLanguage_, "Project###ShowProjectWindow", "Project###ShowProjectWindow"), nullptr, &showProject_);
-		ImGui::MenuItem(SelectEditorText(editorLanguage_, "Prefab###ShowPrefabWindow", "Prefab###ShowPrefabWindow"), nullptr, &showPrefab_);
+		if (ImGui::MenuItem(SelectEditorText(editorLanguage_, "Prefab###ShowPrefabWindow", "Prefab###ShowPrefabWindow"), nullptr, &showPrefab_)) {
+			if (showPrefab_) RevealPrefabInspector();
+			else { prefabWorkspaceRestorePending_ = false; prefabWorkspaceRestoreFailed_ = false; }
+		}
 		bool prefabInspectorVisible = showPrefabInspector_;
 		if (ImGui::MenuItem(
 			SelectEditorText(
@@ -5718,6 +6812,7 @@ void ImGuiManager::CreateDockSpace(){
 			))) {
 				showPrefab_ = true;
 				prefabFocusFramesRemaining_ = 2;
+				RevealPrefabInspector();
 			}
 			if (ImGui::MenuItem(SelectEditorText(
 				editorLanguage_,
@@ -5737,6 +6832,11 @@ void ImGuiManager::CreateDockSpace(){
 				"Ctrl+Shift+P"
 			)) {
 				RequestPrefabQuickOpen();
+			}
+			ImGui::Separator();
+			if (ImGui::MenuItem(SelectEditorText(editorLanguage_,
+				"編集のリファレンス###PrefabWorkspaceReferenceMenu", "Editing reference###PrefabWorkspaceReferenceMenu"))) {
+				prefabWorkspaceReferenceRequested_ = true;
 			}
 			ImGui::EndMenu();
 		}
@@ -5791,6 +6891,7 @@ void ImGuiManager::DrawPlaybackControls() {
 	if (state == EditorPlayState::Edit) {
 		if (ImGui::SmallButton("Play")) {
 			editorSession_->Play();
+			RequestGameInputFocus();
 		}
 	}
 	else {
@@ -5802,6 +6903,7 @@ void ImGuiManager::DrawPlaybackControls() {
 		if (state == EditorPlayState::Paused) {
 			if (ImGui::SmallButton("Resume")) {
 				editorSession_->Resume();
+				RequestGameInputFocus();
 			}
 		}
 		else if (ImGui::SmallButton("Pause")) {
@@ -5895,7 +6997,7 @@ void ImGuiManager::BuildDefaultLayout() {
 	ImGui::DockBuilderDockWindow("Prefab", centerId);
 	ImGui::DockBuilderDockWindow("Hierarchy", leftId);
 	ImGui::DockBuilderDockWindow("Inspector", rightId);
-	ImGui::DockBuilderDockWindow("Prefab Inspector", rightId);
+	ImGui::DockBuilderDockWindow("Prefab Inspector###PrefabInspector", rightId);
 	ImGui::DockBuilderDockWindow("Scene Controls", rightId);
 	ImGui::DockBuilderDockWindow("Title Scene", rightId);
 	ImGui::DockBuilderDockWindow("Particle Effect Editor", rightId);
@@ -8657,6 +9759,109 @@ namespace {
 		return pressed;
 	}
 
+	bool DrawStatTextFields(EditorLanguage language, const SceneDocument& document, const SceneEntity& owner,
+		SceneComponent& c, bool editable, const SceneManager* runtime, StatTextAuthoringRequest& request) {
+		bool changed = false;
+		ImGui::PushID("StatTextFields");
+		MenuInspectorSection section;
+		ImGui::BeginDisabled(!editable);
+		section.Begin(SelectEditorText(language,"参照","Source"));
+		const auto* target = StatTextTarget(document, owner, c);
+		ImGui::TextUnformatted(SelectEditorText(language,"対象Entity","Target Entity")); ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+		if (ImGui::BeginCombo("##Source", target ? target->name.c_str() : SelectEditorText(language,"未設定・参照切れ","Unset / missing"))) {
+			static char filter[128]{};
+			ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth()); ImGui::InputTextWithHint("##Search",SelectEditorText(language,"検索","Search"),filter,sizeof(filter));
+			if (ImGui::Selectable(SelectEditorText(language,"自分を参照","Self"), !c.statTextStatsEntityId && c.statTextStatsEntityName.empty())) {
+				c.statTextStatsEntityId=0; c.statTextStatsEntityName.clear(); changed=true;
+			}
+			for (const auto& e : document.GetEntities()) {
+				if (!FindEnabledComponent(e,"StatSet") || (filter[0] && e.name.find(filter)==std::string::npos)) continue;
+				ImGui::PushID(std::to_string(e.id).c_str());
+				if (ImGui::Selectable(e.name.c_str(),target && target->id==e.id)) {
+					c.statTextStatsEntityId=e.id; c.statTextStatsEntityName.clear(); changed=true;
+				}
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		target=StatTextTarget(document,owner,c);
+		const auto* stats=target ? FindEnabledComponent(*target,"StatSet") : nullptr;
+		ImGui::TextUnformatted(SelectEditorText(language,"能力値","Stat")); ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+		if (ImGui::BeginCombo("##Stat",c.statTextStatId.c_str())) {
+			if (stats) for (const auto& n : stats->stats) {
+				const auto label=n.displayName+" ["+n.id+"]";
+				if (ImGui::Selectable(label.c_str(),c.statTextStatId==n.id)) { c.statTextStatId=n.id; changed=true; }
+			}
+			ImGui::EndCombo();
+		}
+		section.Begin(SelectEditorText(language,"表示","Display"));
+		ImGui::TextUnformatted(SelectEditorText(language,"表示形式","Format")); ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+		if (ImGui::BeginCombo("##Mode",SelectEditorText(language,c.statTextDisplayMode=="Current"?"現在値":"現在値 / 上限",c.statTextDisplayMode=="Current"?"Current":"Current / maximum"))) {
+			if (ImGui::Selectable(SelectEditorText(language,"現在値","Current"),c.statTextDisplayMode=="Current")) { c.statTextDisplayMode="Current"; changed=true; }
+			if (ImGui::Selectable(SelectEditorText(language,"現在値 / 上限","Current / maximum"),c.statTextDisplayMode=="CurrentAndMax")) { c.statTextDisplayMode="CurrentAndMax"; changed=true; }
+			ImGui::EndCombo();
+		}
+		const auto stringField=[&](const char* id,const char* label,std::string& value) {
+			ImGui::PushID(id); ImGui::TextWrapped("%s",label); ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+			char buffer[1024]{}; CopyTextBuffer(buffer,sizeof(buffer),value);
+			if (ImGui::InputText("##Value",buffer,sizeof(buffer))) { value=buffer; changed=true; }
+			ImGui::PopID();
+		};
+		stringField("Prefix",SelectEditorText(language,"前につける文字","Prefix"),c.statTextPrefix);
+		stringField("Suffix",SelectEditorText(language,"後ろにつける文字","Suffix"),c.statTextSuffix);
+		ImGui::TextUnformatted(SelectEditorText(language,"小数桁数","Decimal places")); ImGui::SetNextItemWidth(MenuInspectorSection::ContentWidth());
+		changed |= ImGui::SliderInt("##Decimals",&c.statTextDecimalPlaces,0,3);
+		ImGui::EndDisabled();
+		section.Begin(SelectEditorText(language,"確認","Preview"));
+		if(std::count_if(owner.components.begin(),owner.components.end(),[](const auto& n){ return n.type=="StatTextDisplay"; })>1)
+			ImGui::TextWrapped("%s",StatTextIssue(language,"StatText:Duplicate"));
+		if(c.statTextDecimalPlaces<0 || c.statTextDecimalPlaces>3 || (c.statTextDisplayMode!="Current" && c.statTextDisplayMode!="CurrentAndMax"))
+			ImGui::TextWrapped("%s",StatTextIssue(language,"StatText:Format"));
+		if(!FindEnabledComponent(owner,"TextRenderer")) ImGui::TextWrapped("%s",StatTextIssue(language,"StatText:TextMissing"));
+		bool conflict=false;
+		for(const auto& source:document.GetEntities()) for(const auto& writer:source.components) {
+			if(!writer.enabled)continue;
+			if(writer.type=="GameFlowDirector") conflict |= writer.gameFlowIntroTextEntityId==owner.id || writer.gameFlowCountdownTextEntityId==owner.id || writer.gameFlowPhaseTextEntityId==owner.id || writer.gameFlowTimerTextEntityId==owner.id || writer.gameFlowRemainingTextEntityId==owner.id || writer.gameFlowResultTimeTextEntityId==owner.id;
+			if(writer.type=="PostProcessProfileManager") conflict |= writer.postProcessStatusTextEntityId==owner.id || (!writer.postProcessStatusTextEntityId && !writer.postProcessStatusTextEntityName.empty() && writer.postProcessStatusTextEntityName==owner.name);
+		}
+		if(conflict)ImGui::TextWrapped("%s",StatTextIssue(language,"StatText:Conflict"));
+		float current=0, maximum=0; bool valid=false;
+		if (stats) for (const auto& n:stats->stats) if(n.id==c.statTextStatId) {
+			if(!std::isfinite(n.initialValue) || !std::isfinite(n.minValue) || !std::isfinite(n.maxValue)) break;
+			current=std::clamp(n.initialValue,n.minValue,(std::max)(n.minValue,n.maxValue)); maximum=(std::max)(n.minValue,n.maxValue);
+			valid=!runtime || runtime->TryGetRuntimeStat(document,target->id,n.id,current,&maximum); break;
+		}
+		ImGui::TextUnformatted(SelectEditorText(language,runtime?"実行中の現在値":"編集用の初期値",runtime?"Runtime value":"Initial value for editing"));
+		if(valid && std::isfinite(current) && std::isfinite(maximum) && c.statTextDecimalPlaces>=0 && c.statTextDecimalPlaces<=3) {
+			const auto number=[&](float value) {
+				const double factor=std::pow(10.0,c.statTextDecimalPlaces); double rounded=std::round(static_cast<double>(value)*factor)/factor;
+				if(rounded==0)rounded=0;
+				std::ostringstream out; out.imbue(std::locale::classic()); out<<std::fixed<<std::setprecision(c.statTextDecimalPlaces)<<rounded; return out.str();
+			};
+			std::string preview=c.statTextPrefix+number(current);
+			if(c.statTextDisplayMode=="CurrentAndMax")preview+=" / "+number(maximum);
+			preview+=c.statTextSuffix; ImGui::TextWrapped("%s",preview.c_str());
+		} else ImGui::TextWrapped("%s",StatTextIssue(language,"StatText:Reference"));
+		if(target && MenuInspectorButton(SelectEditorText(language,"参照先のInspectorを開く","Open source Inspector"),ImVec2(MenuInspectorSection::ContentWidth(),0))) { request.inspectId=target->id; request.inspectType="StatSet"; }
+		if(FindComponent(owner,"TextRenderer")) {
+			if(MenuInspectorButton(SelectEditorText(language,"文字のInspectorを開く","Open text Inspector"),ImVec2(MenuInspectorSection::ContentWidth(),0))) { request.inspectId=owner.id; request.inspectType="TextRenderer"; }
+		} else {
+			ImGui::TextWrapped("%s",StatTextIssue(language,"StatText:TextMissing"));
+			ImGui::BeginDisabled(!editable);
+			if(MenuInspectorButton(SelectEditorText(language,"文字表示を追加","Add text renderer"),ImVec2(MenuInspectorSection::ContentWidth(),0))) request.addText=true;
+			ImGui::EndDisabled();
+		}
+		if(MenuInspectorButton(SelectEditorText(language,"能力値表示のリファレンス","Stat display reference"),ImVec2(MenuInspectorSection::ContentWidth(),0))) ImGui::OpenPopup("StatTextReference");
+		if(ImGui::BeginPopup("StatTextReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+420);
+			ImGui::TextUnformatted(SelectEditorText(language,
+				"参照 → 表示 → 確認の順に設定します。\n1. TextRendererと能力値表示を同じEntityへ追加。\n2. 対象EntityとHP [hp]を選択。\n3. 現在値 / 上限、前につける文字HP、小数0桁を設定。位置はUI配置、外観はTextRendererで調整します。\n編集時は初期値、Play中は現在値です。文字原文とHPを書き換えません。小数は四捨五入、表示だけを丸めます。参照切れは空表示。GameFlow等の管理文字と兼用しないでください。通常HUDなのでリプレイ中は隠れます。Eventは既存の能力値変更を利用します。",
+				"Configure Source, Display, then Preview.\n1. Add TextRenderer and StatTextDisplay to the same Entity.\n2. Select the source Entity and HP [hp].\n3. Choose Current / maximum, prefix HP, and zero decimals. Use UI placement and TextRenderer for appearance.\nEditing shows initial values; Play shows current values. Neither saved text nor HP is changed. Rounding affects display only. Missing references produce empty text. Do not share GameFlow-managed text. Normal HUD is hidden during replay. Use existing stat-changing Events."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+		section.End(); ImGui::PopID(); return changed;
+	}
+
 	bool IsMenuDescendant(const SceneDocument& document, uint64_t id, uint64_t rootId, bool includeRoot = true) {
 		if (!rootId) return true;
 		if (!includeRoot && id == rootId) return false;
@@ -8671,7 +9876,7 @@ namespace {
 	const char* MenuAuthoringLabel(EditorLanguage language, const char* id) {
 		struct Label { const char* id; const char* ja; const char* en; };
 		static constexpr Label labels[] = {
-			{ "Gameplay", "ゲーム", "Gameplay" }, { "UI", "UI（メニュー）", "UI (Menus)" },
+			{ "Gameplay", "ゲーム", "Gameplay" }, { "UI", "UI（メニュー）", "UI (Menus)" }, { "Death", "死亡時の演出", "Death presentation" },
 			{ "Vertical", "縦", "Vertical" }, { "Horizontal", "横", "Horizontal" },
 			{ "Close", "閉じる", "Close" }, { "InvokeItem", "指定項目を実行", "Invoke Item" }, { "None", "何もしない", "None" },
 			{ "WhenNoMenu", "メニューを表示していないとき", "When No Menu Is Open" },
@@ -8679,6 +9884,9 @@ namespace {
 			{ "OnKeyPressed", "キーを押したとき", "Key Pressed" },
 			{ "OnMenuItemConfirmed", "項目を決定したとき", "Menu Item Confirmed" },
 			{ "OnMenuCancelled", "キャンセルしたとき", "Menu Cancelled" },
+			{ "OnDeathReplayCompleted", "死亡リプレイが終わったとき", "Death Replay Completed" },
+            { "AddReplayOpen", "リプレイ完了条件を追加", "Add Replay Completion Binding" },
+            { "RemoveReplayOpen", "リプレイ完了条件を削除", "Remove Replay Completion Binding" },
 			{ "OpenMenu", "メニューを開く", "Open Menu" }, { "CloseMenu", "メニューを閉じる", "Close Menu" },
 			{ "SelectPreviousMenuItem", "前の項目を選ぶ", "Select Previous Item" },
 			{ "SelectNextMenuItem", "次の項目を選ぶ", "Select Next Item" },
@@ -8686,11 +9894,13 @@ namespace {
 			{ "PauseGame", "ゲームをポーズ", "Pause Game" }, { "ResumeGame", "ゲームを再開", "Resume Game" },
 			{ "RequestApplicationExit", "ゲーム終了を要求", "Request Application Exit" },
 			{ "SceneTransition", "Sceneを切り替える", "Change Scene" },
+			{ "ExitGame", "ゲームを終了", "Exit game" },
 			{ "PlayAudio", "音を再生", "Play Audio" }, { "StopAudio", "音を停止", "Stop Audio" },
 			{ "PauseAudio", "音を一時停止", "Pause Audio" }, { "ResumeAudio", "音を再開", "Resume Audio" },
 			{ "PlayTextMotion", "文字演出を再生", "Play Text Motion" }, { "StopTextMotion", "文字演出を停止", "Stop Text Motion" },
 			{ "ResetTextMotion", "文字演出をリセット", "Reset Text Motion" },
 			{ "ESCAPE", "Esc", "Esc" }, { "ENTER", "Enter", "Enter" },
+			{ "SPACE", "スペース", "Space" },
 			{ "UP", "↑", "Up" }, { "DOWN", "↓", "Down" }, { "LEFT", "←", "Left" }, { "RIGHT", "→", "Right" }
 		};
 		for (const Label& label : labels) if (std::strcmp(label.id, id) == 0) return SelectEditorText(language, label.ja, label.en);
@@ -8805,10 +10015,11 @@ bool ImGuiManager::DrawUiEventActions(SceneDocument& document, SceneEventBinding
 		ImGui::Separator();
 		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "処理", "Action"), action.type,
 			{ "OpenMenu", "CloseMenu", "SelectPreviousMenuItem", "SelectNextMenuItem", "ConfirmMenuItem", "CancelMenu",
-			  "SceneTransition", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio",
-			  "PlayTextMotion", "StopTextMotion", "ResetTextMotion" });
-		if (action.type == "PauseGame" || action.type == "ResumeGame" || action.type == "RequestApplicationExit")
-			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "ゲーム内Pause・再開・アプリ終了は後続実装です。この設定は保持しますが、現在は実行しません。", "In-game pause, resume and application exit are pending implementation. This setting is preserved but will not execute yet."));
+			  "SceneTransition", "ExitGame", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio",
+			  "PlayTextMotion", "StopTextMotion", "ResetTextMotion", "PauseGame", "ResumeGame" });
+		if (action.type == "ExitGame") DrawExitGameReference(editorLanguage_);
+		if (action.type == "RequestApplicationExit")
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "旧終了要求は実行しません。処理から「ゲームを終了」を選び直してください。", "The legacy exit request is not executed. Select Exit game from Action instead."));
 		const char* targetType = nullptr;
 		if (action.type == "OpenMenu" || action.type == "CloseMenu" || action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" || action.type == "ConfirmMenuItem" || action.type == "CancelMenu") targetType = "MenuPanel";
 		else if (action.type == "PauseGame" || action.type == "ResumeGame") targetType = "GamePause";
@@ -8840,11 +10051,8 @@ bool ImGuiManager::DrawUiEventActions(SceneDocument& document, SceneEventBinding
 				ImGui::EndCombo();
 			}
 			changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "演出Asset", "Transition Asset"), [&](const char* fieldLabel) { return InputTransitionAssetPath(fieldLabel, action.transitionAssetPath); });
-			const auto issue = TransitionReferenceIssue(action.transitionAssetPath);
-			if (!issue.empty()) {
-				ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "遷移演出を参照できません。Project内の有効な演出Assetを選び直してください。", "Cannot resolve the transition. Select a valid transition asset in this project."));
-				if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) { ImGui::TextWrapped("%s", issue.c_str()); ImGui::TreePop(); }
-			}
+			DrawTransitionReferenceWarning(TransitionReferenceIssue(action.transitionAssetPath));
+			DrawPresentedTransitionStatus();
 		}
 		if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "処理を削除", "Remove Action"))) removeIndex = static_cast<int>(i);
 		ImGui::PopID();
@@ -8857,19 +10065,304 @@ bool ImGuiManager::DrawUiEventActions(SceneDocument& document, SceneEventBinding
 	return changed;
 }
 
-bool ImGuiManager::DrawUiEventBinding(SceneDocument& document, SceneEventBinding& binding) {
+bool ImGuiManager::DrawEventTriggerKeys(SceneEventBinding& binding, const std::vector<std::string>& blockedKeys, bool standard) {
+	ImGui::PushID("EventKeys");
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "どれかのキーを押したとき", "When Any Key Is Pressed"));
+	std::vector<std::string> keys{binding.triggerKey};
+	keys.insert(keys.end(), binding.additionalTriggerKeys.begin(), binding.additionalTriggerKeys.end());
 	bool changed = false;
-	ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "UIイベント：メニュー操作の実行接続は後続工程です", "UI event: menu runtime integration is pending"));
-	changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "条件", "Condition"), binding.triggerType,
-		{ "OnKeyPressed", "OnMenuItemConfirmed", "OnMenuCancelled" });
-	if (binding.triggerType == "OnKeyPressed") {
-		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "入力を受けるとき", "Input Scope"), binding.uiInputScope, { "WhenNoMenu", "FocusedMenu" });
-		if (ImGui::BeginCombo(SelectEditorText(editorLanguage_, "キー", "Key"), MenuAuthoringLabel(editorLanguage_, binding.triggerKey.c_str()))) {
-			for (const SceneInputKeyDefinition& key : kSceneInputKeyDefinitions) {
-				if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, key.name), binding.triggerKey == key.name)) { binding.triggerKey = key.name; changed = true; }
+	int remove = -1;
+	const auto reject = [&](const char* reason) {
+		menuWarningRequested_ = true;
+		menuWarningOperation_ = standard ? "StandardInput" : "EventKeys";
+		menuWarningTarget_ = standard ? "MenuPanel" : "EventTrigger";
+		menuWarningReason_ = reason;
+	};
+	const auto registered = [&](BYTE code, int except) {
+		for (size_t i = 0; i < keys.size(); ++i)
+			if (static_cast<int>(i) != except && ResolveSceneInputKey(keys[i]) == code) return true;
+		return false;
+	};
+	const auto blocked = [&](BYTE code) {
+		return std::any_of(blockedKeys.begin(), blockedKeys.end(), [&](const auto& key) { return ResolveSceneInputKey(key) == code; });
+	};
+	for (size_t i = 0; i < keys.size(); ++i) {
+		ImGui::PushID(static_cast<int>(i));
+		const float width = MenuInspectorSection::ContentWidth();
+		const char* removeLabel = SelectEditorText(editorLanguage_, "削除", "Remove");
+		const float buttonWidth = ImGui::CalcTextSize(removeLabel).x + ImGui::GetStyle().FramePadding.x * 2;
+		const bool inlineButton = width >= 240.0f;
+		ImGui::SetNextItemWidth(inlineButton ? width - buttonWidth - ImGui::GetStyle().ItemSpacing.x : width);
+		const BYTE current = ResolveSceneInputKey(keys[i]);
+		const char* preview = SelectEditorText(editorLanguage_, "未設定（選択してください）", "Unset (Choose a Key)");
+		for (const auto& key : kSceneInputKeyDefinitions) if (key.code == current) preview = MenuAuthoringLabel(editorLanguage_, key.name);
+		if (ImGui::BeginCombo("##Key", preview)) {
+			for (const auto& key : kSceneInputKeyDefinitions) {
+				const bool duplicate = registered(key.code, static_cast<int>(i));
+				const bool conflict = blocked(key.code);
+				ImGui::BeginDisabled(duplicate || conflict);
+				if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, key.name), key.code == current)) {
+					if (duplicate) reject("EventKeys:Duplicate");
+					else if (conflict) reject("MenuRuntime:StandardKeysConflict");
+					else { keys[i] = key.name; changed = true; }
+				}
+				ImGui::EndDisabled();
+				if ((duplicate || conflict) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+					ImGui::SetTooltip("%s", LocalizeMenuIssue(conflict ? "MenuRuntime:StandardKeysConflict" : "EventKeys:Duplicate").c_str());
 			}
 			ImGui::EndCombo();
 		}
+		if (inlineButton) ImGui::SameLine();
+		if (ImGui::Button(removeLabel, ImVec2((std::min)(buttonWidth, width), 0))) {
+			if (keys.size() == 1) reject(standard ? "MenuRuntime:StandardKeysEmpty" : "EventKeys:LastKey");
+			else remove = static_cast<int>(i);
+		}
+		if (!current) ImGui::TextWrapped("%s", LocalizeMenuIssue("EventKeys:Invalid").c_str());
+		else if (registered(current, static_cast<int>(i))) ImGui::TextWrapped("%s", LocalizeMenuIssue("EventKeys:Duplicate").c_str());
+		ImGui::PopID();
+	}
+	// 行の参照を無効化せず、先頭削除も同じ一覧操作から次のキーを繰り上げる。
+	if (remove >= 0) { keys.erase(keys.begin() + remove); changed = true; }
+	const float width = MenuInspectorSection::ContentWidth();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "＋ キーを追加...", "+ Add Key..."), ImVec2(width, 0))) {
+		eventKeySearch_.clear(); ImGui::OpenPopup("AddKey");
+	}
+	ImGui::SetNextWindowSize(ImVec2(300, 340), ImGuiCond_Appearing);
+	if (ImGui::BeginPopup("AddKey")) {
+		// Popupは親Inspectorの内容幅を引き継がない。
+		ImGui::PushItemWidth(-1);
+		ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "検索", "Search"));
+		InputTextString("##Search", eventKeySearch_);
+		ImGui::PopItemWidth();
+		std::string query = eventKeySearch_;
+		std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		for (const auto& key : kSceneInputKeyDefinitions) {
+			const char* label = MenuAuthoringLabel(editorLanguage_, key.name);
+			std::string candidate = std::string(key.name) + " " + label;
+			std::transform(candidate.begin(), candidate.end(), candidate.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			if (!query.empty() && candidate.find(query) == std::string::npos) continue;
+			const bool duplicate = registered(key.code, -1);
+			const bool conflict = blocked(key.code);
+			ImGui::BeginDisabled(duplicate || conflict);
+			if (ImGui::Selectable(label)) {
+				if (duplicate) reject("EventKeys:Duplicate");
+				else if (conflict) reject("MenuRuntime:StandardKeysConflict");
+				else { keys.push_back(key.name); changed = true; }
+			}
+			ImGui::EndDisabled();
+			if ((duplicate || conflict) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+				ImGui::SetTooltip("%s", LocalizeMenuIssue(conflict ? "MenuRuntime:StandardKeysConflict" : "EventKeys:Duplicate").c_str());
+		}
+		ImGui::EndPopup();
+	}
+	if (changed) {
+		binding.triggerKey = keys.front();
+		binding.additionalTriggerKeys.assign(keys.begin() + 1, keys.end());
+	}
+	ImGui::PopID();
+	return changed;
+}
+
+void ImGuiManager::PrepareMenuInputConversion(SceneDocument& document, uint64_t panelId, bool prefab, const std::string& mode) {
+	menuInputCandidate_ = std::make_shared<SceneDocument>(document);
+	menuInputGeneration_ = document.GetContentGeneration(); menuInputRevision_ = document.GetRevision();
+	menuInputPrefab_ = prefab; menuInputPreviewRequested_ = true;
+	menuInputPreview_.clear(); menuInputConversionBlocked_ = false;
+	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	auto block = [&](const std::string& message) { menuInputConversionBlocked_ = true; menuInputPreview_.push_back(message); };
+	auto editable = [&](const SceneEntity& owner) {
+		return !document.IsPrefabVariant() && !owner.folder && !owner.locked && owner.prefabLinks.empty() &&
+			!owner.prefabInstanceRootId && owner.prefabSourcePath.empty();
+	};
+	auto* panelOwner = menuInputCandidate_->FindEntity(panelId);
+	auto* panel = panelOwner ? FindComponent(*panelOwner, "MenuPanel") : nullptr;
+	if (!panel || (mode != "Standard" && mode != "Events")) { block(text("対象Panelを確認できません。操作をやり直してください。", "Panel unavailable. Start the operation again.")); return; }
+	menuInputPreview_.push_back(panelOwner->name + " : " + text(mode == "Standard" ? "標準操作へ変換" : "Event方式へ変換", mode == "Standard" ? "Convert to Standard Controls" : "Convert to Event Controls"));
+	if (!editable(*panelOwner)) block(text("PanelがロックまたはPrefab管理下です。編集可能にしてからやり直してください。", "Panel is locked or prefab-managed. Make it editable and try again."));
+	const auto groups = panel->MenuStandardKeyGroups();
+	const auto active = MenuActiveKeyGroups(panel->menuNavigationAxis);
+	const char* actions[] = {"SelectPreviousMenuItem", "SelectNextMenuItem", "ConfirmMenuItem", "CancelMenu"};
+	const char* defaults[] = {panel->menuNavigationAxis == "Horizontal" ? "LEFT" : "UP", panel->menuNavigationAxis == "Horizontal" ? "RIGHT" : "DOWN", "ENTER", "ESCAPE"};
+	const char* labels[] = {text("上へ", "Up"), text("下へ", "Down"), text("左へ", "Left"), text("右へ", "Right"), text("決定", "Confirm"), text("キャンセル", "Cancel")};
+	std::array<bool, 4> imported{};
+	// Standardでは既存標準予約と先行bindingに隠れたキーを復活させない。
+	std::vector<BYTE> effectiveSeen = mode == "Events" ? ResolveMenuStandardKeys(groups, panel->menuNavigationAxis) : std::vector<BYTE>{};
+	if (mode == "Events") menuInputPreview_.push_back(text("既存の標準予約・先行Eventに隠れていたキーは復活させず、実効キーだけを引き継ぎます。", "Only effective keys are imported; keys masked by standard controls or earlier events are not reactivated."));
+	auto appendKeys = [&](std::vector<std::string>& destination, const SceneEventBinding& binding) {
+		const auto append = [&](const std::string& name) {
+			const BYTE code = ResolveSceneInputKey(name);
+			if (mode == "Events") {
+				if (std::find(effectiveSeen.begin(), effectiveSeen.end(), code) != effectiveSeen.end()) return;
+				effectiveSeen.push_back(code);
+			}
+			if (std::none_of(destination.begin(), destination.end(), [&](const auto& key) { return ResolveSceneInputKey(key) == code; })) {
+				for (const auto& definition : kSceneInputKeyDefinitions) if (definition.code == code) { destination.push_back(definition.name); break; }
+			}
+		};
+		append(binding.triggerKey); for (const auto& key : binding.additionalTriggerKeys) append(key);
+	};
+	// 純粋な操作だけ候補側から除去する。無効owner/Componentと他用途Eventには触れない。
+	for (auto& owner : menuInputCandidate_->GetEntities()) {
+		const bool ownerActive = IsEntityActiveInHierarchy(document, owner);
+		for (auto& events : owner.components) {
+			if (events.type != "EventTrigger" || !events.enabled || !ownerActive) continue;
+			std::vector<size_t> removals;
+			for (size_t i = 0; i < events.eventBindings.size(); ++i) {
+				const auto& binding = events.eventBindings[i];
+				if (binding.executionDomain != "UI" || binding.triggerType != "OnKeyPressed") continue;
+				int operation = -1;
+				for (const auto& action : binding.actions) for (int n = 0; n < 4; ++n)
+					if (action.targetEntityId == panelId && action.type == actions[n]) operation = n;
+				if (operation < 0) continue;
+				const std::string source = owner.name + " / " + std::to_string(i + 1) + " : ";
+				const bool pure = binding.uiInputScope == "FocusedMenu" && binding.targetEntityId == panelId &&
+					binding.actions.size() == 1 && !binding.triggerOnce && binding.cooldown == 0.0f;
+				const auto codes = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+				if (!pure || codes.size() != binding.additionalTriggerKeys.size() + 1) {
+					block(source + text("変換できません。操作を一つにし、一度だけ・待ち時間・無効/重複キーを整理するか、切替を取り消してください。", "Cannot convert. Use one focused control action, disable Once/cooldown, and fix invalid/duplicate keys, or cancel conversion.")); continue;
+				}
+				if (!editable(owner)) { block(source + text("接続元がロックまたはPrefab管理下です。編集可能にしてください。", "Binding owner is locked or prefab-managed. Make it editable.")); continue; }
+				auto& keys = *groups[active[operation]];
+				if (!imported[operation] && mode == "Standard") keys.clear();
+				appendKeys(keys, binding); imported[operation] = true;
+				std::string names = binding.triggerKey;
+				for (const auto& key : binding.additionalTriggerKeys) names += ", " + key;
+				menuInputPreview_.push_back(source + text("引継ぎ・除去", "Import and remove") + " OnKeyPressed [" + names + "] / " + labels[active[operation]]);
+				removals.push_back(i);
+			}
+			for (auto i = removals.rbegin(); i != removals.rend(); ++i) events.eventBindings.erase(events.eventBindings.begin() + *i);
+		}
+	}
+	for (size_t n = 0; n < active.size(); ++n) {
+		auto& keys = *groups[active[n]];
+		if (mode == "Standard" && !imported[n]) keys = {defaults[n]};
+		std::string line = std::string(labels[active[n]]) + " : ";
+		for (const auto& key : keys) { if (line.back() != ' ') line += ", "; line += key; }
+		if (mode == "Standard" && !imported[n]) line += text("（既定キーを補完）", " (default supplied)");
+		menuInputPreview_.push_back(line);
+	}
+	if (const char* error = ValidateMenuStandardKeys(groups, panel->menuNavigationAxis); *error) block(LocalizeMenuRuntimeIssue(error));
+	for (const auto* keys : groups) {
+		const auto validCount = std::count_if(keys->begin(), keys->end(), [](const auto& key) { return ResolveSceneInputKey(key) != 0; });
+		if (ResolveSceneInputKeys("", *keys).size() < static_cast<size_t>(validCount)) block(LocalizeMenuRuntimeIssue("MenuRuntime:StandardKeysDuplicate"));
+	}
+	const auto reserved = ResolveMenuStandardKeys(groups, panel->menuNavigationAxis);
+	for (const auto& owner : menuInputCandidate_->GetEntities()) for (const auto& events : owner.components) {
+		if (events.type != "EventTrigger") continue;
+		for (const auto& binding : events.eventBindings) {
+			if (binding.executionDomain != "UI" || binding.triggerType != "OnKeyPressed" ||
+				binding.uiInputScope != "FocusedMenu" || binding.targetEntityId != panelId) continue;
+			const auto codes = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+			if (!std::any_of(codes.begin(), codes.end(), [&](BYTE key) { return std::find(reserved.begin(), reserved.end(), key) != reserved.end(); })) continue;
+			const bool enabled = events.enabled && IsEntityActiveInHierarchy(document, owner);
+			const std::string message = owner.name + " : " + text(enabled ? "他用途Eventとキーが重複します。Eventを整理するか切替を取り消してください。" : "無効Eventとキーが重複します。有効化する前に設定を確認してください。",
+				enabled ? "Keys overlap another event. Resolve the event conflict or cancel conversion." : "Keys overlap an inactive event. Review its settings before enabling it.");
+			if (enabled) block(message); else menuInputPreview_.push_back(message);
+		}
+	}
+	if (mode == "Events" && !menuInputConversionBlocked_) {
+		// AddComponentが配列を再配置し得るため、追加後はPanel/EventsをIDから再解決する。
+		const auto savedGroups = std::array<std::vector<std::string>, 4>{*groups[active[0]], *groups[active[1]], *groups[active[2]], *groups[active[3]]};
+		if (!FindComponent(*panelOwner, "EventTrigger")) menuInputCandidate_->AddComponent(panelId, "EventTrigger");
+		panelOwner = menuInputCandidate_->FindEntity(panelId);
+		auto* events = FindComponent(*panelOwner, "EventTrigger");
+		if (!events || !events->enabled) { block(text("PanelのEventTriggerを有効にしてからやり直してください。", "Enable the panel's EventTrigger and try again.")); return; }
+		for (size_t n = 0; n < active.size(); ++n) {
+			SceneEventBinding binding; binding.executionDomain = "UI"; binding.uiInputScope = "FocusedMenu";
+			binding.triggerType = "OnKeyPressed"; binding.triggerOnce = false; binding.targetEntityId = panelId;
+			binding.triggerKey = savedGroups[n].front(); binding.additionalTriggerKeys.assign(savedGroups[n].begin() + 1, savedGroups[n].end());
+			SceneEventAction action; action.type = actions[n]; action.targetEntityId = panelId; binding.actions.push_back(action);
+			events->eventBindings.push_back(std::move(binding));
+		}
+		menuInputPreview_.push_back(text("Panelに操作Eventを4件追加します。既存の他用途Eventは保持します。", "Add four control events to the panel. Unrelated events are preserved."));
+	}
+	FindComponent(*menuInputCandidate_->FindEntity(panelId), "MenuPanel")->menuInputMode = mode;
+}
+
+void ImGuiManager::DrawMenuInputConversion() {
+	const bool editing = !editorSession_ || editorSession_->IsEditing();
+	if (!editing) { menuInputCandidate_.reset(); menuInputPreviewRequested_ = false; }
+	const char* title = SelectEditorText(editorLanguage_, "操作方式の変換###MenuInputConversion", "Convert Menu Controls###MenuInputConversion");
+	if (menuInputPreviewRequested_) { ImGui::OpenPopup(title); menuInputPreviewRequested_ = false; }
+	ImGui::SetNextWindowSize(ImVec2(640, 480), ImGuiCond_Appearing);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(360, 320), ImVec2(FLT_MAX, FLT_MAX));
+	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+	if (!editing) { ImGui::CloseCurrentPopup(); ImGui::EndPopup(); return; }
+	SceneDocument* source = menuInputPrefab_ ? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument() : nullptr) : (editorSession_ ? &editorSession_->GetEditDocument() : nullptr);
+	const bool same = source && source->GetContentGeneration() == menuInputGeneration_ && source->GetRevision() == menuInputRevision_;
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "適用するまで設定は変わりません。適用後は一回のUndoで戻せます。", "Settings remain unchanged until Apply. One Undo restores the conversion."));
+	const char* stale = SelectEditorText(editorLanguage_, "Documentが変わりました。閉じてから切替をやり直してください。", "The document changed. Close this preview and start again.");
+	const char* blocked = SelectEditorText(editorLanguage_, "上記の問題を整理するまで適用できません。", "Resolve the issues above before applying.");
+	const float wrapWidth = ImGui::GetContentRegionAvail().x;
+	float footer = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+	if (!same) footer += ImGui::CalcTextSize(stale, nullptr, false, wrapWidth).y + ImGui::GetStyle().ItemSpacing.y;
+	if (menuInputConversionBlocked_) footer += ImGui::CalcTextSize(blocked, nullptr, false, wrapWidth).y + ImGui::GetStyle().ItemSpacing.y;
+	ImGui::BeginChild("Changes", ImVec2(0, (std::max)(40.0f, ImGui::GetContentRegionAvail().y - footer)), ImGuiChildFlags_Borders);
+	for (const auto& line : menuInputPreview_) ImGui::TextWrapped("%s", line.c_str());
+	ImGui::EndChild();
+	if (!same) ImGui::TextWrapped("%s", stale);
+	if (menuInputConversionBlocked_) ImGui::TextWrapped("%s", blocked);
+	ImGui::BeginDisabled(!same || menuInputConversionBlocked_ || !menuInputCandidate_);
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "適用", "Apply"))) {
+		// Sceneは外側のFrame Undo、Prefabは専用Frameを使い候補全体を一回で確定する。
+		if (menuInputPrefab_) prefabEditorSession_->BeginEditFrame();
+		*source = std::move(*menuInputCandidate_); source->MarkDirty();
+		if (menuInputPrefab_) prefabEditorSession_->EndEditFrame(true);
+		else editorSession_->RequestSceneReload();
+		menuInputCandidate_.reset(); ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndDisabled(); ImGui::SameLine();
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "キャンセル", "Cancel"))) { menuInputCandidate_.reset(); ImGui::CloseCurrentPopup(); }
+	ImGui::EndPopup();
+}
+
+bool ImGuiManager::DrawUiEventBinding(SceneDocument& document, SceneEventBinding& binding) {
+	bool changed = false;
+	changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "条件", "Condition"), binding.triggerType,
+		{ "OnKeyPressed", "OnMenuItemConfirmed", "OnMenuCancelled", "OnDeathReplayCompleted" });
+    if (binding.triggerType=="OnDeathReplayCompleted") {
+        if (DrawMenuEntityField(SelectEditorText(editorLanguage_,"死亡対象","Death Target"),document,binding.targetEntityId,"DeathReplay")) {
+            binding.targetEntityName.clear(); changed=true;
+        }
+        if (binding.actions.size()==1 && binding.actions.front().type=="OpenMenu") {
+            if (DrawMenuEntityField(SelectEditorText(editorLanguage_,"開くパネル","Panel to Open"),document,binding.actions.front().targetEntityId,"MenuPanel")) {
+                binding.actions.front().targetEntityName.clear(); changed=true;
+            }
+        } else {
+            ImGui::TextWrapped("%s",LocalizeMenuRuntimeIssue("MenuRuntime:ReplayBinding").c_str());
+            if (MenuInspectorButton(SelectEditorText(editorLanguage_,"メニューを開く処理に設定","Set Open Menu Action"))) {
+                SceneEventAction action; action.type="OpenMenu"; binding.actions={action}; changed=true;
+            }
+        }
+        // 一死亡につき一度の通知。キー用once/cooldownは編集しない。
+        return changed;
+    }
+	if (binding.triggerType == "OnKeyPressed") {
+		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "入力を受けるとき", "Input Scope"), binding.uiInputScope, { "WhenNoMenu", "FocusedMenu" });
+		changed |= DrawEventTriggerKeys(binding);
+		const auto keys = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+		const auto* target = document.FindEntity(binding.targetEntityId);
+		const auto* panel = target ? FindEnabledComponent(*target, "MenuPanel") : nullptr;
+		if (binding.uiInputScope == "FocusedMenu" && panel && panel->menuInputMode == "Standard") {
+			const auto reserved = ResolveMenuStandardKeys(panel->MenuStandardKeyGroups(), panel->menuNavigationAxis);
+			if (std::any_of(keys.begin(), keys.end(), [&](BYTE key) { return std::find(reserved.begin(), reserved.end(), key) != reserved.end(); }))
+				ImGui::TextWrapped("%s", LocalizeMenuRuntimeIssue("MenuRuntime:ReservedKey").c_str());
+		}
+		bool conflict = false;
+		for (const auto& owner : document.GetEntities()) {
+			const auto* events = FindEnabledComponent(owner, "EventTrigger");
+			if (!events) continue;
+			for (const auto& other : events->eventBindings) {
+				if (&other == &binding || other.triggerType != "OnKeyPressed") continue;
+				const bool gameplay = other.executionDomain == "Gameplay";
+				const bool sameScope = other.executionDomain == "UI" && other.uiInputScope == binding.uiInputScope &&
+					(binding.uiInputScope != "FocusedMenu" || other.targetEntityId == binding.targetEntityId) && SceneEntityQuery::IsEntityActiveInHierarchy(document, owner);
+				if (!gameplay && !sameScope) continue;
+				const auto otherKeys = ResolveSceneInputKeys(other.triggerKey, other.additionalTriggerKeys);
+				conflict |= std::any_of(keys.begin(), keys.end(), [&](BYTE key) { return std::find(otherKeys.begin(), otherKeys.end(), key) != otherKeys.end(); });
+			}
+		}
+		if (conflict) ImGui::TextWrapped("%s", LocalizeMenuIssue("EventKeys:Conflict").c_str());
 	}
 	const char* targetType = binding.triggerType == "OnMenuItemConfirmed" ? "MenuItem" : "MenuPanel";
 	if (binding.triggerType != "OnKeyPressed" || binding.uiInputScope == "FocusedMenu") {
@@ -8894,8 +10387,10 @@ bool ImGuiManager::DrawPrefabUiEvents(SceneDocument& document, SceneComponent& c
 				ImGui::TreePop();
 			}
 		} else {
-			ImGui::TextDisabled("%s: %s", binding.executionDomain.c_str(), binding.triggerType.c_str());
-			ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "既存ゲームEventの内容は保持します", "Existing gameplay event data is preserved"));
+			ImGui::TextDisabled("%s: %s", binding.executionDomain.c_str(), FlagEventLabel(editorLanguage_,binding.triggerType));
+			if (binding.triggerType == "OnGameFlowStarted") DrawGameFlowEventReference(editorLanguage_);
+			if (binding.triggerType == "OnKeyPressed") changed |= DrawEventTriggerKeys(binding);
+			ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "キー以外の既存ゲームEvent設定は保持します", "Other gameplay event settings are preserved"));
 		}
 		ImGui::PopID();
 	}
@@ -8938,12 +10433,14 @@ namespace {
 			const SceneComponent* events = FindComponent(entity, "EventTrigger");
 			if (!events) continue;
 			for (const SceneEventBinding& binding : events->eventBindings) {
+				const auto keys = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+				const bool contains = std::find(keys.begin(), keys.end(), ResolveSceneInputKey(setup.key)) != keys.end();
 				if (binding.executionDomain == "Gameplay" && binding.triggerType == "OnKeyPressed" &&
-					ResolveSceneInputKey(binding.triggerKey) == ResolveSceneInputKey(setup.key) &&
+					contains &&
 					(setup.action == std::string("SelectPreviousMenuItem") || setup.action == std::string("SelectNextMenuItem") ||
 					 setup.action == std::string("ConfirmMenuItem") || setup.action == std::string("CancelMenu"))) conflict = true;
 				if (binding.executionDomain != "UI" || binding.triggerType != "OnKeyPressed" ||
-					binding.uiInputScope != setup.scope || ResolveSceneInputKey(binding.triggerKey) != ResolveSceneInputKey(setup.key) ||
+					binding.uiInputScope != setup.scope || !contains ||
 					(binding.uiInputScope == "FocusedMenu" && binding.targetEntityId != setup.target)) continue;
 				++matching;
 				const bool expected = binding.actions.size() == 1 && binding.actions[0].type == setup.action && binding.actions[0].targetEntityId == setup.target;
@@ -9273,7 +10770,9 @@ bool ImGuiManager::DrawUILayoutGizmo(SceneDocument& document, uint64_t entityId,
 	ImGui::PushID(prefab ? "PrefabUILayout" : "SceneUILayout");
 	ImGui::InvisibleButton("Handle", ImVec2(16,16));
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", gizmoOperation_==0 ? SelectEditorText(editorLanguage_, "UIを親の座標で移動", "Move UI in parent space") : gizmoOperation_==1 ? SelectEditorText(editorLanguage_, "UIを親の座標で回転", "Rotate UI in parent space") : SelectEditorText(editorLanguage_, "UIをローカル軸で拡縮", "Scale UI along local axes"));
-	if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+	// UI編集Sceneの黒帯へドラッグした間は、画像外の入力を配置値へ反映しない。
+	const bool insideEditingImage = !drawingUIEditorView_ || ImGui::IsMouseHoveringRect(ImVec2(x,y), ImVec2(x+width,y+height), true);
+	if (insideEditingImage && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
 		const auto& io = ImGui::GetIO();
 		auto localMouse = [&](float mx,float my) { return UIEditorPoint({(mx-x)*layout.referenceSize.x/width,(my-y)*layout.referenceSize.y/height}, inverseParent); };
 		const Vector2 now = localMouse(io.MousePos.x,io.MousePos.y), previous = localMouse(io.MousePos.x-io.MouseDelta.x,io.MousePos.y-io.MouseDelta.y);
@@ -9651,7 +11150,7 @@ bool ImGuiManager::PickUILayoutEntity(SceneDocument& document, bool prefab, floa
 		if(a.layout.sortingOrder!=b.layout.sortingOrder)return a.layout.sortingOrder<b.layout.sortingOrder;
 		return a.traversal<b.traversal;
 	});
-	if(prefab)prefabSelectedEntityId_=hits.back().id;
+	if(prefab) { prefabSelectedEntityId_=hits.back().id; RevealPrefabInspector(); }
 	else {selectedEntityId_=hits.back().id;selectedEntityIds_={selectedEntityId_};selectedProjectFile_.clear();}
 	return true;
 }
@@ -9943,6 +11442,18 @@ void ImGuiManager::DrawSceneUIEditorWindow() {
 	if (visible && editorSession_) {
 		if (ImGui::Button(SelectEditorText(editorLanguage_, "Sceneへ戻る", "Back to Scene")))
 			ImGui::SetWindowFocus("Scene");
+		const char* aspectLabel = SelectEditorText(editorLanguage_, "表示比率", "View Aspect");
+		const float toolbarWidth = (std::max)(1.0f, ImGui::GetContentRegionAvail().x);
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + toolbarWidth);
+		ImGui::TextUnformatted(aspectLabel);
+		ImGui::PopTextWrapPos();
+		if (toolbarWidth - ImGui::CalcTextSize(aspectLabel).x - ImGui::GetStyle().ItemSpacing.x > 130.0f) ImGui::SameLine();
+		ImGui::SetNextItemWidth((std::max)(1.0f, (std::min)(180.0f, ImGui::GetContentRegionAvail().x)));
+		if (ImGui::BeginCombo("##UIEditorViewAspect", sceneUIEditorFixedAspect_ ? "16:9" : SelectEditorText(editorLanguage_, "自由比率", "Free"))) {
+			if (ImGui::Selectable("16:9", sceneUIEditorFixedAspect_)) { sceneUIEditorFixedAspect_ = true; SaveEditorSettings(); }
+			if (ImGui::Selectable(SelectEditorText(editorLanguage_, "自由比率", "Free"), !sceneUIEditorFixedAspect_)) { sceneUIEditorFixedAspect_ = false; SaveEditorSettings(); }
+			ImGui::EndCombo();
+		}
 		if (!editorSession_->IsEditing()) {
 			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
 				"実行中はUI編集を一時停止しています。停止すると編集を再開できます。",
@@ -9972,23 +11483,50 @@ void ImGuiManager::DrawSceneUIEditorWindow() {
 				const auto size = ImGui::GetContentRegionAvail();
 				sceneUIEditorRenderable_ = std::isfinite(size.x) && std::isfinite(size.y) && size.x > 1 && size.y > 1;
 				if (sceneUIEditorRenderable_) {
-					sceneUIEditorWidth_ = static_cast<uint32_t>(std::clamp(size.x, 1.0f, 4096.0f));
-					sceneUIEditorHeight_ = static_cast<uint32_t>(std::clamp(size.y, 1.0f, 4096.0f));
-					// 内容/対象/範囲が変わったframeは、古い画像の操作を受け付けない。
+					const auto origin = ImGui::GetCursorScreenPos();
+					ImVec2 target = size;
+					if (sceneUIEditorFixedAspect_) {
+						target.x = (std::min)(size.x, size.y * (16.0f / 9.0f));
+						target.y = target.x * (9.0f / 16.0f);
+					}
+					// RT上限でも縦横を同じ倍率で縮小し、比率を個別clampで崩さない。
+					const float scale = (std::min)(1.0f, 4096.0f / (std::max)(target.x, target.y));
+					sceneUIEditorWidth_ = static_cast<uint32_t>((std::max)(1.0f, std::floor(target.x * scale)));
+					sceneUIEditorHeight_ = static_cast<uint32_t>((std::max)(1.0f, std::floor(target.y * scale)));
+					auto* draw = ImGui::GetWindowDrawList();
+					draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(0, 0, 0, 255));
 					const auto& rendered = sceneUIEditorRenderedView_;
-					const bool ready = sceneUIEditorTexture_.ptr && rendered.Matches(document) &&
+					const bool ready = sceneUIEditorTexture_.ptr && sceneUIEditorRenderedWidth_ && sceneUIEditorRenderedHeight_ && rendered.Matches(document) &&
 						rendered.panelId == view.panelId && rendered.textId == view.textId && rendered.scope == view.scope;
 					if (ready) {
-						ImGui::Image(ImTextureRef(static_cast<ImTextureID>(sceneUIEditorTexture_.ptr)), size);
+						// リサイズ直後も描画済みTextureの実比率を使い、次のRT更新まで歪ませない。
+						const float aspect = static_cast<float>(sceneUIEditorRenderedWidth_) / sceneUIEditorRenderedHeight_;
+						ImVec2 imageSize;
+						imageSize.x = (std::min)(target.x, target.y * aspect);
+						imageSize.y = imageSize.x / aspect;
+						ImGui::SetCursorScreenPos(ImVec2(origin.x + (size.x-imageSize.x)*0.5f, origin.y + (size.y-imageSize.y)*0.5f));
+						ImGui::Image(ImTextureRef(static_cast<ImTextureID>(sceneUIEditorTexture_.ptr)), imageSize);
 						const bool hovered = ImGui::IsItemHovered();
 						const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
-						drawingUIEditorView_ = true;
-						DrawSceneUIEditorBounds(min.x, min.y, max.x-min.x, max.y-min.y);
-						DrawUILayoutGizmo(document, selectedEntityId_, false, min.x, min.y, max.x-min.x, max.y-min.y);
-						if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-							PickUILayoutEntity(document, false, min.x, min.y, max.x-min.x, max.y-min.y);
-						drawingUIEditorView_ = false;
-					} else ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "編集画像を更新しています…", "Updating the editing view..."));
+						if (sceneUIEditorRenderedWidth_ == sceneUIEditorWidth_ && sceneUIEditorRenderedHeight_ == sceneUIEditorHeight_) {
+							// 編集は新しい寸法の画像を受け取ってから。黒帯には操作を割り当てない。
+							ImGui::PushClipRect(min, max, true);
+							drawingUIEditorView_ = true;
+							DrawSceneUIEditorBounds(min.x, min.y, max.x-min.x, max.y-min.y);
+							DrawUILayoutGizmo(document, selectedEntityId_, false, min.x, min.y, max.x-min.x, max.y-min.y);
+							if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+								PickUILayoutEntity(document, false, min.x, min.y, max.x-min.x, max.y-min.y);
+							drawingUIEditorView_ = false;
+							ImGui::PopClipRect();
+						}
+					} else {
+						draw->PushClipRect(origin, ImVec2(origin.x+size.x, origin.y+size.y), true);
+						draw->AddText(origin, ImGui::GetColorU32(ImGuiCol_Text), SelectEditorText(editorLanguage_, "編集画像を更新しています…", "Updating the editing view..."));
+						draw->PopClipRect();
+					}
+					// 中央配置で動かしたcursorに依存せず、黒帯を含む領域を正規のItemで確保する。
+					ImGui::SetCursorScreenPos(origin);
+					ImGui::Dummy(size);
 				}
 			}
 		}
@@ -9996,6 +11534,7 @@ void ImGuiManager::DrawSceneUIEditorWindow() {
 	ImGui::End();
 	if (!sceneUIEditorOpen_) {
 		sceneUIEditorView_ = {}; sceneUIEditorRenderedView_ = {}; sceneUIEditorTexture_ = {};
+		sceneUIEditorRenderedWidth_ = sceneUIEditorRenderedHeight_ = 0;
 		sceneUIEditorRenderable_ = false; sceneUIEditorIssue_.clear();
 	}
 }
@@ -10130,10 +11669,16 @@ void ImGuiManager::DrawSceneUIEditorControls(SceneDocument& document) {
 }
 
 std::string ImGuiManager::LocalizeMenuIssue(const std::string& error) const {
+	if (error.find("Only one active GamePause") != std::string::npos) return LocalizeMenuRuntimeIssue("MenuRuntime:PauseMultiple");
+	if (error.find("GamePause panel must start closed") != std::string::npos) return LocalizeMenuRuntimeIssue("MenuRuntime:PauseInitiallyOpen");
 	if (error.starts_with("MenuRuntime:")) return LocalizeMenuRuntimeIssue(error);
 	// 内部診断は保存/API契約を変えず、利用者向けの理由と対処へ翻訳する。
 	struct Message { const char* key; const char* ja; const char* en; };
 	static const Message messages[] = {
+		{ "EventKeys:Invalid", "未設定または未対応のキーがあります。各行の候補からキーを選び直してください。", "A key is unset or unsupported. Choose a supported key in each row." },
+		{ "EventKeys:Duplicate", "同じキーが重複しています。重複行を削除するか、別のキーを選んでください。実行時は一つとして扱います。", "A key is registered more than once. Remove the duplicate row or choose another key. Runtime treats it as one key." },
+		{ "EventKeys:LastKey", "最後のキーは削除できません。別のキーへ変更するか、このEventを削除してください。", "The last key cannot be removed. Choose another key or remove this event." },
+		{ "EventKeys:Conflict", "他のEventとキーが重複しています。UIの同じ入力範囲では先頭の設定が優先されます。他のORキーは引き続き使えます。", "Keys overlap another event. The first UI binding in the same scope takes priority. Other OR keys remain usable." },
 		{ "Menu runtime: panel unavailable", "MenuPanelが無効または見つからないため設定を追加できません。MenuPanelを有効にして再操作してください。", "MenuPanel is disabled or missing. Enable it and try adding the bindings again." },
 		{ "Menu runtime: events disabled", "EventTriggerが無効です。有効にしてから方向キー設定を追加してください。", "EventTrigger is disabled. Enable it before adding navigation bindings." },
 		{ "MenuItem marker must", "Markerはこの項目の子にある文字または画像を指定してください。自分自身や他の項目は指定できません。", "Assign a child text/image as the marker, not the item itself or another item." },
@@ -10192,6 +11737,30 @@ std::string ImGuiManager::LocalizeMenuIssue(const std::string& error) const {
 }
 
 std::string ImGuiManager::LocalizeMenuRuntimeIssue(const std::string& issue) const {
+	if (issue.starts_with("MenuRuntime:ExitRejected")) return SelectEditorText(editorLanguage_,
+		"ゲームを終了できません。Sceneの切替中、または現在の実行Sceneからの要求ではありません。切替が完了してから、現在の画面でもう一度操作してください。",
+		"Cannot exit: a scene change is in progress or the request is not from the current running scene. Wait for the change to finish, then try again on the current screen.");
+    if (issue.starts_with("MenuRuntime:ReplayBinding")) return SelectEditorText(editorLanguage_,
+        "完了条件を設定・実行できません。EventTriggerを有効にして、UIの「死亡リプレイが終わったとき」で有効な死亡対象を選び、「メニューを開く」を一件だけ設定してください。",
+        "Cannot configure or run the completion binding. Enable EventTrigger, use UI / Death Replay Completed, select a valid death target, and assign exactly one Open Menu action.");
+    if (issue.starts_with("MenuRuntime:ReplayAmbiguous")) return SelectEditorText(editorLanguage_,
+        "同じ死亡対象に複数の完了条件があるため、敗北画面を開けません。開く条件を一件に整理してください。",
+        "Cannot open the defeat screen: multiple completion bindings target the same death. Keep one binding for this target.");
+    if (issue.starts_with("MenuRuntime:ReplayPanel")) return SelectEditorText(editorLanguage_,
+        "敗北画面を開けない設定があります。死亡対象の3視点再生と各Entityを有効にし、パネルは画面に重ねる・開始時は閉じる・ゲーム停止設定なしにしてください。選択可能な項目も一つ以上必要です。",
+        "The defeat screen is not ready. Enable three-view replay and its entities. Use an enabled overlay panel that starts closed, without GamePause, and with at least one selectable item.");
+	if (issue.starts_with("MenuRuntime:StandardKeysEmpty")) return SelectEditorText(editorLanguage_, "最後のキーは削除できません。各操作に一つ以上のキーを設定してください。", "The last key cannot be removed. Assign at least one key to each operation.");
+	if (issue.starts_with("MenuRuntime:StandardKeysInvalid")) return SelectEditorText(editorLanguage_, "未対応または空のキーがあります。標準キー設定で候補から選び直してください。", "A standard key is empty or unsupported. Select a supported key from the key settings.");
+	if (issue.starts_with("MenuRuntime:StandardKeysDuplicate")) return SelectEditorText(editorLanguage_, "同じ操作のキーが重複しています。キー一覧から重複行を削除してください。", "An operation contains duplicate keys. Remove the duplicate rows.");
+	if (issue.starts_with("MenuRuntime:StandardKeysConflict")) return SelectEditorText(editorLanguage_, "使用中の別操作と同じキーは設定できません。キーを変えてください。並び方向を変える場合は「別方向のキー設定」も確認してください。", "This key belongs to another active operation. Choose another key. For an axis change, also review Other Axis Keys.");
+	if (issue.starts_with("MenuRuntime:PauseInitiallyOpen")) return SelectEditorText(editorLanguage_, "停止するメニューは開始時に閉じてください。MenuPanelの「開始時に開く」を外してから設定してください。", "A pause menu must start closed. Disable Initially Open on the MenuPanel, then try again.");
+	if (issue.starts_with("MenuRuntime:PauseMultiple")) return SelectEditorText(editorLanguage_, "有効なGamePauseはScene内で一つだけです。他のPanelの停止設定を無効にしてから設定してください。", "Only one GamePause may be enabled in the scene. Disable the other panel's pause setting first.");
+	if (issue.starts_with("MenuRuntime:PauseAmbiguous")) return SelectEditorText(editorLanguage_, "停止設定の参照が重複しているか、同じEntityのGamePauseが別Panelを参照しています。GamePauseの参照を確認してから再操作してください。", "Pause bindings are duplicated or the GamePause on this entity targets another panel. Review the GamePause references, then try again.");
+	if (issue.starts_with("MenuRuntime:PauseUnsupportedScene")) return SelectEditorText(editorLanguage_, "読み込まれているSceneにゲーム内停止へ未対応のものがあります。対応するScene構成にしてから開いてください。メニューとゲームを部分的には停止しません。", "A loaded scene does not support in-game pause. Use compatible scenes before opening this menu. Partial pause is not applied.");
+	if (issue.starts_with("MenuRuntime:PauseLocked")) return SelectEditorText(editorLanguage_, "停止設定の接続元がロックまたはPrefab管理下にあります。接続元を編集可能にしてから再操作してください。", "The pause binding is locked or prefab-managed. Make its owner editable, then try again.");
+	if (issue.starts_with("MenuRuntime:PauseInactiveBinding")) return SelectEditorText(editorLanguage_, "停止設定の接続元がHierarchyで無効です。接続元またはその親を有効にしてから設定してください。", "The pause binding owner is inactive in the hierarchy. Enable it and its parents before configuring pause.");
+	if (issue.starts_with("MenuRuntime:PausePrefab")) return SelectEditorText(editorLanguage_, "GamePauseはScene専用です。Sceneに配置してからMenuPanelの停止設定を行ってください。", "GamePause is scene-only. Place the menu in a scene before configuring pause.");
+	if (issue.starts_with("MenuRuntime:Pause")) return SelectEditorText(editorLanguage_, "停止するメニューを解決できません。GamePauseの参照先とMenuPanelの有効状態を確認してください。", "The pause menu could not be resolved. Check the GamePause target and the MenuPanel's enabled state.");
 	if (issue.starts_with("MenuRuntime:StandardMode"))
 		return SelectEditorText(editorLanguage_, "メニューの配置方式または操作方式が不正です。対応する方式を指定したデータへ戻してください。", "The menu layout or input mode is invalid. Restore a supported mode in the document.");
 	if (issue.starts_with("MenuRuntime:CanvasSize"))
@@ -10201,11 +11770,11 @@ std::string ImGuiManager::LocalizeMenuRuntimeIssue(const std::string& issue) con
 	if (issue.starts_with("MenuRuntime:TextPlacement"))
 		return SelectEditorText(editorLanguage_, "文字の余白・ずらしを適用できません。有限の値と、項目の枠に収まる余白を指定してください。", "Cannot apply text placement. Use finite values and padding smaller than the item bounds.");
 	if (issue.starts_with("MenuRuntime:ReservedKey"))
-		return SelectEditorText(editorLanguage_, "このキーはPanelの標準操作が使用します。既存Eventを確認するか、詳細の操作方式をEventへ切り替えてください。", "This key is reserved by standard panel controls. Review the existing event or switch to Event controls in Advanced.");
+		return SelectEditorText(editorLanguage_, "登録キーの一部はPanelの標準操作が使用します。他のORキーは使えます。予約キーでEventを使う場合は操作方式をEventへ切り替えてください。", "Some keys are reserved by standard panel controls. Other OR keys remain usable. Switch to Event controls to use reserved keys in events.");
 	if (issue.starts_with("MenuRuntime:Standard"))
 		return SelectEditorText(editorLanguage_, "標準メニューを用意できません。同じEntityのUICanvasと、配置を持たない親構造が必要です。空のroot Entityを使うか、旧構成として追加してください。", "Cannot prepare a standard menu. It needs a UICanvas on the same entity and no transformed ancestors. Use an empty root entity or add a legacy panel.");
 	if (issue.starts_with("MenuRuntime:Transition")) return SelectEditorText(editorLanguage_, "Scene遷移を完了できません。メニューと選択は保持しています。遷移先の登録、Sceneファイル、演出Assetを確認して再操作してください。", "The scene transition could not complete. The menu and selection are kept. Check the destination registration, scene file and transition asset, then try again.");
-	if (issue.starts_with("MenuRuntime:UnsupportedAction")) return SelectEditorText(editorLanguage_, "この処理は現在未対応です。ゲーム内Pause・再開・アプリ終了は後続実装です。対応済みのメニュー操作、Scene遷移、音、文字演出を設定してください。", "This action is not supported yet. In-game pause, resume and application exit are pending. Configure supported menu, scene, audio or text-motion actions.");
+	if (issue.starts_with("MenuRuntime:UnsupportedAction")) return SelectEditorText(editorLanguage_, "この処理は現在未対応です。対応済みの処理を選び直してください。ゲーム終了には「ゲームを終了」を使ってください。", "This action is not supported. Select a supported action; use Exit game to quit.");
 	if (issue.starts_with("MenuRuntime:MultipleInitialPanels")) return SelectEditorText(editorLanguage_, "開始時に開くメニューが複数あります。MenuPanelの「開始時」を一つだけ開く設定にしてください。", "Multiple menus are initially open. Configure only one MenuPanel to open at startup.");
 	if (issue.starts_with("MenuRuntime:InvalidTarget")) return SelectEditorText(editorLanguage_, "音または文字演出の対象が無効です。UI Eventで同じSceneの有効なComponentとClipを選び直してください。", "The audio or text-motion target is invalid. Select an enabled component and valid clip in this scene's UI event.");
 	return SelectEditorText(editorLanguage_, "メニュー操作を実行できません。対象Panelの有効状態、UI画面、項目登録、初期項目、キャンセル設定を確認してください。", "The menu operation could not run. Check the panel's enabled state, canvas, registered items, initial selection and cancel settings.");
@@ -10240,7 +11809,824 @@ std::string ImGuiManager::LocalizeGameFlowIssue(const std::string& issue) const 
 	return SelectEditorText(editorLanguage_, "開始の準備を完了できません。ゲーム進行の設定と参照先を確認してください。", "Game preparation could not finish. Check the game flow settings and references.");
 }
 
+
+namespace {
+	// Scene/Prefabで同じ編集を使う。数値の拒否はその操作だけを取り消し、Runtime値は書き戻さない。
+	const char* EnemyTargetStatusText(EditorLanguage language, SceneEnemyTargetIssue issue) {
+		const char* ja[] = {"解決済み", "未設定", "対象が未出現・見つかりません", "同名の対象が複数あります", "対象が非表示・無効です", "自分または自分の子を指しています", "実プレイヤーに対応していません", "未知の対象方式です", "対象は死亡しています"};
+		const char* en[] = {"Resolved", "Unassigned", "Target not present", "Ambiguous target name", "Target inactive", "Target is self or own child", "Not the actual player", "Unknown target mode", "Target is dead"};
+		const size_t index = static_cast<size_t>(issue);
+		return index < std::size(ja) ? SelectEditorText(language, ja[index], en[index]) : SelectEditorText(language, "状態不明", "Unknown state");
+	}
+
+	// 診断は検証を緩めるために使わず、拒否された候補の値から説明だけを作る。
+	struct EnemySettingExplanation {
+		EditorLanguage language;
+		std::string message;
+		void Add(const std::string& value) {
+			if (!message.empty()) message += "\n";
+			message += value;
+		}
+		static std::string Number(double value) {
+			char buffer[48]; std::snprintf(buffer, sizeof(buffer), "%.9g", value); return buffer;
+		}
+		void Value(bool invalid, const char* ja, const char* en, double value, const char* ruleJa, const char* ruleEn) {
+			if (invalid) Add(std::string(SelectEditorText(language, ja, en)) + ": " + Number(value) + " — " + SelectEditorText(language, ruleJa, ruleEn));
+		}
+		void Nonnegative(const char* ja, const char* en, float value, bool positive = false) {
+			Value(!std::isfinite(value) || (positive ? value <= 0 : value < 0), ja, en, value,
+				positive ? "0より大きい有限値を指定してください。" : "0以上の有限値を指定してください。",
+				positive ? "Use a finite value greater than zero." : "Use a finite value of zero or greater.");
+		}
+		void Minimum(const char* ja, const char* en, float value, float minimum, const char* reasonJa, const char* reasonEn) {
+			if (!std::isfinite(value) || !std::isfinite(minimum) || value >= minimum) return;
+			Add(std::string(SelectEditorText(language, ja, en)) + ": " + Number(value) + " — " +
+				SelectEditorText(language, "必要な最小値: ", "Required minimum: ") + Number(minimum) + " (" +
+				SelectEditorText(language, reasonJa, reasonEn) + ")" + SelectEditorText(language,
+				"。この値を増やすか、対応する許容幅・ばらつきを減らしてください。", ". Increase this value or reduce the corresponding tolerance/variation."));
+		}
+	};
+
+	std::string EnemyRuleExplanation(EditorLanguage language, const SceneEnemyInterruptRule& rule) {
+		EnemySettingExplanation detail{language};
+		if (!rule.validCombination) detail.Add(SelectEditorText(language, "条件の組合せが未対応です。「いずれか」または「すべて」を選び直してください。", "Unsupported combination. Select Any or All conditions."));
+		detail.Value(rule.conditions.empty() || rule.conditions.size() > 6, "条件数", "Condition count", double(rule.conditions.size()),
+			"1～6件にしてください。", "Use 1 to 6 conditions.");
+		const char* ja[] = {"一撃のHPダメージ", "累計HPダメージ", "命中回数", "水平ノックバック", "上向きノックバック", "怯み耐性を使い切る"};
+		const char* en[] = {"Single HP damage", "Accumulated HP damage", "Hit count", "Horizontal knockback", "Upward knockback", "Poise depleted"};
+		uint8_t seen = 0;
+		for (size_t i = 0; i < (std::min)(rule.conditions.size(), size_t(6)); ++i) {
+			const auto& row = rule.conditions[i]; const unsigned type = static_cast<unsigned>(row.type);
+			if (type >= 6) {
+				detail.Add(std::string(SelectEditorText(language, "条件 ", "Condition ")) + std::to_string(i + 1) +
+					SelectEditorText(language, " の種類が未対応です。種類を選び直してください。", " has an unsupported type. Select a supported type."));
+				continue;
+			}
+			if (seen & (1u << type)) detail.Add(std::string(SelectEditorText(language, ja[type], en[type])) +
+				SelectEditorText(language, " が重複しています。同じ種類は1件だけにしてください。", " is duplicated. Keep only one condition of each type."));
+			seen |= static_cast<uint8_t>(1u << type);
+			detail.Nonnegative(ja[type], en[type], row.threshold, true);
+			detail.Value(row.type == SceneEnemyInterruptConditionType::HitCount && std::isfinite(row.threshold) &&
+				(std::floor(row.threshold) != row.threshold || double(row.threshold) > 4294967295.0), ja[type], en[type], row.threshold,
+				"1～4294967295の整数を指定してください。", "Use an integer from 1 to 4294967295.");
+		}
+		return detail.message;
+	}
+
+	std::string EnemySettingsExplanation(EditorLanguage language, const SceneComponent& component, const std::string& issue) {
+		EnemySettingExplanation detail{language};
+		if (issue == "EnemyPositioning:Settings" || issue == "EnemyPositioning:DetectionLoss") {
+			const auto& p = component.enemyPositioning;
+			detail.Nonnegative("索敵距離", "Detection range", component.enemyDetectionRange);
+			detail.Nonnegative("対象を見失う距離", "Target loss range", component.enemyLoseRange);
+			detail.Nonnegative("向きを変える速さ", "Turn speed", component.enemyTurnSpeed);
+			detail.Nonnegative("移動速度", "Move speed", component.enemyMoveSpeed, true);
+			detail.Nonnegative("加減速（毎秒）", "Acceleration per second", p.acceleration, true);
+			for (const auto& field : std::initializer_list<std::tuple<const char*, const char*, float>>{
+				{"保ちたい距離", "Preferred clearance", p.distance}, {"距離の許容幅", "Distance tolerance", p.tolerance},
+				{"敵同士の追加間隔", "Extra enemy spacing", p.spacing}, {"保ちたい距離のばらつき", "Preferred clearance variation", p.distanceVariation},
+				{"追加間隔のばらつき", "Spacing variation", p.spacingVariation}})
+				detail.Nonnegative(std::get<0>(field), std::get<1>(field), std::get<2>(field));
+			detail.Value(!std::isfinite(p.retreatRatio) || p.retreatRatio < 0 || p.retreatRatio > 1, "後退速度の比率", "Retreat speed ratio", p.retreatRatio, "0～1を指定してください。", "Use a value from 0 to 1.");
+			detail.Value(!std::isfinite(p.orbitRatio) || p.orbitRatio < 0 || p.orbitRatio > 1, "回り込み速度の比率", "Orbit speed ratio", p.orbitRatio, "0～1を指定してください。", "Use a value from 0 to 1.");
+			detail.Value(!std::isfinite(p.speedVariation) || p.speedVariation < 0 || p.speedVariation >= 1, "速度のばらつき（±％）", "Speed variation (+/- %)", double(p.speedVariation) * 100, "0以上100未満を指定してください。", "Use a value from 0 inclusive to 100 exclusive.");
+			detail.Minimum("保ちたい距離", "Preferred clearance", p.distance, p.tolerance + (p.variation ? p.distanceVariation : 0), "許容幅＋有効な距離ばらつき", "tolerance + enabled distance variation");
+			detail.Minimum("敵同士の追加間隔", "Extra enemy spacing", p.spacing, p.variation ? p.spacingVariation : 0, "有効な間隔ばらつき", "enabled spacing variation");
+			if (!std::isfinite(component.enemyMoveSpeed * (1 + p.speedVariation))) detail.Add(SelectEditorText(language, "移動速度×（1＋速度ばらつき）が大きすぎます。速度かばらつきを小さくしてください。", "Move speed * (1 + speed variation) overflows. Reduce speed or variation."));
+			if (!std::isfinite(p.distance + p.tolerance + p.distanceVariation)) detail.Add(SelectEditorText(language, "保ちたい距離＋許容幅＋距離ばらつきが大きすぎます。各値を小さくしてください。", "Preferred clearance + tolerance + variation overflows. Reduce these values."));
+			if (std::isfinite(component.enemyDetectionRange) && std::isfinite(component.enemyLoseRange) && component.enemyLoseRange < component.enemyDetectionRange)
+				detail.Add(std::string(SelectEditorText(language, "索敵距離 ", "Detection range ")) + EnemySettingExplanation::Number(component.enemyDetectionRange) +
+					SelectEditorText(language, " に対し、対象を見失う距離 ", " exceeds target loss range ") + EnemySettingExplanation::Number(component.enemyLoseRange) +
+					SelectEditorText(language, " は小さすぎます。見失う距離を索敵距離以上へ広げるか、索敵距離を小さくしてください。", ". Increase the loss range to at least the detection range, or reduce the detection range."));
+		} else if (issue == "EnemyCharge:StartDistance" || issue == "EnemyCharge:ManualStartDistance") {
+			const auto& c = component.enemyCharge;
+			detail.Add(std::string(SelectEditorText(language, "開始距離 ", "Start distance ")) + EnemySettingExplanation::Number(c.startDistance) +
+				SelectEditorText(language, " / 突進の最大距離 ", " / maximum charge distance ") + EnemySettingExplanation::Number(c.distance) +
+				SelectEditorText(language, "。手動では有限の正数かつ最大距離以下を指定してください。自動へ戻す場合はプルダウンを使用してください。",
+					". Use a finite positive manual value no greater than the maximum. Use the dropdown to return to automatic mode."));
+		} else if (issue == "EnemyCharge:Settings") {
+			const auto& c = component.enemyCharge;
+			for (const auto& field : std::initializer_list<std::tuple<const char*, const char*, float>>{
+				{"構えの時間", "Aim duration", c.aimSeconds}, {"方向固定後の待ち時間", "Locked aim delay", c.lockedSeconds},
+				{"後隙", "Recovery after charge", c.recoverySeconds}, {"復帰の時間", "Return duration", c.returnSeconds},
+				{"復帰後の再攻撃待ち", "Cooldown after return", c.cooldownSeconds}, {"最初の攻撃までの待ち", "First attack wait", c.firstWaitSeconds},
+				{"構えのばらつき", "Aim variation", c.aimVariation}, {"固定待ちのばらつき", "Locked delay variation", c.lockedVariation},
+				{"再攻撃待ちのばらつき", "Cooldown variation", c.cooldownVariation}, {"初回待ちのばらつき", "First wait variation", c.firstWaitVariation}})
+				detail.Nonnegative(std::get<0>(field), std::get<1>(field), std::get<2>(field));
+			detail.Nonnegative("平均速度", "Average speed", c.speed, true);
+			detail.Nonnegative("突進の最大距離", "Maximum charge distance", c.distance, true);
+			const float duration = c.distance / c.speed;
+			detail.Value(!std::isfinite(duration) || (c.movementEasing != "Linear" && duration <= 0), "突進時間（最大距離÷平均速度）", "Charge duration (distance / speed)", duration,
+				"距離と速度を調整して、表現できる正の時間にしてください。", "Adjust distance and speed to obtain a representable positive duration.");
+			for (const auto& field : std::initializer_list<std::tuple<const char*, const char*, float, float>>{
+				{"構えの時間", "Aim duration", c.aimSeconds, c.aimVariation}, {"方向固定後の待ち時間", "Locked aim delay", c.lockedSeconds, c.lockedVariation},
+				{"復帰後の再攻撃待ち", "Cooldown after return", c.cooldownSeconds, c.cooldownVariation}, {"最初の攻撃までの待ち", "First attack wait", c.firstWaitSeconds, c.firstWaitVariation}}) {
+				if (component.enemyPositioning.variation) detail.Minimum(std::get<0>(field), std::get<1>(field), std::get<2>(field), std::get<3>(field), "対応する時間のばらつき", "corresponding time variation");
+				detail.Value(!std::isfinite(std::get<2>(field) + std::get<3>(field)), std::get<0>(field), std::get<1>(field), std::get<2>(field), "時間＋ばらつきが大きすぎます。両方の値を小さくしてください。", "Duration + variation overflows. Reduce both values.");
+			}
+			if (c.poseEnabled) {
+				detail.Nonnegative("突進姿勢へ傾く時間", "Charge lean duration", c.leanSeconds);
+				detail.Value(!std::isfinite(c.backAngle), "後傾角度", "Back lean", c.backAngle, "有限値を指定してください。", "Use a finite value.");
+				detail.Value(!std::isfinite(c.forwardAngle), "前傾角度", "Forward lean", c.forwardAngle, "有限値を指定してください。", "Use a finite value.");
+				for (const auto& field : std::initializer_list<std::tuple<const char*, const char*, Vector3>>{
+					{"回転軸", "Rotation axis", c.axis}, {"回転の支点", "Local pivot", c.pivot}, {"構えの位置ずらし", "Aim offset", c.aimOffset}, {"突進の位置ずらし", "Charge offset", c.chargeOffset}}) {
+					const auto v = std::get<2>(field);
+					if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) detail.Add(std::string(SelectEditorText(language, std::get<0>(field), std::get<1>(field))) +
+						SelectEditorText(language, " のX/Y/Zに非有限値があります。有限値を指定してください。", " contains a non-finite X/Y/Z. Use finite values."));
+				}
+				const double length = double(c.axis.x)*c.axis.x + double(c.axis.y)*c.axis.y + double(c.axis.z)*c.axis.z;
+				if (std::isfinite(length) && length <= 1e-12) detail.Add(SelectEditorText(language, "回転軸が0、または小さすぎます。X/Y/Zのいずれかに有効な軸を指定してください。", "Rotation axis is zero or too small. Specify a nonzero axis in X/Y/Z."));
+			}
+			const auto& interrupt = component.enemyInterruption;
+			detail.Value(interrupt.phases == 0 || interrupt.phases > 7, "中断を判定する段階", "Interruption phases", interrupt.phases,
+				"構え・方向固定待ち・突進から1件以上選択してください。", "Select at least one of Aim, Locked aim or Charge.");
+			detail.Nonnegative("無被弾でリセットする秒数", "Idle reset seconds", interrupt.idleResetSeconds);
+			const std::string common = EnemyRuleExplanation(language, interrupt.common);
+			if (!common.empty()) detail.Add(std::string(SelectEditorText(language, "共通の中断条件:\n", "Common interruption conditions:\n")) + common);
+			const char* ja[] = {"構え", "方向固定待ち", "突進"}; const char* en[] = {"Aim", "Locked aim", "Charge"};
+			for (size_t i = 0; i < 3; ++i) if (interrupt.overrideEnabled[i]) {
+				const std::string rule = EnemyRuleExplanation(language, interrupt.overrides[i]);
+				if (!rule.empty()) detail.Add(std::string(SelectEditorText(language, ja[i], en[i])) + ":\n" + rule);
+			}
+		} else if (issue == "EnemyCharge:HitValues") {
+			detail.Nonnegative("HPダメージ", "HP damage", component.hitBoxDamage);
+			detail.Nonnegative("水平の吹き飛ばし", "Horizontal knockback", component.hitBoxKnockback);
+			detail.Nonnegative("上向きの吹き飛ばし", "Upward knockback", component.hitBoxVerticalKnockback);
+			const auto v = component.hitBoxKnockbackLocalDirection;
+			if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) detail.Add(SelectEditorText(language,
+				"吹き飛ばす方向に非有限値があります。方向ベクトルのX/Y/Zを有限値にしてください。", "Knockback direction contains non-finite values. Use finite X/Y/Z values."));
+		} else if (issue == "EnemyCharge:ReactionValues") {
+			detail.Nonnegative("被弾硬直の時間", "Hit duration", component.hitReactionStateDuration);
+			detail.Nonnegative("吹き飛ばし倍率", "Knockback multiplier", component.hitReactionKnockbackMultiplier);
+			detail.Nonnegative("怯み耐性の回復待ち", "Poise recovery delay", component.hitReactionPoiseRecoveryDelay);
+		}
+		return detail.message;
+	}
+
+	std::string EnemyBodyExplanation(EditorLanguage language, const SceneEntity& owner) {
+		EnemySettingExplanation detail{language};
+		const auto* body = SceneEntityQuery::FindEnabledComponent(owner, "PhysicsBody");
+		const auto* collider = SceneEntityQuery::FindEnabledComponent(owner, "OBBCollider");
+		if (!body) detail.Add(SelectEditorText(language, "有効なPhysicsBodyがありません。この敵に追加するか有効にしてください。", "No enabled PhysicsBody. Add or enable it on this enemy."));
+		else {
+			if (body->physicsBodyType != "Dynamic") detail.Add(std::string("PhysicsBody: ") + body->physicsBodyType +
+				SelectEditorText(language, " — Dynamicへ変更してください。", " — Change the body type to Dynamic."));
+			if (body->physicsFreezePositionX || body->physicsFreezePositionZ) detail.Add(SelectEditorText(language,
+				"PhysicsBodyのX/Z位置が固定されています。突進に使用するX/Zの固定を解除してください。", "PhysicsBody freezes X/Z movement. Unfreeze X/Z for charging."));
+		}
+		if (!collider) detail.Add(SelectEditorText(language, "有効な移動用OBBColliderがありません。この敵自身に追加するか有効にしてください。", "No enabled movement OBBCollider. Add or enable it on the enemy root."));
+		else {
+			if (!collider->colliderActive) detail.Add(SelectEditorText(language, "移動用OBBColliderの判定が無効です。判定を有効にしてください。", "The movement OBBCollider is inactive. Activate its collision shape."));
+			if (collider->colliderIsTrigger) detail.Add(SelectEditorText(language, "移動用OBBColliderがTriggerです。移動用はTriggerをOFFにし、攻撃判定は別の子に用意してください。", "The movement OBBCollider is a trigger. Disable Trigger on the movement shape; keep the attack shape on a separate child."));
+		}
+		return detail.message;
+	}
+
+	// 既存Inspectorの適否と参照の未設定許容を一か所で使い、Popup適用時も再検証する。
+	std::string EnemySettingsEditIssue(const SceneDocument& document, const SceneEntity& owner, const SceneComponent& candidate, bool checkReferences) {
+		if (!candidate.enemyPositioning.IsValid(candidate.enemyMoveSpeed) || !std::isfinite(candidate.enemyDetectionRange) ||
+			!std::isfinite(candidate.enemyLoseRange) || !std::isfinite(candidate.enemyTurnSpeed) ||
+			candidate.enemyDetectionRange < 0 || candidate.enemyLoseRange < 0 || candidate.enemyTurnSpeed < 0) return "EnemyPositioning:Settings";
+		if (candidate.enemyLoseRange < candidate.enemyDetectionRange) return "EnemyPositioning:DetectionLoss";
+		const auto* body = SceneEntityQuery::FindEnabledComponent(owner, "PhysicsBody");
+		const auto* collider = SceneEntityQuery::FindEnabledComponent(owner, "OBBCollider");
+		if (!body || body->physicsBodyType != "Dynamic" || !collider || !collider->colliderActive || collider->colliderIsTrigger) return "EnemyPositioning:Body";
+		Easing::Curve curve;
+		if (!Easing::TryParse(candidate.enemyCharge.movementEasing, curve)) return "EnemyCharge:Easing";
+		if (!std::isfinite(candidate.enemyCharge.startDistance) || candidate.enemyCharge.startDistance < 0 ||
+			(std::isfinite(candidate.enemyCharge.distance) && candidate.enemyCharge.distance > 0 &&
+				candidate.enemyCharge.startDistance > candidate.enemyCharge.distance)) return "EnemyCharge:StartDistance";
+		if (!candidate.enemyCharge.IsValid(candidate.enemyPositioning.variation) || !candidate.enemyInterruption.IsValid()) return "EnemyCharge:Settings";
+		if (checkReferences || candidate.enemyInterruption.enabled) {
+			const std::string issue = ValidateEnemyChargeConfiguration(document, owner, candidate);
+			const bool incomplete = (issue == "EnemyCharge:Pose" && !candidate.enemyCharge.poseEntityId) ||
+				(issue == "EnemyCharge:HitBox" && !candidate.enemyAttackHitBoxEntityId && candidate.enemyAttackHitBoxEntityName.empty());
+			if (!incomplete || candidate.enemyInterruption.enabled) return issue;
+		}
+		return {};
+	}
+
+	bool DrawEnemyBehaviorFields(EditorLanguage language, SceneDocument& document, const SceneEntity& owner,
+		SceneComponent& component, bool editable, const SceneManager* manager, const std::function<void()>& beginEdit, bool editorPaused = false) {
+		auto text = [&](const char* ja, const char* en) { return SelectEditorText(language, ja, en); };
+		bool changed = false, referencedChanged = false, targetEdited = false;
+		std::string issue;
+		std::string detailJa, detailEn;
+		struct PendingWarning {
+			std::string ja, en;
+			uint64_t ownerId = 0, generation = 0, revision = 0;
+			float beforeDetection = 0, beforeLoss = 0, proposedDetection = 0, proposedLoss = 0;
+			bool offerRange = false;
+		};
+		PendingWarning rangeProposal;
+		const auto beforeSettings = component.enemyPositioning;
+		const auto beforeCharge = component.enemyCharge;
+		const auto beforeInterrupt = component.enemyInterruption;
+		const auto beforeHitId = component.enemyAttackHitBoxEntityId;
+		const auto beforeHitName = component.enemyAttackHitBoxEntityName;
+		const auto beforeMode = component.enemyMovementMode;
+		const auto beforeTargetId = component.enemyTargetEntityId;
+		const auto beforeTargetName = component.enemyTargetEntityName, beforeHealthId = component.enemyHealthStatId;
+		const float beforeSpeed = component.enemyMoveSpeed, beforeDetection = component.enemyDetectionRange,
+			beforeLose = component.enemyLoseRange, beforeTurn = component.enemyTurnSpeed;
+		auto number = [&](const char* ja, const char* en, float& value, float maximum = 10000.0f) {
+			ImGui::PushID(en); ImGui::TextWrapped("%s", text(ja, en)); ImGui::SetNextItemWidth(-1.0f);
+			const bool edit = ImGui::DragFloat("##Value", &value, 0.05f, 0.0f, maximum);
+			ImGui::PopID(); return edit;
+		};
+		ImGui::BeginDisabled(!editable);
+		ImGui::SeparatorText(text("行動", "Behavior"));
+		ImGui::SetNextItemWidth(-1.0f);
+		if (ImGui::BeginCombo("##EnemyMode", text(component.enemyMovementMode == "PositioningCharge" ? "位置取り＋体当たり" : "従来",
+			component.enemyMovementMode == "PositioningCharge" ? "Positioning + Charge" : "Legacy"))) {
+			if (ImGui::Selectable(text("従来", "Legacy"), component.enemyMovementMode == "Legacy")) { component.enemyMovementMode = "Legacy"; changed = true; }
+			if (ImGui::Selectable(text("位置取り＋体当たり", "Positioning + Charge"), component.enemyMovementMode == "PositioningCharge")) { component.enemyMovementMode = "PositioningCharge"; changed = true; }
+			ImGui::EndCombo();
+		}
+		ImGui::SeparatorText(text("攻撃対象", "Attack target"));
+		auto validTarget = [&](const SceneEntity& candidate) {
+			return !candidate.folder && candidate.id != owner.id && !document.IsDescendantOf(candidate.id, owner.id) &&
+				SceneEntityQuery::IsEntityActiveInHierarchy(document, candidate) &&
+				(component.enemyMovementMode != "PositioningCharge" || SceneEntityQuery::FindEnabledComponent(candidate, "PlayerBehavior"));
+		};
+		auto setTargetMode = [&](SceneEnemyTargetMode mode) {
+			if (mode == component.enemyTargetMode) return;
+			component.enemyTargetMode = mode; component.enemyTargetModeUnknown.clear();
+			if (mode != SceneEnemyTargetMode::Entity) component.enemyTargetEntityId = 0;
+			else {
+				const auto* candidate = document.FindEntity(component.enemyTargetEntityId);
+				if (!candidate || !validTarget(*candidate)) component.enemyTargetEntityId = 0;
+			}
+			if (mode != SceneEnemyTargetMode::Name) component.enemyTargetEntityName.clear();
+			targetEdited = true;
+		};
+		const char* modesJa[] = {"従来の参照方式", "プレイヤーを自動で探す", "特定のEntity", "名前で指定", "未知の方式"};
+		const char* modesEn[] = {"Legacy reference", "Auto Player", "Specific Entity", "Exact name", "Unknown mode"};
+		const size_t targetMode = static_cast<size_t>(component.enemyTargetMode);
+		ImGui::TextUnformatted(text("探し方", "Resolve by")); ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo("##EnemyTargetMode", text(modesJa[targetMode < 5 ? targetMode : 4], modesEn[targetMode < 5 ? targetMode : 4]))) {
+			for (int i = 1; i <= 3; ++i) if (ImGui::Selectable(text(modesJa[i], modesEn[i]), targetMode == size_t(i))) setTargetMode(static_cast<SceneEnemyTargetMode>(i));
+			ImGui::EndCombo();
+		}
+		if (component.enemyTargetMode == SceneEnemyTargetMode::Entity) {
+			const auto* selected = document.FindEntity(component.enemyTargetEntityId);
+			ImGui::SetNextItemWidth(-1);
+			if (ImGui::BeginCombo("##EnemyTarget", selected ? selected->name.c_str() : text("未設定", "Unassigned"))) {
+				if (ImGui::Selectable(text("未設定", "Unassigned"), !selected)) { component.enemyTargetEntityId = 0; targetEdited = true; }
+				for (const auto& candidate : document.GetEntities()) if (validTarget(candidate)) {
+					ImGui::PushID(static_cast<int>(candidate.id));
+					if (ImGui::Selectable(candidate.name.c_str(), candidate.id == component.enemyTargetEntityId)) { component.enemyTargetEntityId = candidate.id; targetEdited = true; }
+					ImGui::PopID();
+				}
+				ImGui::EndCombo();
+			}
+			if (!selected && ImGui::Button(text("プレイヤーを自動で探すへ切替", "Switch to Auto Player"), ImVec2(-1, 0))) setTargetMode(SceneEnemyTargetMode::AutoPlayer);
+		} else if (component.enemyTargetMode == SceneEnemyTargetMode::Name) {
+			// 入力中はEditorだけに保持し、確定時に拒否した名前をDocument/Undoへ残さない。
+			static std::unordered_map<ImGuiID, std::string> nameDrafts;
+			ImGui::PushID(&document); ImGui::PushID(static_cast<int>(owner.id));
+			const ImGuiID draftId = ImGui::GetID("EnemyTargetNameDraft");
+			auto draft = nameDrafts.try_emplace(draftId, component.enemyTargetEntityName).first;
+			ImGui::TextUnformatted(text("対象の名前", "Exact target name")); ImGui::SetNextItemWidth(-1);
+			InputTextString("##EnemyTargetName", draft->second);
+			if (ImGui::IsItemDeactivatedAfterEdit()) {
+				const std::string previous = component.enemyTargetEntityName;
+				component.enemyTargetEntityName = draft->second;
+				const auto* candidate = document.FindEntityByName(component.enemyTargetEntityName);
+				const auto result = ResolveEnemyTarget(document, owner, component, candidate ? candidate->id : 0);
+				if (result.issue == SceneEnemyTargetIssue::Ambiguous || result.issue == SceneEnemyTargetIssue::Self || result.issue == SceneEnemyTargetIssue::UnsupportedPlayer) {
+					component.enemyTargetEntityName = previous;
+					issue = result.issue == SceneEnemyTargetIssue::Ambiguous ? "EnemyCharge:TargetAmbiguous" : "EnemyCharge:Target";
+				} else targetEdited |= previous != component.enemyTargetEntityName;
+				draft->second = component.enemyTargetEntityName;
+			} else if (!ImGui::IsItemActive()) draft->second = component.enemyTargetEntityName;
+			if (!ImGui::IsItemActive()) nameDrafts.erase(draftId);
+			ImGui::PopID(); ImGui::PopID();
+		} else if (component.enemyTargetMode == SceneEnemyTargetMode::LegacyReference) {
+			const auto result = ResolveEnemyTarget(document, owner, component, 0);
+			const auto* selected = document.FindEntity(result.entityId);
+			ImGui::TextWrapped("%s: %llu / %s", text("保存ID／名前（ID優先）", "Saved ID / name (ID first)"),
+				static_cast<unsigned long long>(component.enemyTargetEntityId), component.enemyTargetEntityName.c_str());
+			ImGui::TextWrapped("%s: %s", text("実際の参照先", "Resolved reference"), selected ? selected->name.c_str() : text("未解決", "Unresolved"));
+			if (selected && component.enemyTargetEntityId && !component.enemyTargetEntityName.empty() && selected->name != component.enemyTargetEntityName)
+				ImGui::TextWrapped("%s", EnemyPositioningIssue(language, "EnemyCharge:LegacyTarget"));
+			if (ImGui::Button(text("プレイヤーを自動で探すへ切替", "Switch to Auto Player"), ImVec2(-1, 0))) setTargetMode(SceneEnemyTargetMode::AutoPlayer);
+		} else if (component.enemyTargetMode == SceneEnemyTargetMode::Unknown) {
+			ImGui::TextWrapped("%s", EnemyPositioningIssue(language, "EnemyCharge:TargetMode"));
+		}
+		SceneEnemyPositioningStatus targetStatus;
+		if (manager && manager->TryGetEnemyPositioningStatus(document, owner.id, targetStatus)) {
+			ImGui::TextWrapped("%s: %s (ID %llu)", text("現在の対象", "Current target"), targetStatus.targetDisplayName.c_str(), static_cast<unsigned long long>(targetStatus.resolvedTargetEntityId));
+			ImGui::TextWrapped("%s", EnemyTargetStatusText(language, targetStatus.targetIssue));
+		} else if (component.enemyTargetMode == SceneEnemyTargetMode::AutoPlayer) {
+			ImGui::TextWrapped("%s", text("Play時に実プレイヤーへ自動解決します。", "Resolves to the actual player during Play."));
+		} else {
+			const auto* candidate = component.enemyTargetMode == SceneEnemyTargetMode::Name ? document.FindEntityByName(component.enemyTargetEntityName) : document.FindEntity(component.enemyTargetEntityId);
+			auto result = ResolveEnemyTarget(document, owner, component, candidate ? candidate->id : 0);
+			const auto* resolved = document.FindEntity(result.entityId);
+			if (resolved && component.enemyMovementMode == "PositioningCharge" && !SceneEntityQuery::FindEnabledComponent(*resolved, "PlayerBehavior")) result.issue = SceneEnemyTargetIssue::UnsupportedPlayer;
+			ImGui::TextWrapped("%s", EnemyTargetStatusText(language, result.issue));
+		}
+		ImGui::TextWrapped("%s", text("HPの識別名", "Health stat ID")); ImGui::SetNextItemWidth(-1.0f);
+		changed |= InputTextString("##EnemyHealth", component.enemyHealthStatId);
+		const bool detectionEdited = number("索敵距離", "Detection range", component.enemyDetectionRange);
+		const bool lossEdited = number("対象を見失う距離", "Target loss range", component.enemyLoseRange);
+		changed |= detectionEdited || lossEdited;
+		changed |= number("移動速度", "Move speed", component.enemyMoveSpeed);
+		changed |= number("向きを変える速さ", "Turn speed", component.enemyTurnSpeed);
+		if (component.enemyMovementMode == "PositioningCharge") {
+			auto& settings = component.enemyPositioning;
+			ImGui::SeparatorText(text("位置取り", "Positioning"));
+			changed |= number("保ちたい距離（体の外側から）", "Preferred clearance", settings.distance);
+			changed |= number("距離の許容幅（±）", "Distance tolerance (+/-)", settings.tolerance);
+			changed |= number("敵同士の追加間隔", "Extra enemy spacing", settings.spacing);
+			if (ImGui::TreeNode(text("移動の詳細", "Movement details"))) {
+				changed |= number("後退速度の比率", "Retreat speed ratio", settings.retreatRatio, 1.0f);
+				changed |= number("回り込み速度の比率", "Orbit speed ratio", settings.orbitRatio, 1.0f);
+				changed |= number("加減速（毎秒）", "Acceleration per second", settings.acceleration);
+				ImGui::TreePop();
+			}
+			ImGui::SeparatorText(text("個体差", "Individual variation"));
+			changed |= ImGui::Checkbox(text("個体差を使用", "Enable variation"), &settings.variation);
+			if (settings.variation) {
+				changed |= number("保ちたい距離のばらつき（±）", "Preferred clearance variation (+/-)", settings.distanceVariation);
+				changed |= number("追加間隔のばらつき（±）", "Spacing variation (+/-)", settings.spacingVariation);
+				float percent = settings.speedVariation * 100.0f;
+				if (number("速度のばらつき（±％）", "Speed variation (+/- %)", percent, 99.0f)) { settings.speedVariation = percent / 100.0f; changed = true; }
+				if (ImGui::TreeNode(text("抽選の詳細", "Randomization details"))) {
+					changed |= ImGui::Checkbox(text("Playごとに抽選", "Randomize on Play"), &settings.randomizeOnPlay);
+					ImGui::TextUnformatted(text("固定Seed", "Fixed seed")); ImGui::SetNextItemWidth(-1.0f);
+					changed |= ImGui::InputScalar("##EnemySeed", ImGuiDataType_U32, &settings.seed);
+					ImGui::TreePop();
+				}
+			}
+
+			auto& charge = component.enemyCharge;
+			ImGui::SeparatorText(text("攻撃の開始", "Attack start"));
+			ImGui::TextWrapped("%s", text("開始距離", "Start distance")); ImGui::SetNextItemWidth(-1);
+			if (ImGui::BeginCombo("##ChargeStartDistanceMode", text(charge.startDistance == 0 ? "自動" : "手動",
+				charge.startDistance == 0 ? "Automatic" : "Manual"))) {
+				if (ImGui::Selectable(text("突進距離から自動", "Automatic from charge distance"), charge.startDistance == 0)) {
+					charge.startDistance = 0; changed = true;
+				}
+				if (ImGui::Selectable(text("手動で指定", "Manual"), charge.startDistance != 0)) {
+					if (charge.startDistance == 0) charge.startDistance = charge.distance;
+					changed = true;
+				}
+				ImGui::EndCombo();
+			}
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip(); ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+				ImGui::TextUnformatted(text("対象の体に触れるまでの移動量で判定します。保ちたい距離とは別です。",
+					"Measured as travel until the movement bodies touch, separately from preferred clearance."));
+				ImGui::PopTextWrapPos(); ImGui::EndTooltip();
+			}
+			if (charge.startDistance == 0) ImGui::TextWrapped(text("開始距離の上限: %.2f", "Start distance limit: %.2f"), charge.distance);
+			else if (number("開始距離の上限", "Start distance limit", charge.startDistance)) {
+				changed = true;
+				// 保存値0は自動方式用。手動の数値入力で黙って方式を切り替えない。
+				if (!std::isfinite(charge.startDistance) || charge.startDistance <= 0) issue = "EnemyCharge:ManualStartDistance";
+			}
+			changed |= number("最初の攻撃までの待ち", "First attack wait", charge.firstWaitSeconds);
+			changed |= number("復帰後の再攻撃待ち", "Cooldown after return", charge.cooldownSeconds);
+			ImGui::SeparatorText(text("突進", "Charge"));
+			changed |= number("突進の最大距離", "Maximum charge distance", charge.distance);
+			changed |= number("平均速度", "Average speed", charge.speed);
+			ImGui::TextWrapped("%s", text("速度の変化", "Speed change"));
+			ImGui::SetNextItemWidth(-1);
+			const char* curveIds[] = {"Linear", "EaseIn", "EaseOut", "EaseInOut", "SmoothStep"};
+			const char* curveJa[] = {"一定", "加速", "減速", "加速して減速", "なだらかな加減速"};
+			const char* curveEn[] = {"Constant", "Accelerate", "Decelerate", "Accelerate then decelerate", "Smooth acceleration / deceleration"};
+			int selectedCurve = -1;
+			for (int i = 0; i < 5; ++i) if (charge.movementEasing == curveIds[i]) selectedCurve = i;
+			const std::string curveLabel = selectedCurve >= 0 ? text(curveJa[selectedCurve], curveEn[selectedCurve]) :
+				std::string(text("未対応: ", "Unsupported: ")) + charge.movementEasing;
+			if (ImGui::BeginCombo("##ChargeMovementEasing", curveLabel.c_str())) {
+				for (int i = 0; i < 5; ++i) if (ImGui::Selectable(text(curveJa[i], curveEn[i]), selectedCurve == i)) {
+					charge.movementEasing = curveIds[i]; changed = true;
+				}
+				ImGui::EndCombo();
+			}
+			float chargeDuration;
+			Easing::Curve curve;
+			if (SceneEnemyChargeEvaluator::TryGetDuration(charge, chargeDuration) && Easing::TryParse(charge.movementEasing, curve)) {
+				ImGui::TextWrapped(text("無衝突での突進時間: %.3f 秒", "Charge duration without collision: %.3f s"), chargeDuration);
+				// Runtimeと同じ64区間の傾きを描く。編集可能な曲線や独立した微分式は持たない。
+				std::array<float, SceneEnemyChargeEvaluator::kSegmentCount> speeds{};
+				for (size_t i = 0; i < speeds.size(); ++i)
+					SceneEnemyChargeEvaluator::EvaluateSpeedRatio(charge, (float(i) + 0.5f) / float(speeds.size()), speeds[i]);
+				ImGui::TextWrapped("%s", text("速度 / 平均速度（0～3倍）", "Speed / average speed (0–3x)"));
+				ImGui::SetNextItemWidth(-1);
+				ImGui::PlotHistogram("##ChargeSpeedGraph", speeds.data(), static_cast<int>(speeds.size()), 0, nullptr, 0.0f, 3.0f, ImVec2(0, 64));
+				ImGui::TextWrapped("%s", text("経過割合: 左 0％ → 右 100％", "Elapsed time: left 0% to right 100%"));
+			}
+			if (ImGui::TreeNode(text("攻撃の時間", "Attack timing"))) {
+				changed |= number("構えの時間", "Aim duration", charge.aimSeconds);
+				changed |= number("方向固定後の待ち時間", "Locked aim delay", charge.lockedSeconds);
+				changed |= number("衝突・距離終了後の後隙", "Recovery after charge", charge.recoverySeconds);
+				changed |= number(charge.poseEnabled ? "姿勢を戻す時間" : "復帰の待ち時間", charge.poseEnabled ? "Pose return duration" : "Return wait duration", charge.returnSeconds);
+				ImGui::TreePop();
+			}
+			auto reference = [&](const char* ja, const char* en, uint64_t& id, bool hitOnly) {
+				ImGui::PushID(en); ImGui::TextWrapped("%s", text(ja,en)); ImGui::SetNextItemWidth(-1);
+				const auto* selected = document.FindEntity(id); bool edited = false;
+				if (ImGui::BeginCombo("##Target", selected ? selected->name.c_str() : text("未設定", "Unassigned"))) {
+					if (ImGui::Selectable(text("未設定", "Unassigned"), !selected)) { id=0; edited=true; }
+					for (const auto& candidate : document.GetEntities()) {
+						if (candidate.folder || candidate.id==owner.id || !document.IsDescendantOf(candidate.id,owner.id) ||
+							(hitOnly && !SceneEntityQuery::FindEnabledComponent(candidate,"HitBox"))) continue;
+						ImGui::PushID(static_cast<int>(candidate.id));
+						if (ImGui::Selectable(candidate.name.c_str(),id==candidate.id)) {id=candidate.id;edited=true;}
+						ImGui::PopID();
+					} ImGui::EndCombo();
+				} ImGui::PopID(); return edited;
+			};
+			if (reference("攻撃判定", "Attack HitBox", component.enemyAttackHitBoxEntityId, true)) {
+				const auto* selected=document.FindEntity(component.enemyAttackHitBoxEntityId);
+				component.enemyAttackHitBoxEntityName=selected?selected->name:""; changed=true;
+			}
+			auto vectorField = [&](const char* ja, const char* en, Vector3& value) {
+				ImGui::PushID(en); ImGui::TextWrapped("%s",text(ja,en)); ImGui::SetNextItemWidth(-1);
+				bool edit=ImGui::DragFloat3("##Vector",&value.x,0.05f); ImGui::PopID(); return edit;
+			};
+			if (ImGui::TreeNode(text("命中時の効果", "On hit effects"))) {
+				auto* hitEntity=component.enemyAttackHitBoxEntityId?document.FindEntity(component.enemyAttackHitBoxEntityId):document.FindEntityByName(component.enemyAttackHitBoxEntityName);
+				auto* hit=hitEntity?SceneEntityQuery::FindComponent(*hitEntity,"HitBox"):nullptr;
+				if (hit) {
+					ImGui::BeginDisabled(hitEntity->locked || !hit->enabled);
+					const auto before=*hit; bool edit=false;
+					edit|=number("HPダメージ", "HP damage", hit->hitBoxDamage);
+					edit|=number("水平の吹き飛ばし", "Horizontal knockback", hit->hitBoxKnockback);
+					edit|=number("上向きの吹き飛ばし", "Upward knockback", hit->hitBoxVerticalKnockback);
+					ImGui::TextUnformatted(text("吹き飛ばす方向", "Knockback direction")); ImGui::SetNextItemWidth(-1);
+					const char* directionIds[]={"RadialFromAttacker","AttackFacingLocal","HitBoxLocal","World"};
+					const char* directionJa[]={"攻撃者から外向き","攻撃者の向き基準","判定の向き基準","ワールド方向"};
+					const char* directionEn[]={"Radial from attacker","Attack facing local","HitBox local","World"};
+					int direction=0;for(int i=0;i<4;++i)if(hit->hitBoxKnockbackDirectionMode==directionIds[i])direction=i;
+					if(ImGui::BeginCombo("##Direction",text(directionJa[direction],directionEn[direction]))) {
+						for(int i=0;i<4;++i)if(ImGui::Selectable(text(directionJa[i],directionEn[i]),direction==i)){hit->hitBoxKnockbackDirectionMode=directionIds[i];edit=true;}
+						ImGui::EndCombo();
+					}
+					if(direction!=0) edit|=vectorField("方向ベクトル", "Direction vector",hit->hitBoxKnockbackLocalDirection);
+					const auto v=hit->hitBoxKnockbackLocalDirection;
+					if(edit && (!std::isfinite(hit->hitBoxDamage)||hit->hitBoxDamage<0||!std::isfinite(hit->hitBoxKnockback)||hit->hitBoxKnockback<0||
+						!std::isfinite(hit->hitBoxVerticalKnockback)||hit->hitBoxVerticalKnockback<0||!std::isfinite(v.x)||!std::isfinite(v.y)||!std::isfinite(v.z))) {
+						issue = "EnemyCharge:HitValues";
+						detailJa = EnemySettingsExplanation(EditorLanguage::Japanese, *hit, issue);
+						detailEn = EnemySettingsExplanation(EditorLanguage::English, *hit, issue);
+						*hit=before;
+					} else {changed|=edit;referencedChanged|=edit;}
+					ImGui::EndDisabled();
+				} else ImGui::TextWrapped("%s",text("上の欄で子のHitBoxを選択してください。","Select a child HitBox above."));
+				ImGui::TreePop();
+			}
+			ImGui::SeparatorText(text("姿勢演出", "Pose animation"));
+			if (ImGui::Checkbox(text("姿勢演出を使用", "Use pose animation"), &charge.poseEnabled)) {
+				const std::string check = charge.poseEnabled ? ValidateEnemyChargeConfiguration(document, owner, component) : "";
+				if (!check.empty()) {
+					issue = check;
+					detailJa = EnemySettingsExplanation(EditorLanguage::Japanese, component, issue);
+					detailEn = EnemySettingsExplanation(EditorLanguage::English, component, issue);
+					charge.poseEnabled = beforeCharge.poseEnabled;
+				}
+				else changed = true;
+			}
+			if (ImGui::TreeNode(text("姿勢の設定", "Pose settings"))) {
+				changed|=reference("傾ける見た目の子Entity", "Visual child to tilt", charge.poseEntityId,false);
+				ImGui::TextWrapped("%s",text("後傾・前傾の角度（度）", "Back / forward lean (degrees)"));
+				ImGui::SetNextItemWidth(-1); changed|=ImGui::DragFloat("##BackAngle",&charge.backAngle,0.5f);
+				ImGui::SetNextItemWidth(-1); changed|=ImGui::DragFloat("##ForwardAngle",&charge.forwardAngle,0.5f);
+				changed|=number("突進姿勢へ傾く時間", "Charge lean duration", charge.leanSeconds);
+				if(ImGui::TreeNode(text("姿勢の詳細", "Pose details"))) {
+					changed|=vectorField("回転軸", "Rotation axis",charge.axis);
+					changed|=vectorField("回転の支点", "Local pivot",charge.pivot);
+					changed|=vectorField("構えの位置ずらし", "Aim offset",charge.aimOffset);
+					changed|=vectorField("突進の位置ずらし", "Charge offset",charge.chargeOffset); ImGui::TreePop();
+				}
+				ImGui::TreePop();
+			}
+			if (!charge.poseEnabled && charge.poseEntityId && !document.FindEntity(charge.poseEntityId))
+				ImGui::TextWrapped("%s", EnemyPositioningIssue(language, "EnemyCharge:UnusedPose"));
+			if(settings.variation && ImGui::TreeNode(text("攻撃時間の個体差（±秒）", "Attack timing variation (+/- seconds)"))) {
+				changed|=number("構えのばらつき", "Aim variation",charge.aimVariation);
+				changed|=number("固定待ちのばらつき", "Locked delay variation",charge.lockedVariation);
+				changed|=number("再攻撃待ちのばらつき", "Cooldown variation",charge.cooldownVariation);
+				changed|=number("初回待ちのばらつき", "First wait variation",charge.firstWaitVariation); ImGui::TreePop();
+			}
+			ImGui::SeparatorText(text("攻撃の中断", "Attack interruption"));
+			auto& interrupt=component.enemyInterruption;
+			changed|=ImGui::Checkbox(text("条件で攻撃を中断", "Interrupt by conditions"),&interrupt.enabled);
+			const char* phaseJa[]={"構え","方向固定待ち","突進"}; const char* phaseEn[]={"Aim","Locked aim","Charge"};
+			const char* typeJa[]={"一撃のHPダメージ","累計HPダメージ","命中回数","水平ノックバック","上向きノックバック","怯み耐性を使い切る"};
+			const char* typeEn[]={"Single HP damage","Accumulated HP damage","Hit count","Horizontal knockback","Upward knockback","Poise depleted"};
+			auto thresholdField=[&](float& value) {
+				auto* storage=ImGui::GetStateStorage();const auto key=ImGui::GetID("ThresholdBuffer");
+				float buffer=storage->GetFloat(key,value);
+				ImGui::TextWrapped("%s",text("閾値","Threshold"));ImGui::SetNextItemWidth(-1);
+				const bool entered=ImGui::InputFloat("##Threshold",&buffer,0,0,"%.3f",ImGuiInputTextFlags_EnterReturnsTrue);
+				bool edit=false;
+				if(entered||ImGui::IsItemDeactivatedAfterEdit()){value=buffer;edit=true;}
+				else if(!ImGui::IsItemActive())buffer=value;
+				storage->SetFloat(key,buffer);return edit;
+			};
+			auto ruleFields=[&](SceneEnemyInterruptRule& rule,int scope) {
+				ImGui::PushID(scope); bool edit=false;
+				if(!rule.IsValid() && ImGui::Button(text("条件を初期値へ戻す","Reset invalid conditions"),ImVec2(-1,0))) {rule={};edit=true;}
+				ImGui::SetNextItemWidth(-1);
+				if(ImGui::BeginCombo("##Combine",!rule.validCombination?text("不明（選び直してください）","Unknown (select again)"):text(rule.all?"集計期間内に、すべて達成":"いずれかを達成",rule.all?"All within accumulation period":"Any condition"))) {
+					if(ImGui::Selectable(text("いずれかを達成","Any condition"),!rule.all)){rule.all=false;rule.validCombination=true;edit=true;}
+					if(ImGui::Selectable(text("集計期間内に、すべて達成","All within accumulation period"),rule.all)){rule.all=true;rule.validCombination=true;edit=true;}
+					ImGui::EndCombo();
+				}
+				for(size_t i=0;i<rule.conditions.size();) {
+					auto& row=rule.conditions[i]; ImGui::PushID(static_cast<int>(i));
+					int type=static_cast<int>(row.type); ImGui::SetNextItemWidth(-1);
+					if(ImGui::BeginCombo("##Type",type>=0&&type<6?text(typeJa[type],typeEn[type]):text("不明","Unknown"))) {
+						for(int t=0;t<6;++t) if(ImGui::Selectable(text(typeJa[t],typeEn[t]),type==t)){row.type=static_cast<SceneEnemyInterruptConditionType>(t);if(t==5)row.threshold=3.0f;edit=true;}
+						ImGui::EndCombo();
+					}
+					if(row.type!=SceneEnemyInterruptConditionType::PoiseDepleted) edit|=thresholdField(row.threshold);
+					const bool remove=ImGui::Button(text("条件を削除","Remove condition"),ImVec2(-1,0));
+					ImGui::PopID();
+					if(remove){rule.conditions.erase(rule.conditions.begin()+i);edit=true;}else ++i;
+				}
+				if(ImGui::Button(text("条件を追加…","Add condition..."),ImVec2(-1,0)))ImGui::OpenPopup("AddCondition");
+				if(ImGui::BeginPopup("AddCondition")) {
+					auto* storage=ImGui::GetStateStorage(); const auto typeId=ImGui::GetID("type"),valueId=ImGui::GetID("value");
+					int type=storage->GetInt(typeId,2); float value=storage->GetFloat(valueId,3.0f);
+					ImGui::SetNextItemWidth(-1);
+					if(ImGui::BeginCombo("##NewType",text(typeJa[type],typeEn[type]))) {
+						for(int t=0;t<6;++t) if(ImGui::Selectable(text(typeJa[t],typeEn[t]),type==t))type=t;
+						ImGui::EndCombo();
+					}
+					if(type!=5)thresholdField(value);
+					storage->SetInt(typeId,type);storage->SetFloat(valueId,value);
+					if(ImGui::Button(text("追加","Add"),ImVec2(-1,0))) {
+						auto candidate=rule;candidate.conditions.push_back({static_cast<SceneEnemyInterruptConditionType>(type),value});
+						if(candidate.IsValid()){rule=std::move(candidate);edit=true;}
+						else {
+							issue = "EnemyCharge:Settings";
+							detailJa = EnemyRuleExplanation(EditorLanguage::Japanese, candidate);
+							detailEn = EnemyRuleExplanation(EditorLanguage::English, candidate);
+						}
+						ImGui::CloseCurrentPopup();
+					} ImGui::EndPopup();
+				} ImGui::PopID(); return edit;
+			};
+			if(interrupt.enabled) {
+				ImGui::TextWrapped("%s",text("未達時もHPは減り、怯み・吹き飛ばしを抑えます。","HP still decreases; hit reactions and knockback are suppressed until conditions succeed."));
+				for(int i=0;i<3;++i){bool phase=(interrupt.phases&(1<<i))!=0; if(ImGui::Checkbox(text(phaseJa[i],phaseEn[i]),&phase)){interrupt.phases^=static_cast<uint8_t>(1u<<i);changed=true;}}
+				changed|=ruleFields(interrupt.common,-1);
+				if(ImGui::TreeNode(text("集計の詳細","Counting details"))) {
+					ImGui::TextWrapped("%s",text("攻撃判定の有効区間ごとに数える","Count each hit window"));
+					changed|=ImGui::Checkbox("##CountWindows",&interrupt.countWindows);
+					changed|=number("無被弾でリセットする秒数（0は無効）","Idle reset seconds (0 disables)",interrupt.idleResetSeconds);ImGui::TreePop();
+				}
+				if(ImGui::TreeNode(text("段階別の設定","Phase overrides"))) {
+					for(int i=0;i<3;++i){ImGui::PushID(i);changed|=ImGui::Checkbox(text(phaseJa[i],phaseEn[i]),&interrupt.overrideEnabled[i]);if(interrupt.overrideEnabled[i])changed|=ruleFields(interrupt.overrides[i],i);ImGui::PopID();}ImGui::TreePop();
+				}
+			}
+			if(ImGui::TreeNode(text("中断後の反応","After interruption"))) {
+				auto* mutableOwner=document.FindEntity(owner.id); auto* reaction=mutableOwner?SceneEntityQuery::FindComponent(*mutableOwner,"HitReaction"):nullptr;
+				if(reaction) {
+					const auto before=*reaction;bool edit=false; ImGui::BeginDisabled(!reaction->enabled);
+					edit|=number("被弾硬直の時間","Hit duration",reaction->hitReactionStateDuration);
+					edit|=number("吹き飛ばし倍率","Knockback multiplier",reaction->hitReactionKnockbackMultiplier);
+					edit|=number("怯み耐性の回復待ち","Poise recovery delay",reaction->hitReactionPoiseRecoveryDelay);
+					ImGui::TextWrapped("%s",text("怯み耐性の数値Stat","Poise numeric stat"));ImGui::SetNextItemWidth(-1);
+					if(ImGui::BeginCombo("##PoiseStat",reaction->hitReactionPoiseStatId.c_str())) {
+						if(const auto* stats=SceneEntityQuery::FindEnabledComponent(owner,"StatSet"))for(const auto& stat:stats->stats)
+							if(ImGui::Selectable(stat.id.c_str(),stat.id==reaction->hitReactionPoiseStatId)){reaction->hitReactionPoiseStatId=stat.id;edit=true;}
+						ImGui::EndCombo();
+					}
+					ImGui::TextWrapped("%s",text("被弾時の状態名（任意）","Hit state name (optional)"));ImGui::SetNextItemWidth(-1);
+					const auto* machine=SceneEntityQuery::FindEnabledComponent(owner,"StateMachine");
+					if(machine) {
+						if(ImGui::BeginCombo("##HitState",reaction->hitReactionStateName.empty()?text("使用しない","None"):reaction->hitReactionStateName.c_str())) {
+							if(ImGui::Selectable(text("使用しない","None"),reaction->hitReactionStateName.empty())){reaction->hitReactionStateName.clear();edit=true;}
+							for(const auto& state:machine->stateMachineStates)if(ImGui::Selectable(state.name.c_str(),state.name==reaction->hitReactionStateName)){reaction->hitReactionStateName=state.name;edit=true;}
+							ImGui::EndCombo();
+						}
+					}else edit|=InputTextString("##HitState",reaction->hitReactionStateName);
+					if(edit) {
+						if(!std::isfinite(reaction->hitReactionStateDuration)||reaction->hitReactionStateDuration<0||
+							!std::isfinite(reaction->hitReactionKnockbackMultiplier)||reaction->hitReactionKnockbackMultiplier<0||
+							!std::isfinite(reaction->hitReactionPoiseRecoveryDelay)||reaction->hitReactionPoiseRecoveryDelay<0) {
+							issue = "EnemyCharge:ReactionValues";
+							detailJa = EnemySettingsExplanation(EditorLanguage::Japanese, *reaction, issue);
+							detailEn = EnemySettingsExplanation(EditorLanguage::English, *reaction, issue);
+							*reaction=before;
+						}else {changed=true;referencedChanged=true;}
+					}
+					ImGui::EndDisabled();
+				}else ImGui::TextWrapped("%s",text("このEntityの「Componentを追加」でHitReactionを追加してください。","Use Add Component on this Entity to add HitReaction."));
+				ImGui::TreePop();
+			}
+			if (changed) {
+				// 先に発生した操作拒否を、後段の汎用エラーで上書きしない。
+				if (issue.empty()) issue = EnemySettingsEditIssue(document, owner, component,
+					(charge.poseEnabled && charge.poseEntityId != beforeCharge.poseEntityId) || component.enemyAttackHitBoxEntityId != beforeHitId);
+				if (!issue.empty() && detailJa.empty()) {
+					detailJa = EnemySettingsExplanation(EditorLanguage::Japanese, component, issue);
+					detailEn = EnemySettingsExplanation(EditorLanguage::English, component, issue);
+				}
+				if (issue == "EnemyPositioning:DetectionLoss" && (detectionEdited || lossEdited) && beforeMode == "PositioningCharge") {
+					// 元の値へ戻す前に距離2値だけを候補化。別設定を一緒に確定しない。
+					rangeProposal.ownerId = owner.id; rangeProposal.generation = document.GetContentGeneration();
+					rangeProposal.revision = document.GetRevision();
+					rangeProposal.beforeDetection = beforeDetection; rangeProposal.beforeLoss = beforeLose;
+					rangeProposal.proposedDetection = component.enemyDetectionRange;
+					rangeProposal.proposedLoss = component.enemyDetectionRange;
+					rangeProposal.offerRange = true;
+				}
+				if (!issue.empty()) {
+					component.enemyPositioning = beforeSettings; component.enemyMovementMode = beforeMode;
+					component.enemyCharge=beforeCharge;component.enemyInterruption=beforeInterrupt;
+					component.enemyAttackHitBoxEntityId=beforeHitId;component.enemyAttackHitBoxEntityName=beforeHitName;
+					component.enemyMoveSpeed = beforeSpeed; component.enemyDetectionRange = beforeDetection;
+					component.enemyLoseRange = beforeLose; component.enemyTurnSpeed = beforeTurn;
+					// 参照名等の独立した有効な編集は保持する。拒否された設定値は保存しない。
+				}
+			}
+		} else {
+			ImGui::SeparatorText(text("従来の攻撃", "Legacy attack"));
+			changed |= number("攻撃距離", "Attack range", component.enemyAttackRange);
+			changed |= number("再攻撃までの待ち時間", "Attack cooldown", component.enemyAttackCooldown);
+			changed |= number("予備動作", "Windup", component.enemyAttackWindup);
+			changed |= number("判定の有効時間", "Active time", component.enemyAttackActiveTime);
+			changed |= number("後隙", "Recovery", component.enemyAttackRecovery);
+			ImGui::TextUnformatted(text("モデルの攻撃Clip番号", "Model attack clip index")); ImGui::SetNextItemWidth(-1.0f);
+			changed |= ImGui::DragInt("##EnemyClip", &component.enemyAttackAnimationClip, 1.0f, 0, 1024);
+			ImGui::TextUnformatted(text("Prefabの攻撃Clip名", "Prefab attack clip name")); ImGui::SetNextItemWidth(-1.0f);
+			changed |= InputTextString("##EnemyPrefabClip", component.enemyAttackPrefabAnimationClip);
+			ImGui::TextUnformatted(text("攻撃判定のEntity ID", "Attack HitBox entity ID")); ImGui::SetNextItemWidth(-1.0f);
+			changed |= ImGui::InputScalar("##EnemyHitBox", ImGuiDataType_U64, &component.enemyAttackHitBoxEntityId);
+			ImGui::TextUnformatted(text("攻撃判定のEntity名", "Attack HitBox entity name")); ImGui::SetNextItemWidth(-1.0f);
+			changed |= InputTextString("##EnemyHitBoxName", component.enemyAttackHitBoxEntityName);
+			if (changed) component.enemyLoseRange = (std::max)(component.enemyLoseRange, component.enemyDetectionRange);
+		}
+		ImGui::EndDisabled();
+		const char* warning = text("敵の設定を適用できません###EnemyPositioningWarning", "Cannot apply enemy settings###EnemyPositioningWarning");
+		static std::unordered_map<ImGuiID, PendingWarning> pendingWarnings;
+		const ImGuiID warningId = ImGui::GetID(warning);
+		if (!issue.empty() && !ImGui::IsPopupOpen(warning)) {
+			if (issue == "EnemyPositioning:Body") {
+				detailJa = EnemyBodyExplanation(EditorLanguage::Japanese, owner);
+				detailEn = EnemyBodyExplanation(EditorLanguage::English, owner);
+			}
+			rangeProposal.ja = detailJa.empty() ? EnemyPositioningIssue(EditorLanguage::Japanese, issue) : detailJa;
+			rangeProposal.en = detailEn.empty() ? EnemyPositioningIssue(EditorLanguage::English, issue) : detailEn;
+			pendingWarnings[warningId] = std::move(rangeProposal);
+			ImGui::OpenPopup(warning); // 同じ原因でも、新しい編集操作なら通知し直す。
+		}
+		if (ImGui::BeginPopupModal(warning, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			// 候補は値とIDだけ。別Document/Undo/Play切替後に古い候補を適用しない。
+			const auto found = pendingWarnings.find(warningId);
+			bool close = false;
+			if (found != pendingWarnings.end()) {
+				auto& pending = found->second;
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+				ImGui::TextUnformatted(SelectEditorText(language, pending.ja.c_str(), pending.en.c_str()));
+				if (pending.offerRange) {
+					const bool same = editable && pending.ownerId == owner.id && pending.generation == document.GetContentGeneration() &&
+						pending.revision == document.GetRevision() && component.enemyMovementMode == "PositioningCharge" &&
+						component.enemyDetectionRange == pending.beforeDetection && component.enemyLoseRange == pending.beforeLoss;
+					ImGui::Separator();
+					ImGui::TextWrapped("%s: %.9g → %.9g", text("索敵距離", "Detection range"), pending.beforeDetection, pending.proposedDetection);
+					ImGui::TextWrapped("%s: %.9g → %.9g", text("対象を見失う距離", "Target loss range"), pending.beforeLoss, pending.proposedLoss);
+					if (!same) ImGui::TextWrapped("%s", text("対象または設定が変わったため適用できません。キャンセルし、編集状態で距離を入力し直してください。", "The target or settings changed. Cancel and enter the distances again in Edit mode."));
+					ImGui::BeginDisabled(!same);
+					if (ImGui::Button(text("見失う距離を広げて適用", "Increase loss range and apply"), ImVec2(-1, 0))) {
+						auto candidate = component;
+						candidate.enemyDetectionRange = pending.proposedDetection;
+						candidate.enemyLoseRange = pending.proposedLoss;
+						const std::string check = EnemySettingsEditIssue(document, owner, candidate, false);
+						if (check.empty()) {
+							// キーボードで押した場合も呼出元の同じFrame Undoに2値を収める。
+							beginEdit();
+							component.enemyDetectionRange = candidate.enemyDetectionRange;
+							component.enemyLoseRange = candidate.enemyLoseRange;
+							changed = true; issue.clear(); close = true;
+						} else {
+							pending.offerRange = false;
+							pending.ja = check == "EnemyPositioning:Body" ? EnemyBodyExplanation(EditorLanguage::Japanese, owner) : EnemySettingsExplanation(EditorLanguage::Japanese, candidate, check);
+							pending.en = check == "EnemyPositioning:Body" ? EnemyBodyExplanation(EditorLanguage::English, owner) : EnemySettingsExplanation(EditorLanguage::English, candidate, check);
+							if (pending.ja.empty()) pending.ja = EnemyPositioningIssue(EditorLanguage::Japanese, check);
+							if (pending.en.empty()) pending.en = EnemyPositioningIssue(EditorLanguage::English, check);
+						}
+					}
+					ImGui::EndDisabled();
+				}
+				ImGui::PopTextWrapPos();
+				if (!close && ImGui::Button(pending.offerRange ? text("キャンセル", "Cancel") : "OK", ImVec2(-1, 0))) close = true;
+			} else if (ImGui::Button("OK")) close = true;
+			if (close) { pendingWarnings.erase(warningId); ImGui::CloseCurrentPopup(); }
+			ImGui::EndPopup();
+		}
+
+		{
+			ImGui::SeparatorText(text("現在の状態", "Current status"));
+			auto showIssue = [&](const std::string& code) {
+				const std::string description = code == "EnemyPositioning:Body" ? EnemyBodyExplanation(language, owner) : EnemySettingsExplanation(language, component, code);
+				ImGui::TextWrapped("%s", description.empty() ? EnemyPositioningIssue(language, code) : description.c_str());
+			};
+			const char* configuration = component.enemyMovementMode == "PositioningCharge" ? ValidateEnemyChargeConfiguration(document,owner,component) : "";
+			if (*configuration) showIssue(configuration);
+			SceneEnemyPositioningStatus status;
+			if (manager && manager->TryGetEnemyPositioningStatus(document, owner.id, status)) {
+				const bool paused = editorPaused || manager->IsGamePaused();
+				const char* waitJa[] = {"構成を確認してください", "対象の解決待ち", "索敵・喪失範囲の外", "被弾・死亡等による制限", "位置取り中", "攻撃の待ち時間", "攻撃進行中", "開始可能",
+					"進路の更新待ち", "攻撃できる距離まで接近中", "正面の敵・キャラクターに遮られています", "正面の壁・障害物に遮られています",
+					"水平の突進では対象に接触できません。高さを確認してください", "対象との衝突Layer・Maskを確認してください",
+					"自分の移動Colliderを確認してください", "対象の移動Colliderを確認してください", "衝突形状が不正です。大きさ・座標変換を確認してください"};
+				const char* waitEn[] = {"Check configuration", "Waiting for a valid target", "Outside detection/loss range", "Hit/death restriction", "Positioning", "Waiting before attack", "Attack in progress", "Ready to start",
+					"Waiting for a fresh path query", "Approaching attack start range", "An enemy or character blocks the path", "A wall or obstacle blocks the path",
+					"Horizontal charge cannot reach the target. Check heights", "Check collision layers and masks for the target",
+					"Check this enemy's movement collider", "Check the target's movement collider", "Invalid collision shape. Check dimensions and transforms"};
+				static_assert(std::size(waitJa) == static_cast<size_t>(SceneEnemyAttackWaitReason::InvalidShape) + 1);
+				static_assert(std::size(waitJa) == std::size(waitEn));
+				const size_t wait = static_cast<size_t>(status.attackWaitReason);
+				if (paused) ImGui::TextWrapped("%s", text("一時停止中。以下は最終更新時点の状態です。", "Paused. Values below are from the last update."));
+				const char* reason = paused ? text("一時停止中", "Paused") :
+					(wait < std::size(waitJa) ? text(waitJa[wait], waitEn[wait]) : text("状態不明", "Unknown status"));
+				ImGui::TextWrapped("%s: %s", text("攻撃の状態・待機理由", "Attack status / wait reason"), reason);
+				if (!status.configurationIssue.empty() && status.configurationIssue != configuration) showIssue(status.configurationIssue);
+				if (status.positioningAvailable) {
+					const char* ja[] = {"待機", "接近", "後退", "距離を維持", "回り込み", "進路が塞がれています", "被弾・死亡による停止", "構成を確認してください"};
+					const char* en[] = {"Waiting", "Approaching", "Retreating", "Holding", "Orbiting", "Blocked", "Hit/death stop", "Check configuration"};
+					const size_t phase = static_cast<size_t>(status.phase);
+					const char* action = phase < std::size(ja) ? text(ja[phase], en[phase]) : text("状態不明", "Unknown status");
+					if (status.chargePhase == SceneEnemyChargePhase::Idle) {
+						if (status.positioningIntent == SceneEnemyPositioningIntent::FindClearLane) action = text("攻撃の進路を探しています", "Finding a clear attack path");
+						else if (status.positioningIntent == SceneEnemyPositioningIntent::ApproachForAttack) action = text("攻撃距離へ接近しています", "Approaching attack range");
+						if (status.noSafePositioningCandidate) action = text("安全に移動できる候補がありません", "No safe movement candidate");
+					}
+					else action = text("攻撃動作中", "Attack sequence");
+					ImGui::TextWrapped("%s: %s", text("行動", "Movement"), action);
+					const char* chargeJa[]={"待機","構え","方向固定待ち","突進","後隙",component.enemyCharge.poseEnabled ? "姿勢復帰" : "復帰待ち","被弾中断"};
+					const char* chargeEn[]={"Idle","Aim","Locked aim","Charge","Recovery","Returning","Interrupted"};
+					const size_t attack = static_cast<size_t>(status.chargePhase);
+					ImGui::TextWrapped("%s: %s", text("攻撃段階", "Attack phase"), attack < std::size(chargeJa) ? text(chargeJa[attack], chargeEn[attack]) : text("状態不明", "Unknown status"));
+					if (status.blockerEntityId) ImGui::TextWrapped("%s: %s / ID %llu", text("遮っている対象", "Blocking entity"),
+						status.blockerDisplayName.c_str(), static_cast<unsigned long long>(status.blockerEntityId));
+					if (status.contactDistanceValid) ImGui::TextWrapped(text("接触までの必要移動量: %.2f", "Travel required for body contact: %.2f"), status.contactDistance);
+					ImGui::TextWrapped(text("開始距離の上限: %.2f", "Start distance limit: %.2f"), status.startDistanceLimit);
+					if (status.attackWaitReason == SceneEnemyAttackWaitReason::Cooldown) ImGui::TextWrapped(
+						status.firstAttackWait ? text("初回攻撃まで: %.2f 秒", "First attack in: %.2f s") : text("再攻撃まで: %.2f 秒", "Next attack in: %.2f s"), status.attackWaitSeconds);
+					if (ImGui::TreeNode(text("実行状態の詳細", "Runtime status details"))) {
+						const char* endJa[]={"なし","最大距離","壁に衝突","敵に衝突","対象に衝突","被弾中断","構成不正","対象喪失"};
+						const char* endEn[]={"None","Distance","Wall","Enemy","Target","Interrupted","Invalid configuration","Target lost"};
+						const size_t end = static_cast<size_t>(status.chargeEnd);
+						ImGui::TextWrapped("%s: %s", text("最後の終了理由", "Last end reason"), end < std::size(endJa) ? text(endJa[end], endEn[end]) : text("状態不明", "Unknown status"));
+						ImGui::TextWrapped("%s: %.2f / %s: %u", text("累計HPダメージ", "Accumulated HP damage"), status.accumulatedDamage, text("命中回数", "Hit count"), status.hitCount);
+						const int stage = static_cast<int>(status.chargePhase) - 1;
+						const auto& rule = stage >= 0 && stage < 3 && component.enemyInterruption.overrideEnabled[stage] ? component.enemyInterruption.overrides[stage] : component.enemyInterruption.common;
+						for (size_t i = 0; i < (std::min)(rule.conditions.size(), size_t(6)); ++i) ImGui::TextWrapped("%s %u: %s", text("条件", "Condition"), static_cast<unsigned>(i + 1),
+							(status.achievedConditions & (1u << i)) ? text("達成", "Met") : text("未達", "Not met"));
+						ImGui::TextWrapped(text("個体の目標距離: %.2f", "Sampled preferred clearance: %.2f"), status.distance);
+						ImGui::TextWrapped("%s: %.2f / %s: %.2f", text("追加間隔", "Spacing"), status.spacing, text("速度", "Speed"), status.speed);
+						ImGui::TextWrapped("%s: %llu", text("出現世代", "Spawn generation"), static_cast<unsigned long long>(status.generation));
+						ImGui::TreePop();
+					}
+				}
+			} else ImGui::TextWrapped("%s", text("実行状態はPlay開始後に表示します。", "Runtime status appears after Play starts."));
+			if (component.enemyMovementMode == "PositioningCharge" && component.enemyPositioning.distance + component.enemyPositioning.tolerance +
+				(component.enemyPositioning.variation ? component.enemyPositioning.distanceVariation : 0.0f) >= component.enemyLoseRange)
+				ImGui::TextWrapped("%s", EnemyPositioningIssue(language, "EnemyPositioning:Range"));
+		}
+		if (ImGui::Button(text("敵のリファレンス", "Enemy reference"), ImVec2(-1, 0))) ImGui::OpenPopup("EnemyPositioningReference");
+		if (ImGui::BeginPopup("EnemyPositioningReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+			ImGui::TextUnformatted(text(
+				"「保ちたい距離」は普段と再攻撃待ちの位置取り、「開始距離」は構え始める距離、「突進の最大距離」は一回に進める量です。位置取りの完了や横の敵との追加間隔を、攻撃開始の必須条件にはしません。\n「攻撃の開始」で開始距離を選びます。自動は突進の最大距離、手動はそれ以下の正数です。距離は中心間ではなく、移動Collider同士が接触するまでの自分の移動量です。保ちたい距離の外接円による余裕とは計算法が異なります。\n例えば最大8で接触まで6なら自動では開始できます。手動4なら接近を試します。旧データも自動になるため、保ちたい距離へ着く前に構える場合があります。手動で0を入力して自動へ切り替えることはできません。プルダウンを使用してください。",
+				"Preferred clearance controls normal positioning and cooldown movement. Start distance controls when aiming may begin; maximum charge distance controls travel in one charge. Reaching the preferred position or extra spacing from side neighbors is no longer mandatory to start.\nChoose automatic or manual under Attack start. Automatic uses maximum charge distance; manual is a positive value up to that maximum. Distance means travel until movement colliders touch, not center distance or the conservative circle clearance used for positioning.\nWith maximum 8 and contact travel 6, automatic can start; manual 4 attempts to approach. Old data defaults to automatic, so aiming can begin before reaching preferred clearance. Use the dropdown, not a manual value of zero, to return to automatic."));
+			ImGui::TextUnformatted(text(
+				"正面の通路は体の幅・高さと衝突Layer/Maskを使って調べます。対象より手前の敵や壁が塞ぐと回り込みを試し、安全な候補がなければ停止します。対象より後ろの壁や、通路に入っていない横の敵は開始を妨げません。完全包囲からの脱出や攻撃順の予約は行いません。\n構えた後の移動・方向固定・衝突停止は従来通りです。プレイヤーが避ければ空振りし、別の敵が進路へ入れば接触で停止します。接触可能という表示はHitBoxの命中やHP減少の保証ではありません。\n「現在の状態」で攻撃段階と待機理由を分けて確認できます。接触までの必要移動量、開始上限、遮っているEntity、初回/再攻撃の残り時間を確認してください。個体の目標距離や中断条件は「実行状態の詳細」にあります。Scene/Prefabで編集してSaveし、Playを再開始して自動/手動、横の敵/正面の敵/壁を確認してください。Pause中は最終更新時点の値を表示します。",
+				"The path query uses body width/height and collision layers/masks. An enemy or obstacle before the target triggers local orbiting; no safe candidate means waiting. Walls beyond the target and neighbors outside the path do not block the start. There is no guaranteed escape from enclosure or attack reservation.\nAfter aiming starts, movement, direction locking and collision stops work as before. A moving player can evade; a newly blocking enemy stops the charge on contact. Reachability does not guarantee a HitBox hit or HP damage.\nCurrent status separates attack phase and wait reason. Check required contact travel, start limit, blocking Entity and first/cooldown time. Sampled preferred clearance and interruption counters are in Runtime status details. Edit in Scene or Prefab, Save and restart Play to check automatic/manual and side/front neighbors/walls. Paused values are from the last update."));
+			ImGui::TextUnformatted(text(
+				"「位置取り＋体当たり」では、索敵距離は発見する距離、対象を見失う距離は追跡をやめる距離です。見失う距離は索敵距離以上が必要です。逆転する値を入力すると、原因と入力値、変更案をPopupで表示します。「見失う距離を広げて適用」を選ぶと索敵距離と同じ値まで広げ、2項目を一度のUndoで戻せます。キャンセルでは入力前の値を保持します。\n警告には問題の項目と数値、必要な最小値・範囲を表示します。保ちたい距離/間隔とばらつき、攻撃時間、姿勢、中断条件、命中時の効果、中断後の反応をそれぞれ確認してください。値の自動補正は距離の提案を選んだ場合だけです。",
+				"In Positioning + Charge, detection range acquires a target; target loss range ends pursuit. Loss range must be at least detection range. Conflicting input opens a popup with the cause, values and proposed changes. Increase loss range and apply matches the detection range; one Undo restores both fields. Cancel preserves the previous values.\nWarnings identify the affected field, value and required minimum/range. Check clearance/spacing variation, attack times, pose, interruption conditions, on-hit effects and after-interruption reactions as indicated. Distance correction is applied only when you choose the proposal."));
+			ImGui::TextUnformatted(text(
+				"新規追加では「プレイヤーを自動で探す」、姿勢演出OFFです。PrefabにSceneのIDを入力せず、実行中のPlayerを使用できます。既存データは従来のID優先参照・姿勢ONを維持します。SimpleEnemy等は探し方を自動へ切り替え、姿勢をOFFにしてSave→Playを再開始してください。\nEntity方式はIDのみ、名前方式は完全一致で一意の名前のみを使用します。モード切替時に未使用の参照を消し、Undoで戻せます。Prefab内にPlayerがないことは異常ではありません。実PlayerのScene対応は既存のPlayer名を使います。\n姿勢ONの前に「姿勢の設定」で見た目の子を選びます。OFFでも構え・後隙・復帰の待ち時間は同じです。実行状態には対象、待機理由、構成の不足を別々に表示します。",
+				"New components use Auto Player with pose animation OFF. Prefabs target the runtime Player without storing a Scene ID. Existing data retains legacy ID-first references and pose ON. For SimpleEnemy, switch to Auto Player, turn pose OFF, Save, then restart Play.\nEntity uses only its ID; Exact name requires a unique match. Switching modes clears unused references and supports Undo. A Player absent from the prefab is expected. The runtime Player binding still uses the existing Player scene name.\nBefore enabling pose, select a visual child in Pose settings. Disabling pose preserves aim, recovery and return wait times. Runtime status separately shows the target, wait reason and configuration issues."));
+			ImGui::TextUnformatted(text(
+				"同じEntityへEnemyBehavior、DynamicのPhysicsBody、有効な非Triggerの移動Colliderを付け、行動方式を切り替えます。AgentBehaviorの追加は不要です。\n保ちたい距離はXZ上の体の外側から測ります。箱は外接円を使うため余裕のある判定になります。追加間隔は双方の希望の平均です。\n混雑時は局所的に回り込み、通れなければ待ちます。広域の経路探索は行いません。子のTrigger HitBoxを指定すると、構え→方向固定→突進→衝突または最大距離→後隙→復帰待ちの順で攻撃します。姿勢演出は任意です。\n個体差は出現時に一回抽選。Pause・被弾では維持し、Pool再出現で再抽選します。固定Seedで同じ構成/出現順を再現できます。現在値は保存しません。\n新方式ではEnemyBehaviorの設定を使います。既存AgentBehaviorの分離・速度設定を重複適用しません。従来方式は既存設定を使用します。",
+				"Add EnemyBehavior, a Dynamic PhysicsBody and an active non-trigger movement collider to the same Entity, then switch movement mode. AgentBehavior is not required.\nPreferred clearance is XZ clearance outside the bodies. Boxes use a conservative bounding circle. Pair spacing averages both preferences.\nEnemies orbit locally when crowded, and wait if blocked. There is no global pathfinding. Assign a child trigger HitBox to enable aim, locked delay, charge, collision/distance stop, recovery, and return wait. Pose animation is optional.\nVariation is sampled once per spawn, retained across pause/hits, and resampled on pool reuse. A fixed seed reproduces the same layout/spawn order. Runtime values are never saved.\nThe new mode uses EnemyBehavior settings and does not also apply AgentBehavior separation/speed settings. Legacy mode retains existing settings."));
+			ImGui::TextUnformatted(text(
+				"体当たりの「速度の変化」は一定・加速・減速・加速して減速・なだらかな加減速から選びます。平均速度と最大距離が同じなら、無衝突時の距離と突進時間（距離÷平均速度）は変わりません。旧データと新規追加の既定は一定です。\n速度グラフは横軸が経過割合、縦軸が平均速度に対する倍率です。移動と接触は突進全体の64区間で同じ経路を使います。接触するとその時刻で停止し、途中の傾きのまま後隙に入ります。姿勢の補間と通常移動はこの曲線では変わりません。\n未対応の保存名は保持され、攻撃は開始しません。対応する曲線へ選び直してSaveしてください。Scene/Prefab共通でUndo可能です。Save後にPlayを再開始して確認します。傾きの動きはPlayで確認します。",
+				"Speed change offers Constant, Accelerate, Decelerate, Accelerate then decelerate, and Smooth acceleration / deceleration. With the same average speed and maximum distance, unobstructed distance and duration (distance / average speed) stay the same. Missing saved values and new components default to Constant.\nThe graph shows elapsed time horizontally and speed relative to average vertically. Movement and contact share 64 fixed intervals over the whole charge. Contact stops at its time and holds the reached tilt during recovery. Pose interpolation and normal movement are unaffected.\nUnsupported saved names are retained and disable charging. Select a supported curve and Save. Scene and Prefab editing both support Undo. Restart Play after Save to check the result. Check the tilt motion in Play."));
+			ImGui::TextUnformatted(text(
+				"条件付き中断は初期OFF、有効時の初期条件は命中3回です。HPは減ったまま、条件成立まで怯みと吹き飛ばしを抑えます。ANDは同じ集計期間内の達成を保持します。段階別設定への切替で集計をリセットします。無被弾リセットでも同じ攻撃実行は再加算しません。\n命中時の効果は参照HitBox、中断後の反応は既存HitReactionを直接編集します。Player側にもHealth・HurtBox・HitReaction・Dynamic Bodyが必要です。軸固定では該当方向へ動かず、硬直0秒では水平持続ノックバックはありません。\n旧HitBoxで実行IDがない場合は観測した有効化を一攻撃と数えます。一Frame内に無効化・再有効化し区別できない場合は回数を増やしません。姿勢対象の枝に物理や別のTransform演出を置かないでください。Pause中は時計を止め、死亡スローでは開始済み突進のみ継続します。",
+				"Custom interruption defaults OFF; enabling it starts with 3 hits. HP decreases normally while reactions and knockback are suppressed until success. All conditions retain achievements within one period; phase overrides reset the period. Idle reset never recounts the same attack execution.\nOn-hit effects edit the referenced HitBox; after-hit settings edit the existing HitReaction. The Player needs Health, HurtBox, HitReaction and a Dynamic Body. Frozen axes cannot move; zero hit duration produces no sustained horizontal knockback.\nLegacy HitBoxes without execution IDs count observed activations. Off/on transitions hidden within one frame are not counted again. Keep physics and competing transform animation outside the pose branch. Pause freezes clocks; death slow motion continues only existing charges."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+		return targetEdited || referencedChanged || (issue.empty() ? changed : component.enemyTargetEntityId != beforeTargetId ||
+			component.enemyTargetEntityName != beforeTargetName || component.enemyHealthStatId != beforeHealthId);
+	}
+}
+
 bool ImGuiManager::DrawGameFlowFields(SceneDocument& document, uint64_t entityId, SceneComponent& component) {
+	DrawGameFlowEventReference(editorLanguage_);
 	bool changed = false;
 	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
 	auto warn = [&](const std::string& issue, const std::string& detail) {
@@ -10518,6 +12904,89 @@ bool ImGuiManager::DrawEnemySpawnAppearance(SceneDocument& document, uint64_t en
 	return changed;
 }
 
+void ImGuiManager::ApplyDeathAuthoringRequest(SceneDocument& document, uint64_t ownerId, bool prefab,
+	bool addReplay, const std::string& inspect, const std::string& issue, int previewCut, int manualCut, bool endPreview) {
+	auto warn = [&](const std::string& reason) {
+		spawnWarningRequested_ = true; spawnWarningRuntime_ = false;
+		spawnWarningEntityId_ = ownerId; spawnWarningIssue_ = reason; spawnWarningDetail_.clear();
+	};
+	if (!issue.empty()) warn(issue);
+	auto* owner = document.FindEntity(ownerId);
+    if (endPreview) { replayFramingRequest_={}; replayFramingManualReady_=false; }
+    if (previewCut>=0 || manualCut>=0) {
+        const int cut=manualCut>=0 ? manualCut : previewCut;
+        auto* component=owner ? FindComponent(*owner,"DeathReplay") : nullptr;
+        if (!owner || owner->locked || !component || cut>=static_cast<int>(component->deathReplayViews.size()) ||
+            !editorSession_ || !editorSession_->IsEditing()) warn("DeathResponse:ReplayCamera");
+        else {
+            const bool keepPreview=replayFramingRequest_.owner==ownerId && replayFramingRequest_.prefab==prefab && replayFramingRequest_.preview;
+            replayFramingRequest_={ownerId,document.GetContentGeneration(),++replayFramingSerial_,static_cast<uint32_t>(cut),
+                prefab,previewCut>=0 || keepPreview,manualCut>=0,component->deathReplayViews[cut]};
+            if (prefab && prefabEditorSession_) replayFramingRequest_.sourcePath=prefabEditorSession_->GetFilePath();
+            replayFramingManualReady_=false;
+        }
+    }
+    if (replayFramingManualReady_ && replayFramingResultSerial_==replayFramingRequest_.serial &&
+        replayFramingRequest_.owner==ownerId && replayFramingRequest_.prefab==prefab &&
+        replayFramingRequest_.generation==document.GetContentGeneration()) {
+        auto* component=owner ? FindComponent(*owner,"DeathReplay") : nullptr;
+        if (owner && !owner->locked && component && replayFramingRequest_.cut<component->deathReplayViews.size() &&
+            editorSession_ && editorSession_->IsEditing() &&
+            component->deathReplayViews[replayFramingRequest_.cut]==replayFramingResultSource_) {
+            if (prefab && prefabEditorSession_) prefabEditorSession_->BeginEditFrame();
+            else if (editorSession_) editorSession_->BeginEditFrame();
+            component->deathReplayViews[replayFramingRequest_.cut]=replayFramingManualResult_;
+            document.MarkDirty();
+        } else warn("DeathResponse:ReplayCamera");
+        replayFramingManualReady_=false; replayFramingRequest_.convertToManual=false;
+        if (!replayFramingRequest_.preview) replayFramingRequest_={};
+    }
+	if (addReplay) {
+		const auto* death = owner ? SceneEntityQuery::FindEnabledComponent(*owner, "DeathResponse") : nullptr;
+		if (!owner || owner->folder || owner->locked || (editorSession_ && !editorSession_->IsEditing()) ||
+			!death || death->deathResponseScope != "Scene" || FindComponent(*owner, "DeathReplay") ||
+			!document.AddComponent(ownerId, "DeathReplay")) {
+			warn("DeathResponse:ReplayAuthoringDenied");
+		} else {
+			document.MarkDirty();
+			if (!prefab && editorSession_) editorSession_->RequestSceneReload();
+		}
+	}
+	// 追加後はvector参照を持ち越さず、IDから取り直す。移動自体は保存内容を変えない。
+	owner = document.FindEntity(ownerId);
+	if (inspect.empty() || !owner) return;
+	if (!FindComponent(*owner, inspect.c_str())) { warn("DeathResponse:ReplayInvalidSettings"); return; }
+	if (prefab) prefabSummarySelectedComponentType_ = inspect;
+	else sceneSummarySelectedComponentType_ = inspect;
+	const std::string key = prefab ? prefabEditorSession_->GetFilePath() : editorSession_->GetActiveSceneId();
+	componentFoldoutStates_[MakeComponentFoldoutKey(key, ownerId, inspect)] = true;
+}
+
+void ImGuiManager::ApplyStatTextAuthoringRequest(SceneDocument& document, uint64_t ownerId,
+	bool prefab, bool addText, uint64_t inspectId, const std::string& inspectType) {
+	const char* popup=SelectEditorText(editorLanguage_,"能力値表示の操作を完了できません###StatTextAuthoringWarning","Stat display operation failed###StatTextAuthoringWarning");
+	if(addText) {
+		auto* owner=document.FindEntity(ownerId);
+		if(!owner || owner->locked || owner->folder || document.IsPrefabVariant() || document.FindPrefabInstanceRoot(ownerId) != 0 || (editorSession_ && !editorSession_->IsEditing()) || !document.AddComponent(ownerId,"TextRenderer")) ImGui::OpenPopup(popup);
+		else { document.MarkDirty(); if(!prefab && editorSession_)editorSession_->RequestSceneReload(); }
+	}
+	if(inspectId) {
+		const auto* target=document.FindEntity(inspectId);
+		if(!target || !FindComponent(*target,inspectType.c_str())) ImGui::OpenPopup(popup);
+		else {
+			if(prefab) { prefabSelectedEntityId_=inspectId; prefabSummarySelectedComponentType_=inspectType; }
+			else { selectedEntityId_=inspectId; sceneSummarySelectedComponentType_=inspectType; }
+			const auto key=prefab?prefabEditorSession_->GetFilePath():editorSession_->GetActiveSceneId();
+			componentFoldoutStates_[MakeComponentFoldoutKey(key,inspectId,inspectType)]=true;
+		}
+	}
+	if(ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+420);
+		ImGui::TextUnformatted(SelectEditorText(editorLanguage_,"文字の追加またはInspector移動を完了できません。編集モードでロックを解除し、参照先とComponentの存在を確認してください。Prefabの構造変更は編集可能な元Prefabで行ってください。","Cannot add text or open the Inspector. Use editing mode, unlock the Entity, and check the target and Component. Edit the source Prefab for protected structural changes."));
+		ImGui::PopTextWrapPos(); if(ImGui::Button("OK"))ImGui::CloseCurrentPopup(); ImGui::EndPopup();
+	}
+}
+
 void ImGuiManager::DrawSpawnPreparationWarning() {
 	const auto diagnostic = sceneManager_ ? sceneManager_->GetActivePreparationDiagnostic() : ScenePreparationDiagnostic{};
 	const uint64_t instance = sceneManager_ ? sceneManager_->GetActiveSceneInstanceId() : 0;
@@ -10536,26 +13005,30 @@ void ImGuiManager::DrawSpawnPreparationWarning() {
 		case ScenePreparationDiagnosticCode::WaveMismatch: spawnWarningIssue_ = "WaveMismatch"; break;
 		default: spawnWarningIssue_.clear(); break;
 		}
-		if (diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
+		if (diagnostic.detail.starts_with("DeathResponse:") || diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
 	}
+	const bool death = spawnWarningIssue_.starts_with("DeathResponse:");
 	const bool flow = spawnWarningIssue_.starts_with("FlowPreparation:");
 	const bool restart = spawnWarningIssue_.starts_with("SceneRestart:");
 	const bool menu = spawnWarningIssue_.starts_with("MenuRuntime:");
-	const char* title = menu ? SelectEditorText(editorLanguage_, "メニュー操作を完了できません###SpawnPreparationWarning", "Menu Operation Failed###SpawnPreparationWarning") :
+	const bool transition = spawnWarningIssue_.starts_with("SceneTransition:");
+	const char* title = death ? SelectEditorText(editorLanguage_, "死亡処理の操作を完了できません###SpawnPreparationWarning", "Death Operation Failed###SpawnPreparationWarning") : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました###SpawnPreparationWarning", "Scene Transition Problem###SpawnPreparationWarning") :
+		menu ? SelectEditorText(editorLanguage_, "メニュー操作を完了できません###SpawnPreparationWarning", "Menu Operation Failed###SpawnPreparationWarning") :
 		restart ? SelectEditorText(editorLanguage_, "Sceneを再起動できません###SpawnPreparationWarning", "Scene Restart Failed###SpawnPreparationWarning") :
 		flow ? SelectEditorText(editorLanguage_, "ゲーム開始を準備できません###SpawnPreparationWarning", "Game Start Preparation Failed###SpawnPreparationWarning") :
 		SelectEditorText(editorLanguage_, "敵の出現を準備できません###SpawnPreparationWarning", "Enemy Spawn Preparation Failed###SpawnPreparationWarning");
 	if (spawnWarningRequested_) { ImGui::OpenPopup(title); spawnWarningRequested_ = false; }
 	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
 	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 540.0f);
-	ImGui::TextWrapped("%s", menu ? SelectEditorText(editorLanguage_, "メニューまたはUI Eventの処理を完了できませんでした。以下の原因と対処を確認してください。", "A menu or UI event operation could not complete. Review the cause and corrective steps below.") :
+	ImGui::TextWrapped("%s", death ? (spawnWarningRuntime_ ? SelectEditorText(editorLanguage_,"死亡停止は維持しています。原因と対処を確認してください。","Death remains stopped. Review the cause and corrective steps.") : SelectEditorText(editorLanguage_,"死亡演出の編集操作を完了できません。原因と対処を確認してください。","The death authoring operation could not complete. Review the cause and corrective steps.")) : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました。以下の原因と対処を確認してください。", "A scene transition problem occurred. Review the cause and corrective steps below.") :
+		menu ? SelectEditorText(editorLanguage_, "メニューまたはUI Eventの処理を完了できませんでした。以下の原因と対処を確認してください。", "A menu or UI event operation could not complete. Review the cause and corrective steps below.") :
 		restart ? SelectEditorText(editorLanguage_, "Sceneを再起動できませんでした。現在のSceneは維持しています。", "The scene could not restart. The current scene has been kept.") :
 		flow ? (spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "ゲーム開始・進行の処理を停止しました。", "Game preparation or progression has stopped.") :
 		SelectEditorText(editorLanguage_, "開始設定の適用または確認を完了できません。設定値と参照先を確認してください。", "Start settings could not be applied or validated. Review their values and references.")) :
 		(spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "このSpawnerの出現処理を停止しました。", "Spawning has stopped for this spawner.") :
 		SelectEditorText(editorLanguage_, "出現設定を適用できません。入力前の値を維持しています。", "Spawn settings could not be applied. Previous values have been kept.")));
-	ImGui::Text("%s: %llu", SelectEditorText(editorLanguage_, "対象ID", "Entity ID"), static_cast<unsigned long long>(spawnWarningEntityId_));
-	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
+	if (!transition) ImGui::Text("%s: %llu", SelectEditorText(editorLanguage_, "対象ID", "Entity ID"), static_cast<unsigned long long>(spawnWarningEntityId_));
+	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (death ? LocalizeDeathIssue(editorLanguage_,spawnWarningIssue_) : transition ? std::string(LocalizeTransitionFailure(spawnWarningDetail_)) : menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
 	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) { ImGui::TextWrapped("%s", spawnWarningDetail_.c_str()); ImGui::TreePop(); }
 	ImGui::PopTextWrapPos();
 	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
@@ -10570,6 +13043,9 @@ void ImGuiManager::DrawMenuAuthoringWarning() {
 	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
 	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 520.0f);
 	const char* action = menuWarningOperation_ == "NavigationKeys" ? SelectEditorText(editorLanguage_, "方向キー設定の追加", "Add Navigation Key Bindings")
+		: menuWarningOperation_ == "StandardInput" ? SelectEditorText(editorLanguage_, "標準操作のキー・並び方向の変更", "Edit Standard Keys or Navigation Axis")
+		: menuWarningOperation_ == "PauseSettings" ? SelectEditorText(editorLanguage_, "メニューの停止設定", "Configure Menu Pause")
+		: menuWarningOperation_ == "EventKeys" ? SelectEditorText(editorLanguage_, "Eventのキー編集", "Edit Event Keys")
 		: menuWarningOperation_ == "CreateBackground"
 		? SelectEditorText(editorLanguage_, "背景の追加", "Add Background")
 		: menuWarningOperation_ == "AddMenuText" ? SelectEditorText(editorLanguage_, "文字の追加", "Add Text")
@@ -10598,7 +13074,7 @@ bool ImGuiManager::PrepareStandardMenuPanel(SceneDocument& candidate, uint64_t o
 	if (t.translate.x || t.translate.y || t.translate.z || t.scale.x != 1 || t.scale.y != 1 || t.scale.z != 1 ||
 		t.rotate.x || t.rotate.y || t.rotate.z || std::abs(t.rotate.w) != 1) return fail();
 	for (const auto& c : owner->components)
-		if (c.type != "MenuPanel" && c.type != "UICanvas" && c.type != "EventTrigger") return fail();
+		if (c.type != "MenuPanel" && c.type != "UICanvas" && c.type != "EventTrigger" && c.type != "GamePause") return fail();
 	for (const auto& child : candidate.GetEntities()) if (child.parentId == ownerId) return fail();
 	if (!FindComponent(*owner, "UICanvas") && !candidate.AddComponent(ownerId, "UICanvas")) return fail();
 	// Component追加後はvector内の参照を再取得する。
@@ -10764,6 +13240,21 @@ bool ImGuiManager::PrepareMenuUILayout(SceneDocument& candidate, uint64_t ownerI
 	return true;
 }
 
+namespace {
+	struct MenuPauseConnection { uint64_t ownerId = 0; bool ambiguous = false; };
+	// 無効な既存接続も見つけ、チェックONで別のGamePauseを重ねて作らない。
+	MenuPauseConnection FindMenuPauseConnection(const SceneDocument& document, uint64_t panelId) {
+		MenuPauseConnection result;
+		for (const auto& owner : document.GetEntities()) for (const auto& c : owner.components) {
+			if (c.type != "GamePause") continue;
+			if (owner.id == panelId && c.gamePausePanelEntityId != panelId) result.ambiguous = true;
+			if (c.gamePausePanelEntityId != panelId) continue;
+			if (result.ownerId) result.ambiguous = true;
+			result.ownerId = owner.id;
+		}
+		return result;
+	}
+}
 bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEntity& entity,
 	SceneComponent& component, bool prefab, MenuAuthoringRequest& request) {
 	bool changed = false;
@@ -10827,10 +13318,61 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 			}
 		} else drawPlacement(entity, SelectEditorText(editorLanguage_, "パネル全体の配置（旧方式）", "Panel Placement (Legacy)"));
 		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "開始時に開く", "Initially Open"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.menuInitiallyOpen); });
+        section.Begin(SelectEditorText(editorLanguage_,"表示を開始する条件","Open Conditions"));
+        if (ImGui::TreeNode(SelectEditorText(editorLanguage_,"死亡リプレイから開く","Open After Death Replay"))) {
+            auto* events=FindComponent(entity,"EventTrigger");
+            if (events) for (size_t index=0;index<events->eventBindings.size();++index) {
+                auto& binding=events->eventBindings[index];
+                if (binding.executionDomain!="UI" || binding.triggerType!="OnDeathReplayCompleted") continue;
+                ImGui::PushID(static_cast<int>(index));
+                changed |= DrawUiEventBinding(document,binding);
+                if (MenuInspectorSmallButton(SelectEditorText(editorLanguage_,"この条件を削除","Remove This Condition")))
+                    request={entity.id,"RemoveReplayOpen",0,std::to_string(index)};
+                ImGui::Separator(); ImGui::PopID();
+            }
+            uint64_t target=0;
+            if (DrawMenuEntityField(SelectEditorText(editorLanguage_,"対象を選んで条件を追加","Select Target to Add Condition"),document,target,"DeathReplay",0,true,nullptr,
+                SelectEditorText(editorLanguage_,"死亡対象を選択…","Choose Death Target...")) && target)
+                request={entity.id,"AddReplayOpen",target};
+            if (events && MenuInspectorSmallButton(SelectEditorText(editorLanguage_,"EventTriggerで開く","Open EventTrigger"))) openEvents();
+            ImGui::TreePop();
+        }
+		section.Begin(SelectEditorText(editorLanguage_, "ゲームの停止", "Game Pause"));
+		if (prefab) {
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "停止設定はSceneに配置してから行います。", "Configure pause after placing this menu in a scene."));
+		} else {
+			const auto connection = FindMenuPauseConnection(document, entity.id);
+			const auto* pauseOwner = document.FindEntity(connection.ownerId);
+			const auto* pause = pauseOwner ? FindComponent(*pauseOwner, "GamePause") : nullptr;
+			bool enabled = pause && pause->enabled;
+			if (DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "開いている間、ゲームを停止", "Pause Game While Open"), [&](const char* label) { return ImGui::Checkbox(label, &enabled); }))
+				request = {entity.id, "PauseSettings", 0, enabled ? "Enable" : "Disable"};
+			if (connection.ambiguous) ImGui::TextWrapped("%s", LocalizeMenuRuntimeIssue("MenuRuntime:PauseAmbiguous").c_str());
+			if (pause && pause->enabled) {
+				const char* choices[] = {SelectEditorText(editorLanguage_, "BGM・UI音を継続", "Keep BGM and UI Audio"), SelectEditorText(editorLanguage_, "UI音のみ継続", "Keep UI Audio Only")};
+				int mode = pause->gamePauseBgm ? 1 : 0;
+				if (DrawMenuInspectorField(SelectEditorText(editorLanguage_, "音", "Audio"), [&]() { return ImGui::Combo("##PauseAudio", &mode, choices, 2); }))
+					request = {entity.id, "PauseSettings", 0, mode ? "PauseBgm" : "KeepBgm"};
+			}
+			if (pauseOwner && pauseOwner->id != entity.id) {
+				ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "既存の停止設定を使用中", "Using an Existing Pause Binding"));
+				if (!IsEntityActiveInHierarchy(document, *pauseOwner)) ImGui::TextWrapped("%s", LocalizeMenuRuntimeIssue("MenuRuntime:PauseInactiveBinding").c_str());
+				if (MenuInspectorButton(SelectEditorText(editorLanguage_, "接続元のInspectorを開く", "Inspect Pause Binding"))) {
+					selectedEntityId_ = pauseOwner->id; selectedEntityIds_ = {pauseOwner->id};
+				}
+			}
+		}
 		section.Begin(SelectEditorText(editorLanguage_, "選択肢", "Items"));
-		changed |= DrawMenuInspectorField(SelectEditorText(editorLanguage_, "項目の並び", "Navigation Axis"), [&]() {
-			return DrawMenuChoice(editorLanguage_, "##Axis", component.menuNavigationAxis, { "Vertical", "Horizontal" });
-		});
+		std::string proposedAxis = component.menuNavigationAxis;
+		if (DrawMenuInspectorField(SelectEditorText(editorLanguage_, "項目の並び", "Navigation Axis"), [&]() {
+			return DrawMenuChoice(editorLanguage_, "##Axis", proposedAxis, { "Vertical", "Horizontal" });
+		})) {
+			const char* error = ValidateMenuStandardKeys(component.MenuStandardKeyGroups(), proposedAxis);
+			if (*error) {
+				menuWarningRequested_ = true; menuWarningOperation_ = "StandardInput";
+				menuWarningReason_ = error; menuWarningTarget_ = entity.name;
+			} else { component.menuNavigationAxis = proposedAxis; changed = true; }
+		}
 		int removeIndex = -1;
 		for (size_t i = 0; i < component.menuItemEntityIds.size(); ++i) {
 			// 自動整列で行が移動しても文字入力や展開状態を同じItemへ結び付ける。
@@ -10912,12 +13454,61 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 		if (component.menuItemEntityIds.empty() && component.menuCancelMode != "Close") {
 			ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "%s", SelectEditorText(editorLanguage_, "項目が空です。選択肢を追加するか、キャンセルを「閉じる」にしてください。", "Add a selectable item or allow cancel to close the panel."));
 		}
+		section.Begin(SelectEditorText(editorLanguage_, "操作", "Controls"));
+		DrawMenuInspectorField(SelectEditorText(editorLanguage_, "操作方式", "Input Mode"), [&]() {
+			if (ImGui::BeginCombo("##InputMode", SelectEditorText(editorLanguage_, component.menuInputMode == "Standard" ? "標準操作" : "Event方式", component.menuInputMode == "Standard" ? "Standard Controls" : "Event Controls"))) {
+				for (const char* mode : {"Standard", "Events"}) {
+					if (ImGui::Selectable(SelectEditorText(editorLanguage_, std::strcmp(mode, "Standard") == 0 ? "標準操作" : "Event方式", std::strcmp(mode, "Standard") == 0 ? "Standard Controls" : "Event Controls"), component.menuInputMode == mode) && component.menuInputMode != mode)
+						request = {entity.id, "ConvertInputPreview", 0, mode};
+				}
+				ImGui::EndCombo();
+			}
+			return false; // preview要求だけなので原本をDirtyにしない。
+		});
+		const bool standard = component.menuInputMode == "Standard";
+		if (!standard) ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "操作はEventの設定を使用します。", "Input uses Event bindings."));
+		auto drawKeyGroup = [&](size_t index, bool activeGroup) {
+			const char* labels[] = {SelectEditorText(editorLanguage_, "上へ", "Up"), SelectEditorText(editorLanguage_, "下へ", "Down"), SelectEditorText(editorLanguage_, "左へ", "Left"), SelectEditorText(editorLanguage_, "右へ", "Right"), SelectEditorText(editorLanguage_, "決定", "Confirm"), SelectEditorText(editorLanguage_, "キャンセル", "Cancel")};
+			ImGui::PushID(static_cast<int>(index));
+			ImGui::SeparatorText(labels[index]);
+			const auto groups = component.MenuStandardKeyGroups();
+			std::vector<std::string> blocked;
+			if (activeGroup) for (size_t other : MenuActiveKeyGroups(component.menuNavigationAxis))
+				if (other != index) blocked.insert(blocked.end(), groups[other]->begin(), groups[other]->end());
+			SceneEventBinding binding;
+			const auto& keys = *groups[index];
+			binding.triggerKey = keys.empty() ? "" : keys.front();
+			if (!keys.empty()) binding.additionalTriggerKeys.assign(keys.begin() + 1, keys.end());
+			if (DrawEventTriggerKeys(binding, blocked, true)) {
+				std::vector<std::string> proposed{binding.triggerKey};
+				proposed.insert(proposed.end(), binding.additionalTriggerKeys.begin(), binding.additionalTriggerKeys.end());
+				*groups[index] = std::move(proposed); changed = true;
+			}
+			ImGui::PopID();
+		};
+		if (standard || ImGui::TreeNode(SelectEditorText(editorLanguage_, "保存された標準キー設定（未使用）", "Saved Standard Keys (Inactive)"))) {
+			const auto active = MenuActiveKeyGroups(component.menuNavigationAxis);
+			for (size_t index : active) drawKeyGroup(index, true);
+			if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "別方向のキー設定", "Other Axis Keys"))) {
+				const size_t first = component.menuNavigationAxis == "Horizontal" ? 0 : 2;
+				drawKeyGroup(first, false); drawKeyGroup(first + 1, false);
+				ImGui::TreePop();
+			}
+			if (!standard) ImGui::TreePop();
+		}
+		if (MenuInspectorButton(SelectEditorText(editorLanguage_, "操作のリファレンス", "Controls Reference"))) ImGui::OpenPopup("MenuControlsReference");
+		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_Appearing);
+		if (ImGui::BeginPopup("MenuControlsReference")) {
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "操作方式を選ぶと変換内容を確認できます。適用すると移動・決定・キャンセルの操作Eventと標準キー一覧をまとめて切り替えます。一回のUndoで戻せます。", "Select Input Mode to preview conversion. Apply switches navigation, confirm and cancel between control events and standard key lists. One Undo restores the change."));
+			ImGui::Separator();
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "複数キーはいずれか一つで同じ操作を行い、同時押下でも一回です。同じ操作内の重複と、使用中の別操作とのキー共有はできません。別方向の割当は保持します。軸を変更できない場合は「別方向のキー設定」を確認してください。", "Any listed key triggers an operation once, even when pressed simultaneously. Duplicate keys and sharing keys between active operations are rejected. Other-axis assignments are retained; review Other Axis Keys if changing the axis is rejected."));
+			ImGui::Separator();
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "項目の決定処理とメニューを開くEventは保持します。複数処理・一度だけ・待ち時間付きの操作Eventは自動変換しません。Event方式では保存された標準キー設定を使いません。", "Item confirmation actions and events that open menus are preserved. Multi-action, Once and cooldown control events are not converted automatically. Saved standard keys are inactive in Event mode."));
+			ImGui::EndPopup();
+		}
 		if (section.Begin(SelectEditorText(editorLanguage_, "詳細設定", "Advanced Settings"), true)) {
 			if (component.menuInputMode != "Standard" && MenuInspectorButton(SelectEditorText(editorLanguage_, "方向キーの設定を追加", "Add Navigation Key Bindings"))) request = { entity.id, "NavigationKeys" };
 			if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "操作の詳細", "Control Details"))) {
-				if (component.menuInputMode == "Standard")
-					ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "切替後は操作Eventの設定が必要です。標準操作への復帰は未対応です。", "Switching requires input events. Switching back to Standard is not available yet."));
-				if (component.menuInputMode == "Standard" && MenuInspectorButton(SelectEditorText(editorLanguage_, "Eventによる操作に切り替える", "Use Event Controls"))) {component.menuInputMode = "Events"; changed = true;}
 				if (auto* canvas = FindComponent(entity, "UICanvas")) changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "通常描画でのCanvas順", "Canvas Sorting Order"), [&](const char* fieldLabel) { return ImGui::InputInt(fieldLabel, &canvas->uiCanvasSortingOrder); });
 				if (FindComponent(entity, "EventTrigger") && MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "関連Eventを開く", "Open Related Events"))) openEvents();
 				if (auto* events = FindComponent(entity, "EventTrigger")) {
@@ -10932,7 +13523,7 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 					}
 				}
 				if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "キャンセル通知の処理を追加", "Add Cancelled Action"), SelectEditorText(editorLanguage_, "処理を選択…", "Choose Action..."))) {
-					for (const char* type : {"OpenMenu", "CloseMenu", "SceneTransition", "PlayAudio", "PlayTextMotion"})
+					for (const char* type : {"OpenMenu", "CloseMenu", "SceneTransition", "ExitGame", "PlayAudio", "PlayTextMotion"})
 						if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, type))) request = {entity.id, "AddCancelAction", 0, type};
 					ImGui::EndCombo();
 				}
@@ -11090,7 +13681,7 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 				ImGui::PopID();
 			}
 		} else if (BeginMenuInspectorCombo(SelectEditorText(editorLanguage_, "処理を追加", "Add Action"), SelectEditorText(editorLanguage_, "処理を選択…", "Choose Action..."))) {
-			for (const char* type : {"SceneTransition", "OpenMenu", "CloseMenu", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio", "PlayTextMotion", "StopTextMotion", "ResetTextMotion"})
+			for (const char* type : {"SceneTransition", "ExitGame", "OpenMenu", "CloseMenu", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio", "PlayTextMotion", "StopTextMotion", "ResetTextMotion"})
 				if (ImGui::Selectable(MenuAuthoringLabel(editorLanguage_, type))) request = {entity.id, "AddConfirmAction", 0, type};
 			ImGui::EndCombo();
 		}
@@ -11102,7 +13693,6 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 		}
 		if (events && MenuInspectorSmallButton(SelectEditorText(editorLanguage_, "EventTriggerで開く", "Open EventTrigger"))) openEvents();
 	} else if (component.type == "GamePause") {
-		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "ゲーム内PauseのRuntime接続は後続実装です。現在は参照・操作イベントの設定だけを編集できます。", "In-game pause runtime integration is pending. Only its references and event settings can be edited now."));
 		if (prefab) { ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_, "GamePauseはScene専用です", "GamePause is scene-only")); return false; }
 		changed |= DrawMenuEntityField(SelectEditorText(editorLanguage_, "Pause画面", "Pause Panel"), document, component.gamePausePanelEntityId, "MenuPanel");
 		const SceneEntity* panelEntity = document.FindEntity(component.gamePausePanelEntityId);
@@ -11146,6 +13736,87 @@ void ImGuiManager::ApplyMenuAuthoringRequest(SceneDocument& document, const Menu
 		menuWarningTarget_ = operationTargetName;
 		menuWarningRequested_ = true;
 	};
+	if (request.operation == "ConvertInputPreview") {
+		PrepareMenuInputConversion(document, request.entityId, prefab, request.uiOperation); return;
+	}
+    if (request.operation=="AddReplayOpen" || request.operation=="RemoveReplayOpen") {
+        if (!FindComponent(*owner,"MenuPanel")) { warn("MenuRuntime:ReplayPanel"); return; }
+        if (request.operation=="AddReplayOpen" && !FindComponent(*owner,"EventTrigger") &&
+            (document.IsPrefabVariant() || !owner->prefabLinks.empty() || owner->prefabInstanceRootId || !owner->prefabSourcePath.empty())) {
+            warn("SetupProtected"); return;
+        }
+        SceneDocument candidate=document;
+        auto* events=FindComponent(*candidate.FindEntity(owner->id),"EventTrigger");
+        if (request.operation=="AddReplayOpen" && events && !events->enabled) { warn("MenuRuntime:ReplayBinding"); return; }
+        if (request.operation=="RemoveReplayOpen") {
+            if (!events) return;
+            // indexは走査中の値だが、削除前に条件の型を再確認する。
+            for (size_t index=0;index<events->eventBindings.size();++index) {
+                if (std::to_string(index)!=request.uiOperation) continue;
+                if (events->eventBindings[index].executionDomain!="UI" || events->eventBindings[index].triggerType!="OnDeathReplayCompleted") return;
+                events->eventBindings.erase(events->eventBindings.begin()+index); break;
+            }
+        } else {
+            const auto* target=document.FindEntity(request.targetEntityId);
+            if (!target || !FindEnabledComponent(*target,"DeathReplay") || !IsEntityActiveInHierarchy(document,*target)) {
+                warn("MenuRuntime:ReplayBinding"); return;
+            }
+            if (events) for (const auto& b : events->eventBindings)
+                if (b.executionDomain=="UI" && b.triggerType=="OnDeathReplayCompleted" &&
+                    (b.targetEntityId ? b.targetEntityId : owner->id)==target->id) return; // 同じ条件は既存欄で編集する。
+            if (!events) {
+                candidate.AddComponent(owner->id,"EventTrigger");
+                events=FindComponent(*candidate.FindEntity(owner->id),"EventTrigger");
+                if (!events) { warn("SetupCreate"); return; }
+                events->eventBindings.clear();
+            }
+            SceneEventBinding binding; binding.executionDomain="UI"; binding.triggerType="OnDeathReplayCompleted";
+            binding.targetEntityId=target->id; binding.triggerOnce=false; binding.cooldown=0;
+            SceneEventAction action; action.type="OpenMenu"; action.targetEntityId=owner->id; binding.actions={action};
+            events->eventBindings.push_back(std::move(binding));
+        }
+        candidate.MarkDirty(); document=std::move(candidate); return;
+    }
+	if (request.operation == "PauseSettings") {
+		if (prefab) { warn("MenuRuntime:PausePrefab"); return; }
+		const auto* panel = FindComponent(*owner, "MenuPanel");
+		if (!panel) { warn("MenuRuntime:PauseInvalidPanel"); return; }
+		const auto connection = FindMenuPauseConnection(document, owner->id);
+		if (connection.ambiguous) { warn("MenuRuntime:PauseAmbiguous"); return; }
+		const auto* bindingOwner = connection.ownerId ? document.FindEntity(connection.ownerId) : owner;
+		if (!bindingOwner || bindingOwner->locked || document.IsPrefabVariant() ||
+			!bindingOwner->prefabLinks.empty() || bindingOwner->prefabInstanceRootId || !bindingOwner->prefabSourcePath.empty()) {
+			warn("MenuRuntime:PauseLocked"); return;
+		}
+		const bool enabling = request.uiOperation == "Enable";
+		if (enabling && bindingOwner->id != owner->id && !IsEntityActiveInHierarchy(document, *bindingOwner)) {
+			warn("MenuRuntime:PauseInactiveBinding"); return;
+		}
+		if (request.uiOperation != "Disable") {
+			if (panel->menuInitiallyOpen) { warn("MenuRuntime:PauseInitiallyOpen"); return; }
+			for (const auto& other : document.GetEntities()) {
+				if (other.id == bindingOwner->id || !IsEntityActiveInHierarchy(document, other)) continue;
+				if (FindEnabledComponent(other, "GamePause")) { warn("MenuRuntime:PauseMultiple"); return; }
+			}
+		}
+		// Component走査後に候補全体を確定する。自己参照追加と有効化は一回のUndoになる。
+		SceneDocument candidate = document;
+		const uint64_t bindingId = bindingOwner->id;
+		auto* pause = FindComponent(*candidate.FindEntity(bindingId), "GamePause");
+		if (!pause) {
+			if (!enabling || !candidate.AddComponent(bindingId, "GamePause")) { warn("SetupCreate"); return; }
+			pause = FindComponent(*candidate.FindEntity(bindingId), "GamePause");
+			if (!pause) { warn("SetupCreate"); return; }
+			pause->gamePausePanelEntityId = request.entityId;
+			pause->gamePauseBgm = false;
+		}
+		if (enabling) pause->enabled = true;
+		else if (request.uiOperation == "Disable") pause->enabled = false;
+		else if (request.uiOperation == "PauseBgm") pause->gamePauseBgm = true;
+		else if (request.uiOperation == "KeepBgm") pause->gamePauseBgm = false;
+		else return;
+		candidate.MarkDirty(); document = std::move(candidate); return;
+	}
 	if (request.operation == "FitMenuText") {
 		auto* item = FindComponent(*owner, "MenuItem");
 		const auto* text = FindEnabledComponent(*owner, "TextRenderer");
@@ -11395,6 +14066,226 @@ void ImGuiManager::ApplyMenuAuthoringRequest(SceneDocument& document, const Menu
 		}
 	}
 	document.MarkDirty();
+}
+
+PlayerCombatEditor::DocumentToken ImGuiManager::MakePlayerCombatToken(const SceneDocument& document, bool prefab) const {
+	PlayerCombatEditor::DocumentToken token;
+	token.prefab = prefab;
+	token.key = prefab ? (prefabEditorSession_ ? prefabEditorSession_->GetFilePath() : "") :
+		(editorSession_ ? editorSession_->GetSceneFilePath() : "");
+	token.epoch = !prefab && editorSession_ ? editorSession_->GetEditSceneEpoch() : 0;
+	token.generation = document.GetContentGeneration(); token.revision = document.GetRevision();
+	return token;
+}
+
+void ImGuiManager::WarnPlayerCombat(const PlayerCombatEditor::Request& request, const PlayerCombatEditor::Issue& issue) {
+	// 操作serialだけで抑制する。同じ原因でも次のクリックは新しい警告になる。
+	if (request.serial && request.serial == playerCombatWarningSerial_) return;
+	playerCombatWarningSerial_ = request.serial;
+	playerCombatIssue_ = issue; playerCombatWarningOperation_ = request.operation;
+	playerCombatWarningRequested_ = true;
+}
+
+void ImGuiManager::QueuePlayerCombatRequest(PlayerCombatEditor::Request request, bool prefab) {
+	using namespace PlayerCombatEditor;
+	if (request.operation == Operation::None) return;
+	auto& context = playerCombatContexts_[prefab ? 1 : 0];
+	if (context.requestFrame != ImGui::GetFrameCount()) {
+		context.mutation = {}; context.navigation = {}; context.requestFrame = ImGui::GetFrameCount();
+	}
+	request.serial = ++playerCombatSerial_;
+	const bool mutation = request.operation == Operation::EditAttack || request.operation == Operation::EditReaction || request.operation == Operation::AddReaction;
+	auto& destination = mutation ? context.mutation : context.navigation;
+	if (destination.operation != Operation::None) { WarnPlayerCombat(request,{IssueCode::Competing,{}}); return; }
+	destination = std::move(request);
+}
+
+void ImGuiManager::DrawPlayerCombatSection(const SceneDocument& suppliedDocument, uint64_t entityId, bool prefab) {
+	using namespace PlayerCombatEditor;
+	// Play時も制作時の値を表示し、Runtimeの一時値を保存対象に見せない。
+	const SceneDocument& document = !prefab && editorSession_ ? editorSession_->GetEditDocument() : suppliedDocument;
+	const auto token = MakePlayerCombatToken(document,prefab);
+	auto& context = playerCombatContexts_[prefab ? 1 : 0];
+	ImGui::PushID(prefab ? "PrefabPlayerCombat" : "ScenePlayerCombat");
+	ImGui::PushID(token.key.c_str()); ImGui::PushID(std::to_string(entityId).c_str());
+	const std::string normalizedKey = PathToUtf8(EditableResourcePath::ResolveResource(PathFromUtf8(token.key)).lexically_normal());
+	if (context.returnActor && context.returnDestination == normalizedKey &&
+		(!context.returnFromEntity || context.returnFromEntity == entityId)) {
+		if (ImGui::Button(SelectEditorText(editorLanguage_,"元のPlayerへ戻る###returnActor","Return to Player###returnActor"),ImVec2(-1,0))) {
+			Request r; r.operation = Operation::ReturnToActor; r.token = token;
+			r.subject.entityId = context.returnActor; QueuePlayerCombatRequest(std::move(r),prefab);
+		}
+	}
+	const auto* entity = document.FindEntity(entityId);
+	if (entity && FindComponent(*entity,"PlayerBehavior")) {
+		const bool reveal = context.reveal; context.reveal = false;
+		if (reveal) ImGui::SetNextItemOpen(true);
+		const bool open = ImGui::CollapsingHeader(SelectEditorText(editorLanguage_,"プレイヤーの動作###playerActions","Player actions###playerActions"),ImGuiTreeNodeFlags_DefaultOpen);
+		if (reveal) ImGui::SetScrollHereY();
+		if (open) {
+			ImGui::TextWrapped(SelectEditorText(editorLanguage_,"保存先：%s / %s","Save to: %s / %s"),prefab ? "Prefab" : "Scene",token.key.c_str());
+			if (ImGui::Button(SelectEditorText(editorLanguage_,"使い方###playerHelp","Reference###playerHelp"),ImVec2(-1,0))) playerCombatReferenceRequested_ = true;
+			const std::string selectionKey = token.key + ":" + std::to_string(token.epoch) + ":" + std::to_string(entityId);
+			auto requests = DrawActor(ResolveActor(document,entityId),context.selections[selectionKey],editorLanguage_,!editorSession_ || editorSession_->IsEditing());
+			for (auto& r : requests) { r.token = token; QueuePlayerCombatRequest(std::move(r),prefab); }
+		}
+	}
+	ImGui::PopID(); ImGui::PopID(); ImGui::PopID();
+}
+
+void ImGuiManager::DrawPlayerCombatFields(const SceneDocument& suppliedDocument, uint64_t entityId,
+	const SceneComponent& component, bool prefab, const std::string* attackName) {
+	using namespace PlayerCombatEditor;
+	const SceneDocument& document = !prefab && editorSession_ ? editorSession_->GetEditDocument() : suppliedDocument;
+	const auto token = MakePlayerCombatToken(document,prefab);
+	ImGui::PushID(prefab ? "PrefabCombatFields" : "SceneCombatFields");
+	ImGui::PushID(token.key.c_str()); ImGui::PushID(std::to_string(entityId).c_str());
+	ImGui::PushID(std::to_string(component.localId).c_str()); ImGui::PushID(component.type.c_str());
+	const bool editable = !editorSession_ || editorSession_->IsEditing();
+	if (!editable) ImGui::TextWrapped("%s",DescribeIssue({IssueCode::Playing,{}},editorLanguage_).c_str());
+	ImGui::TextWrapped(SelectEditorText(editorLanguage_,"保存先：%s / %s","Save to: %s / %s"),prefab ? "Prefab" : "Scene",token.key.c_str());
+	if (ImGui::Button(SelectEditorText(editorLanguage_,"使い方###combatHelp","Reference###combatHelp"),ImVec2(-1,0))) playerCombatReferenceRequested_ = true;
+	Request r;
+	if (component.type == "HitReaction") r = DrawReactionFields(ResolveReaction(document,entityId),editorLanguage_,editable,false);
+	else if (attackName) r = DrawAttackFields(ResolveAttack(document,entityId,*attackName),editorLanguage_,editable);
+	r.token = token; QueuePlayerCombatRequest(std::move(r),prefab);
+	ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); ImGui::PopID();
+}
+
+void ImGuiManager::ApplyPlayerCombatRequests(SceneDocument& suppliedDocument, bool prefab) {
+	using namespace PlayerCombatEditor;
+	SceneDocument& document = !prefab && editorSession_ ? editorSession_->GetEditDocument() : suppliedDocument;
+	auto& context = playerCombatContexts_[prefab ? 1 : 0];
+	if (context.requestFrame != ImGui::GetFrameCount()) { context.mutation = {}; context.navigation = {}; return; }
+	Request mutation = std::move(context.mutation), navigation = std::move(context.navigation);
+	context.mutation = {}; context.navigation = {};
+	const auto before = MakePlayerCombatToken(document,prefab);
+	const bool editable = !editorSession_ || editorSession_->IsEditing();
+	if (mutation.operation != Operation::None) {
+		Issue issue; bool changed = false;
+		if (mutation.operation == Operation::AddReaction) {
+			if (!editable) issue = {IssueCode::Playing,{}};
+			else if (!Matches(before,mutation.token)) issue = {IssueCode::Stale,{}};
+			else {
+				const auto model = ResolveReaction(document,mutation.subject.entityId);
+				bool canAdd = model.canAdd;
+				if (mutation.subject.actorId) canAdd = canAdd && ResolveActor(document,mutation.subject.actorId).reaction.canAdd;
+				if (!canAdd) issue = {IssueCode::AddFailed,{}};
+				else {
+					// AddComponentが採番/配列再配置するため、候補だけを変更して成功時に採用する。
+					SceneDocument candidate = document;
+					if (!candidate.AddComponent(mutation.subject.entityId,"HitReaction")) issue = {IssueCode::AddFailed,{}};
+					else {
+						auto* owner = candidate.FindEntity(mutation.subject.entityId);
+						auto* reaction = owner ? FindComponent(*owner,"HitReaction") : nullptr;
+						if (!reaction) issue = {IssueCode::AddFailed,{}};
+						else {
+							reaction->hitReactionStateName.clear();
+							if (prefab) prefabEditorSession_->BeginEditFrame(); else editorSession_->BeginEditFrame();
+							document = std::move(candidate); changed = true;
+						}
+					}
+				}
+			}
+		} else {
+			if (editable) { if (prefab) prefabEditorSession_->BeginEditFrame(); else editorSession_->BeginEditFrame(); }
+			ValidateAndApplyValueEdit(document,before,mutation,editable,changed,issue);
+		}
+		if (issue.code != IssueCode::None) WarnPlayerCombat(mutation,issue);
+		if (changed) {
+			document.MarkDirty();
+			if (!prefab && editorSession_) editorSession_->RequestSceneReload();
+			// 自分の成功した変更だけ、同Frameの移動要求と戻り先へ新しい世代を渡す。
+			const auto after = MakePlayerCombatToken(document,prefab);
+			if (Matches(navigation.token,before)) navigation.token = after;
+			if (Matches(context.returnSource,before)) context.returnSource = after;
+		}
+	}
+	if (navigation.operation == Operation::None) return;
+	const auto current = MakePlayerCombatToken(document,prefab);
+	if (!Matches(navigation.token,current)) { WarnPlayerCombat(navigation,{IssueCode::Stale,{}}); return; }
+	if (navigation.operation == Operation::OpenPrefab) {
+		if (!editable) { WarnPlayerCombat(navigation,{IssueCode::Playing,{}}); return; }
+		const auto* target = document.FindEntity(navigation.subject.entityId);
+		if (!target) { WarnPlayerCombat(navigation,{IssueCode::Missing,{}}); return; }
+		const auto path = PrefabAssetRegistry::ResolvePath(target->prefabAssetId,target->prefabSourcePath);
+		if (path.empty() || !prefabEditorSession_) { WarnPlayerCombat(navigation,{IssueCode::Missing,target->prefabSourcePath}); return; }
+		auto& destination = playerCombatContexts_[1];
+		destination.returnSource = current; destination.returnActor = navigation.subject.actorId;
+		const auto* actor = document.FindEntity(navigation.subject.actorId);
+		destination.returnActorName = actor ? actor->name : "";
+		destination.returnOpenPending = false;
+		destination.returnFromEntity = 0;
+		destination.returnDestination = PathToUtf8(EditableResourcePath::ResolveResource(PathFromUtf8(path)).lexically_normal());
+		RequestOpenPrefab(path); return;
+	}
+	bool targetPrefab = prefab;
+	uint64_t targetId = navigation.subject.entityId;
+	std::string type = navigation.subject.componentType;
+	const SceneDocument* targetDocument = &document;
+	if (navigation.operation == Operation::ReturnToActor) {
+		targetPrefab = context.returnSource.prefab; targetId = context.returnActor; type = "PlayerBehavior";
+		if (targetPrefab && prefabEditorSession_ && prefabEditorSession_->IsOpen()) targetDocument = &prefabEditorSession_->GetDocument();
+		else if (!targetPrefab && editorSession_) targetDocument = &editorSession_->GetEditDocument();
+		else targetDocument = nullptr;
+		if (!targetDocument || MakePlayerCombatToken(*targetDocument,targetPrefab).key != context.returnSource.key ||
+			MakePlayerCombatToken(*targetDocument,targetPrefab).epoch != context.returnSource.epoch) {
+			// 別Prefabを開いて元Documentを閉じた場合は既存のOpen/未保存確認に戻す。
+			if (targetPrefab && editable && !context.returnSource.key.empty()) {
+				context.returnOpenPending = true; context.returnSerial = navigation.serial;
+				RequestOpenPrefab(context.returnSource.key); return;
+			}
+			WarnPlayerCombat(navigation,{IssueCode::Stale,{}}); return;
+		}
+	}
+	const auto* target = targetDocument->FindEntity(targetId);
+	if (!target || (navigation.operation == Operation::ReturnToActor &&
+		(!FindComponent(*target,"PlayerBehavior") || target->name != context.returnActorName))) {
+		WarnPlayerCombat(navigation,{IssueCode::Missing,{}}); return;
+	}
+	if (navigation.operation == Operation::Inspect && navigation.subject.actorId) {
+		context.returnSource = current; context.returnActor = navigation.subject.actorId; context.returnFromEntity = targetId;
+		const auto* actor = document.FindEntity(navigation.subject.actorId);
+		context.returnActorName = actor ? actor->name : "";
+		context.returnDestination = PathToUtf8(EditableResourcePath::ResolveResource(PathFromUtf8(current.key)).lexically_normal());
+	}
+	if (!FindComponent(*target,type.c_str())) type.clear(); // 不足Componentも対象Entityから追加できる。
+	if (targetPrefab) {
+		prefabSelectedEntityId_ = targetId; prefabSummarySelectedComponentType_ = type;
+		prefabClipFocusEnabled_ = false; RevealPrefabInspector();
+	} else {
+		selectedEntityId_ = targetId; selectedEntityIds_.clear(); selectedEntityIds_.insert(targetId);
+		hierarchySelectionAnchorId_ = targetId; selectedProjectFile_.clear();
+		sceneSummarySelectedComponentType_ = type; showInspector_ = true; revealInspectorRequested_ = true;
+	}
+	const auto key = targetPrefab ? prefabEditorSession_->GetFilePath() : editorSession_->GetActiveSceneId();
+	componentFoldoutStates_[MakeComponentFoldoutKey(key,targetId,type)] = true;
+	if (navigation.operation == Operation::ReturnToActor) playerCombatContexts_[targetPrefab ? 1 : 0].reveal = true;
+}
+
+void ImGuiManager::DrawPlayerCombatDialogs() {
+	using namespace PlayerCombatEditor;
+	const char* title = SelectEditorText(editorLanguage_,"プレイヤー設定を適用できません###PlayerCombatWarning","Player edit could not be applied###PlayerCombatWarning");
+	if (playerCombatWarningRequested_) { ImGui::OpenPopup(title); playerCombatWarningRequested_ = false; }
+	ImGui::SetNextWindowSize(ImVec2(500,240),ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(title,nullptr,ImGuiWindowFlags_None)) {
+		const char* operation = playerCombatWarningOperation_ == Operation::AddReaction ? SelectEditorText(editorLanguage_,"吹き飛び設定の追加","Add knockback") :
+			playerCombatWarningOperation_ == Operation::EditAttack ? SelectEditorText(editorLanguage_,"攻撃設定の変更","Edit attack") :
+			playerCombatWarningOperation_ == Operation::EditReaction ? SelectEditorText(editorLanguage_,"被弾設定の変更","Edit hit reaction") :
+			SelectEditorText(editorLanguage_,"設定先への移動","Open settings source");
+		ImGui::TextWrapped("%s",operation);
+		ImGui::TextWrapped("%s",DescribeIssue(playerCombatIssue_,editorLanguage_).c_str());
+		if (ImGui::Button(SelectEditorText(editorLanguage_,"閉じる","Close"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	const char* reference = SelectEditorText(editorLanguage_,"プレイヤーの動作・使い方###PlayerCombatReference","Player actions reference###PlayerCombatReference");
+	if (playerCombatReferenceRequested_) { ImGui::OpenPopup(reference); playerCombatReferenceRequested_ = false; }
+	ImGui::SetNextWindowSize(ImVec2(560,540),ImGuiCond_FirstUseEver);
+	if (ImGui::BeginPopupModal(reference,nullptr,ImGuiWindowFlags_None)) {
+		PlayerCombatEditor::DrawReference(editorLanguage_);
+		if (ImGui::Button(SelectEditorText(editorLanguage_,"閉じる","Close"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
 }
 
 void ImGuiManager::DrawInspectorWindow() {
@@ -13077,6 +15968,7 @@ void ImGuiManager::DrawInspectorWindow() {
 		}
 		}
 
+		DrawPlayerCombatSection(document, entity->id, false);
 		if (DrawPersistentInspectorHeader(
 			sceneInspectorKey + "ComponentOverview",
 			SelectEditorText(
@@ -13095,6 +15987,9 @@ void ImGuiManager::DrawInspectorWindow() {
 		const bool simpleComponentInspector =
 			componentInspectorMode_ == ComponentInspectorMode::Simple;
 		std::string removeComponentType;
+		bool addDeathEvent = false;
+		DeathAuthoringRequest deathRequest;
+		StatTextAuthoringRequest statTextRequest;
 		MenuAuthoringRequest menuAuthoringRequest;
 		UIAuthoringRequest uiRequest;
 		for (SceneComponent& component : entity->components) {
@@ -13105,7 +16000,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				continue;
 			}
 			ImGui::PushID(component.type.c_str());
-			const char* componentLabel = component.type == "UICanvas" ? SelectEditorText(editorLanguage_,"UI画面 (UICanvas)","UI Canvas (UICanvas)") : component.type == "UITransform" ? SelectEditorText(editorLanguage_,"UI配置 (UITransform)","UI Layout (UITransform)") : component.type == "OBBCollider"
+			const char* componentLabel = component.type == "StatTextDisplay" ? SelectEditorText(editorLanguage_,"能力値表示 (StatTextDisplay)","Stat Text Display (StatTextDisplay)") : component.type == "UICanvas" ? SelectEditorText(editorLanguage_,"UI画面 (UICanvas)","UI Canvas (UICanvas)") : component.type == "UITransform" ? SelectEditorText(editorLanguage_,"UI配置 (UITransform)","UI Layout (UITransform)") : component.type == "OBBCollider"
 				? "Collider"
 				: component.type.c_str();
 			const std::string componentHeaderLabel =
@@ -13611,6 +16506,10 @@ void ImGuiManager::DrawInspectorWindow() {
 				}
 				ImGui::EndDisabled();
 			} else if (component.type == "TextRenderer") {
+				if (FindEnabledComponent(*entity,"StatTextDisplay")) {
+					ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"内容は能力値表示から生成します。","Content is generated by Stat Text Display."));
+					if(ImGui::Button(SelectEditorText(editorLanguage_,"能力値表示を開く###OpenStatText","Open stat display###OpenStatText"),ImVec2(-1,0))) { statTextRequest.inspectId=entity->id; statTextRequest.inspectType="StatTextDisplay"; }
+				}
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
 				bool textChanged = false;
 				textChanged |= InputTextMultilineString(LocalizedComponentWidgetLabel(editorLanguage_, "Text"), component.textValue);
@@ -15165,70 +18064,17 @@ void ImGuiManager::DrawInspectorWindow() {
 					document.MarkDirty();
 				}
 				ImGui::EndDisabled();
+			} else if (component.type == "DeathResponse") {
+				if(DrawDeathFields(editorLanguage_,document,*entity,component,editorSession_->IsEditing() && !entityLocked && !entity->folder,addDeathEvent,deathRequest,editorSession_->IsEditing()?nullptr:sceneManager_))document.MarkDirty();
+			} else if (component.type == "DeathReplay") {
+				if (DrawDeathReplayFields(editorLanguage_,document,*entity,component,editorSession_->IsEditing() && !entityLocked && !entity->folder,false,deathRequest,editorSession_->IsEditing()?nullptr:sceneManager_)) document.MarkDirty();
+			} else if (component.type == "StatTextDisplay") {
+				if (DrawStatTextFields(editorLanguage_,document,*entity,component,editorSession_->IsEditing() && !entityLocked,editorSession_->IsEditing()?nullptr:sceneManager_,statTextRequest)) document.MarkDirty();
+			} else if (component.type == "Health") {
+				if (DrawHealthFields(editorLanguage_, document, *entity, component, editorSession_->IsEditing() && !entityLocked)) document.MarkDirty();
 			} else if (component.type == "StatSet") {
-				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
-				bool statsChanged = false;
-				int removeStatIndex = -1;
-				for (size_t statIndex = 0; statIndex < component.stats.size(); ++statIndex) {
-					SceneStatDefinition& stat = component.stats[statIndex];
-					ImGui::PushID(static_cast<int>(statIndex));
-					const std::string statLabel = stat.displayName.empty()
-						? stat.id
-						: stat.displayName;
-					if (ImGui::TreeNodeEx(
-						"Stat",
-						ImGuiTreeNodeFlags_DefaultOpen,
-						"%s",
-						statLabel.empty() ? "Stat" : statLabel.c_str()
-					)) {
-						statsChanged |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Id"), stat.id);
-						statsChanged |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Display Name"), stat.displayName);
-						statsChanged |= ImGui::DragFloat(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Min"), &stat.minValue, 0.1f
-						);
-						statsChanged |= ImGui::DragFloat(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Max"), &stat.maxValue, 0.1f
-						);
-						statsChanged |= ImGui::DragFloat(
-							LocalizedComponentWidgetLabel(editorLanguage_, "Initial"), &stat.initialValue, 0.1f
-						);
-						if (stat.maxValue < stat.minValue) {
-							stat.maxValue = stat.minValue;
-							statsChanged = true;
-						}
-						const float clampedInitial = std::clamp(
-							stat.initialValue,
-							stat.minValue,
-							stat.maxValue
-						);
-						if (clampedInitial != stat.initialValue) {
-							stat.initialValue = clampedInitial;
-							statsChanged = true;
-						}
-						if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Statを削除###RemoveStat", "Remove Stat###RemoveStat"))) {
-							removeStatIndex = static_cast<int>(statIndex);
-						}
-						ImGui::TreePop();
-					}
-					ImGui::PopID();
-				}
-				if (removeStatIndex >= 0) {
-					component.stats.erase(
-						component.stats.begin() + removeStatIndex
-					);
-					statsChanged = true;
-				}
-				if (ImGui::Button(SelectEditorText(editorLanguage_, "Statを追加###AddStat", "Add Stat###AddStat"))) {
-					SceneStatDefinition stat{};
-					stat.id = "stat" + std::to_string(component.stats.size() + 1);
-					stat.displayName = stat.id;
-					component.stats.push_back(std::move(stat));
-					statsChanged = true;
-				}
-				if (statsChanged) {
-					document.MarkDirty();
-				}
-				ImGui::EndDisabled();
+				const SceneManager* runtime = editorSession_->IsEditing() ? nullptr : sceneManager_;
+				if (DrawStatSetFields(editorLanguage_, component, runtime, &document, entity->id, editorSession_->IsEditing() && !entityLocked)) document.MarkDirty();
 			} else if (component.type == "StateMachine") {
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
 				bool stateMachineChanged = false;
@@ -15609,8 +18455,11 @@ void ImGuiManager::DrawInspectorWindow() {
 					ImGui::PushID(static_cast<int>(bindingIndex));
 					if (binding.executionDomain != "Gameplay") {
 						if (ImGui::TreeNodeEx("UiEvent", ImGuiTreeNodeFlags_DefaultOpen, "UI Event %zu", bindingIndex + 1)) {
-							eventsChanged |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "実行対象", "Execution Domain"), binding.executionDomain, { "Gameplay", "UI" });
-							if (binding.executionDomain == "UI") eventsChanged |= DrawUiEventBinding(document, binding);
+							eventsChanged |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "実行対象", "Execution Domain"), binding.executionDomain, { "Gameplay", "UI", "Death" });
+							if (binding.triggerType == "OnGameFlowStarted") {
+								if (binding.executionDomain != "Gameplay") ImGui::TextWrapped("%s",GameFlowEventIssue(editorLanguage_,"GameFlowEvent:Domain"));
+							} else if (binding.executionDomain == "UI") eventsChanged |= DrawUiEventBinding(document, binding);
+							if (binding.executionDomain == "Death" && binding.triggerType != "OnGameFlowStarted") { binding.triggerType="OnDeathStarted"; binding.triggerOnce=false; binding.cooldown=0; eventsChanged |= DrawDeathBinding(editorLanguage_,document,binding); }
 							if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Eventを削除", "Remove Event"))) removeBindingIndex = static_cast<int>(bindingIndex);
 							ImGui::TreePop();
 						}
@@ -15622,23 +18471,36 @@ void ImGuiManager::DrawInspectorWindow() {
 						ImGuiTreeNodeFlags_DefaultOpen,
 						"Event %zu: %s",
 						bindingIndex + 1,
-						binding.triggerType.c_str()
+						FlagEventLabel(editorLanguage_, binding.triggerType)
 					)) {
-						eventsChanged |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "実行対象", "Execution Domain"), binding.executionDomain, { "Gameplay", "UI" });
-						if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Trigger"), binding.triggerType.c_str())) {
+						if (DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "実行対象", "Execution Domain"), binding.executionDomain, { "Gameplay", "UI", "Death" })) {
+							if (binding.triggerType == "OnGameFlowStarted" && binding.executionDomain != "Gameplay") {
+								binding.executionDomain="Gameplay"; ImGui::OpenPopup("###GameFlowDomainWarning");
+							} else eventsChanged=true;
+						}
+						if (ImGui::BeginPopupModal(SelectEditorText(editorLanguage_,"操作できません###GameFlowDomainWarning","Cannot apply###GameFlowDomainWarning"),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+							ImGui::TextUnformatted(GameFlowEventIssue(editorLanguage_,"GameFlowEvent:Domain"));
+							if (ImGui::Button(SelectEditorText(editorLanguage_,"閉じる","Close"))) ImGui::CloseCurrentPopup();
+							ImGui::EndPopup();
+						}
+						if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Trigger"), FlagEventLabel(editorLanguage_, binding.triggerType))) {
 							for (const char* trigger : {
-								"OnStart", "OnInterval", "OnStatReachedMin", "OnStatCompare",
+								"OnStart", "OnGameFlowStarted", "OnInterval", "OnStatReachedMin", "OnStatCompare", "OnFlagChanged", "OnFlagCompare", "OnHealthDamaged",
 								"OnPositionReached", "OnKeyPressed",
 								"OnCameraPathCompleted", "OnAudioFinished",
 								"OnTextMotionCompleted", "OnPresentationClipCompleted"
 							}) {
 								if (ImGui::Selectable(
-									trigger,
+									FlagEventLabel(editorLanguage_, std::string(trigger)),
 									binding.triggerType == trigger
 								)) {
 									binding.triggerType = trigger;
-									if (binding.triggerType == "OnKeyPressed") {
+									if (binding.triggerType == "OnGameFlowStarted") {
+										binding.targetEntityId=0; binding.targetEntityName.clear(); binding.triggerOnce=true; binding.cooldown=0.0f;
+									}
+									if (binding.triggerType == "OnHealthDamaged" || binding.triggerType == "OnKeyPressed" || binding.triggerType == "OnFlagChanged" || binding.triggerType == "OnFlagCompare") {
 										binding.triggerOnce = false;
+										if (binding.triggerType == "OnKeyPressed" && binding.triggerKey.empty() && binding.additionalTriggerKeys.empty()) binding.triggerKey = "ENTER";
 									}
 									if (binding.triggerType == "OnInterval") {
 										binding.triggerOnce = false;
@@ -15655,7 +18517,16 @@ void ImGuiManager::DrawInspectorWindow() {
 							binding.triggerType == "OnStatReachedMin" ||
 							binding.triggerType == "OnStatCompare" ||
 							binding.triggerType == "OnPositionReached";
-						if (binding.triggerType == "OnCameraPathCompleted") {
+						const bool flagTrigger = binding.triggerType == "OnFlagChanged" || binding.triggerType == "OnFlagCompare";
+						if (binding.triggerType == "OnGameFlowStarted") {
+							eventsChanged |= DrawGameFlowEventTarget(editorLanguage_,document,*entity,binding,component.enabled);
+						} else if (binding.triggerType == "OnHealthDamaged") {
+							eventsChanged |= DrawHealthTarget(editorLanguage_, document, entity->id, binding.targetEntityId, binding.targetEntityName);
+						} else if (flagTrigger || binding.triggerType == "OnStatReachedMin" || binding.triggerType == "OnStatCompare") {
+							eventsChanged |= DrawStatReference(editorLanguage_,document,entity->id,binding.targetEntityId,binding.targetEntityName,
+								flagTrigger ? binding.flagId : binding.statId,flagTrigger);
+							if(binding.triggerType == "OnFlagCompare") eventsChanged |= ImGui::Checkbox(SelectEditorText(editorLanguage_,"比較する値：ON","Match ON"),&binding.flagValue);
+						} else if (binding.triggerType == "OnCameraPathCompleted") {
 							drawComponentTargetCombo(
 								LocalizedComponentWidgetLabel(editorLanguage_, "Camera Path"),
 								binding.targetEntityId,
@@ -15693,12 +18564,6 @@ void ImGuiManager::DrawInspectorWindow() {
 								LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Name"), binding.targetEntityName
 							);
 						}
-						if (
-							binding.triggerType == "OnStatReachedMin" ||
-							binding.triggerType == "OnStatCompare"
-						) {
-							eventsChanged |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Stat Id"), binding.statId);
-						}
 						if (binding.triggerType == "OnStatCompare") {
 							if (ImGui::BeginCombo(
 								LocalizedComponentWidgetLabel(editorLanguage_, "Comparison"), binding.statComparison.c_str()
@@ -15729,26 +18594,7 @@ void ImGuiManager::DrawInspectorWindow() {
 								LocalizedComponentWidgetLabel(editorLanguage_, "Radius"), &binding.radius, 0.05f, 0.0f, 10000.0f
 							);
 						}
-						if (binding.triggerType == "OnKeyPressed") {
-							if (ImGui::BeginCombo(
-								LocalizedComponentWidgetLabel(editorLanguage_, "Key"),
-								binding.triggerKey.empty()
-									? "Select..."
-									: binding.triggerKey.c_str()
-							)) {
-								for (const SceneInputKeyDefinition& key :
-									kSceneInputKeyDefinitions) {
-									if (ImGui::Selectable(
-										key.name,
-										binding.triggerKey == key.name
-									)) {
-										binding.triggerKey = key.name;
-										eventsChanged = true;
-									}
-								}
-								ImGui::EndCombo();
-							}
-						}
+						if (binding.triggerType == "OnKeyPressed") eventsChanged |= DrawEventTriggerKeys(binding);
 						eventsChanged |= ImGui::Checkbox(
 							LocalizedComponentWidgetLabel(editorLanguage_, "Trigger Once"), &binding.triggerOnce
 						);
@@ -15770,14 +18616,14 @@ void ImGuiManager::DrawInspectorWindow() {
 								ImGuiTreeNodeFlags_DefaultOpen,
 								"Action %zu: %s",
 								actionIndex + 1,
-								action.type.c_str()
+								FlagEventLabel(editorLanguage_, action.type)
 							)) {
-								const char* actionPreview = action.type == "RestartScene" ? SelectEditorText(editorLanguage_, "現在のSceneを再起動", "Restart Current Scene") : action.type.c_str();
+								const char* actionPreview = action.type == "RestartScene" ? SelectEditorText(editorLanguage_, "現在のSceneを再起動", "Restart Current Scene") : FlagEventLabel(editorLanguage_, action.type);
 								if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Type"), actionPreview)) {
 									for (const char* actionType : {
-										"ModifyStat", "SetEntityActive", "OpenMenu", "PauseGame",
+										"ModifyStat", "SetFlag", "ApplyDamage", "SetEntityActive", "OpenMenu", "PauseGame",
 										"InstantiatePrefab", "ChangeState",
-										"SceneTransition", "RestartScene", "SetPostProcessProfile",
+										"SceneTransition", "RestartScene", "ExitGame", "SetPostProcessProfile",
 										"NextPostProcessProfile",
 										"ResetPostProcessProfile", "PlayCameraPath",
 										"StopCameraPath", "SelectCamera", "PlayAudio",
@@ -15786,7 +18632,7 @@ void ImGuiManager::DrawInspectorWindow() {
 									"PlayPresentationClip", "StopPresentationClip", "ResetPresentationClip"
 									}) {
 										if (ImGui::Selectable(
-											std::strcmp(actionType, "RestartScene") == 0 ? SelectEditorText(editorLanguage_, "現在のSceneを再起動", "Restart Current Scene") : actionType,
+											std::strcmp(actionType, "RestartScene") == 0 ? SelectEditorText(editorLanguage_, "現在のSceneを再起動", "Restart Current Scene") : FlagEventLabel(editorLanguage_, std::string(actionType)),
 											action.type == actionType
 										)) {
 											action.type = actionType;
@@ -15796,8 +18642,9 @@ void ImGuiManager::DrawInspectorWindow() {
 									ImGui::EndCombo();
 								}
 								if (
+								action.type != "ModifyStat" && action.type != "SetFlag" && action.type != "ApplyDamage" &&
 								action.type != "OpenMenu" && action.type != "PauseGame" &&
-								action.type != "SceneTransition" && action.type != "RestartScene" &&
+								action.type != "SceneTransition" && action.type != "RestartScene" && action.type != "ExitGame" &&
 								action.type != "SetPostProcessProfile" &&
 								action.type != "NextPostProcessProfile" &&
 								action.type != "ResetPostProcessProfile" &&
@@ -15824,10 +18671,16 @@ void ImGuiManager::DrawInspectorWindow() {
 								if (action.type == "OpenMenu" || action.type == "PauseGame") {
 									if (DrawMenuEntityField(SelectEditorText(editorLanguage_, "対象", "Target"), document, action.targetEntityId,
 										action.type == "OpenMenu" ? "MenuPanel" : "GamePause")) { action.targetEntityName.clear(); eventsChanged = true; }
+								} else if (action.type == "ApplyDamage") {
+									eventsChanged |= DrawHealthTarget(editorLanguage_, document, entity->id, action.targetEntityId, action.targetEntityName);
+									ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "ダメージ量", "Damage amount"));
+									ImGui::SetNextItemWidth(-1);
+									eventsChanged |= ImGui::DragFloat("##DamageAmount", &action.value, 0.1f, 0.001f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+								} else if (action.type == "SetFlag") {
+									eventsChanged |= DrawStatReference(editorLanguage_,document,entity->id,action.targetEntityId,action.targetEntityName,action.flagId,true);
+									eventsChanged |= ImGui::Checkbox(SelectEditorText(editorLanguage_,"設定する値：ON","Set ON"),&action.flagValue);
 								} else if (action.type == "ModifyStat") {
-									eventsChanged |= InputTextString(
-										LocalizedComponentWidgetLabel(editorLanguage_, "Action Stat Id"), action.statId
-									);
+									eventsChanged |= DrawStatReference(editorLanguage_,document,entity->id,action.targetEntityId,action.targetEntityName,action.statId,false);
 									if (ImGui::BeginCombo(
 										LocalizedComponentWidgetLabel(editorLanguage_, "Operation"), action.statOperation.c_str()
 									)) {
@@ -15893,14 +18746,16 @@ void ImGuiManager::DrawInspectorWindow() {
 									action.type == "ResetPresentationClip") {
 									drawPresentationTargetAndClip(action.targetEntityId, action.targetEntityName,
 										action.presentationClipName, action.type == "PlayPresentationClip");
+								} else if (action.type == "ExitGame") {
+									DrawExitGameReference(editorLanguage_);
 								} else if (action.type == "RestartScene") {
 									ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "現在プレイ中のSceneを保存済みの内容から再起動します。編集・Pause・遷移中は実行しません。遷移演出は使いません。", "Restarts the current playing scene from its saved file. Disabled while editing, paused or transitioning. No transition effect is used."));
 								} else if (action.type == "SceneTransition") {
 									const auto* destination = sceneCatalog_ ? sceneCatalog_->Find(action.sceneId) : nullptr;
 									const std::string label = destination ? destination->displayName :
-										(action.sceneId.empty() ? "Select..." : "Missing: "+action.sceneId);
+										(action.sceneId.empty() ? SelectEditorText(editorLanguage_, "選択してください...", "Select...") : std::string(SelectEditorText(editorLanguage_, "参照先なし: ", "Missing: "))+action.sceneId);
 									if (ImGui::BeginCombo(SelectEditorText(editorLanguage_,"移動先Scene###EventTransitionScene","Destination Scene###EventTransitionScene"),label.c_str())) {
-										if (ImGui::Selectable("None",action.sceneId.empty())) { action.sceneId.clear(); eventsChanged=true; }
+										if (ImGui::Selectable(SelectEditorText(editorLanguage_, "なし", "None"),action.sceneId.empty())) { action.sceneId.clear(); eventsChanged=true; }
 										if (sceneCatalog_) for (const auto& scene : sceneCatalog_->GetScenes()) {
 											if (ImGui::Selectable((scene.displayName+"##"+scene.id).c_str(),action.sceneId==scene.id)) { action.sceneId=scene.id; eventsChanged=true; }
 										}
@@ -15908,9 +18763,8 @@ void ImGuiManager::DrawInspectorWindow() {
 									}
 									eventsChanged |= InputTransitionAssetPath(SelectEditorText(editorLanguage_,"演出Asset###EventTransitionAsset","Transition Asset###EventTransitionAsset"),action.transitionAssetPath);
 									ImGui::TextDisabled("%s",SelectEditorText(editorLanguage_,"空欄は即時遷移。例: resources/transitions/sword_shatter.transition.json","Empty: immediate. Example: resources/transitions/sword_shatter.transition.json"));
-									const auto pathIssue = TransitionReferenceIssue(action.transitionAssetPath);
-									if (!pathIssue.empty()) ImGui::TextWrapped("%s",pathIssue.c_str());
-									if (!presentedTransitionStatus_.empty()) ImGui::TextWrapped("%s",presentedTransitionStatus_.c_str());
+									DrawTransitionReferenceWarning(TransitionReferenceIssue(action.transitionAssetPath));
+									DrawPresentedTransitionStatus();
 								} else if (
 									action.type == "PlayCameraPath" ||
 									action.type == "StopCameraPath"
@@ -16501,55 +19355,19 @@ void ImGuiManager::DrawInspectorWindow() {
 				}
 				ImGui::TextDisabled(SelectEditorText(editorLanguage_, "このEntityにはTrigger Colliderが必要です。", "Requires a Trigger Collider on this Entity."));
 				ImGui::EndDisabled();
+			} else if (component.type == "AttackSet") {
+				std::unordered_set<std::string> shownAttackNames;
+				for (const auto& attack : component.attackDefinitions) {
+					if (!shownAttackNames.insert(attack.name).second) continue;
+					ImGui::PushID(attack.name.c_str());
+					if (ImGui::TreeNodeEx("AttackFields", ImGuiTreeNodeFlags_DefaultOpen, "%s", attack.name.c_str())) {
+						DrawPlayerCombatFields(document, entity->id, component, false, &attack.name);
+						ImGui::TreePop();
+					}
+					ImGui::PopID();
+				}
 			} else if (component.type == "HitReaction") {
-				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
-				bool reactionChanged = false;
-				reactionChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Knockback Multiplier"),
-					&component.hitReactionKnockbackMultiplier,
-					0.01f, 0.0f, 100.0f
-				);
-				const char* reactionModePreview =
-					component.hitReactionTriggerMode == "PoiseBreak"
-					? "Poise Break" : "Minimum Damage";
-				if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Reaction Trigger"), reactionModePreview)) {
-					if (ImGui::Selectable(
-						"Minimum Damage",
-						component.hitReactionTriggerMode == "MinimumDamage"
-					)) {
-						component.hitReactionTriggerMode = "MinimumDamage";
-						reactionChanged = true;
-					}
-					if (ImGui::Selectable(
-						"Poise Break",
-						component.hitReactionTriggerMode == "PoiseBreak"
-					)) {
-						component.hitReactionTriggerMode = "PoiseBreak";
-						reactionChanged = true;
-					}
-					ImGui::EndCombo();
-				}
-				if (component.hitReactionTriggerMode == "PoiseBreak") {
-					reactionChanged |= InputTextString(
-						LocalizedComponentWidgetLabel(editorLanguage_, "Poise Stat"), component.hitReactionPoiseStatId
-					);
-					reactionChanged |= ImGui::DragFloat(
-						LocalizedComponentWidgetLabel(editorLanguage_, "Poise Recovery Delay"),
-						&component.hitReactionPoiseRecoveryDelay,
-						0.05f, 0.0f, 60.0f
-					);
-				} else {
-					reactionChanged |= ImGui::DragFloat(
-						"Minimum Poise Damage",
-						&component.hitReactionMinimumPoiseDamage,
-						0.1f, 0.0f, 100000.0f
-					);
-				}
-				reactionChanged |= InputTextString(
-					"Hit State", component.hitReactionStateName
-				);
-				if (reactionChanged) { document.MarkDirty(); }
-				ImGui::EndDisabled();
+				DrawPlayerCombatFields(document, entity->id, component, false);
 			} else if (component.type == "DeathPresentation") {
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
 				bool deathChanged = false;
@@ -16700,70 +19518,8 @@ void ImGuiManager::DrawInspectorWindow() {
 				}
 				ImGui::EndDisabled();
 			} else if (component.type == "EnemyBehavior") {
-				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
-				bool enemyChanged = false;
-				enemyChanged |= ImGui::InputScalar(
-					"Target Entity Id",
-					ImGuiDataType_U64,
-					&component.enemyTargetEntityId
-				);
-				enemyChanged |= InputTextString(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Target Entity Name"), component.enemyTargetEntityName
-				);
-				enemyChanged |= InputTextString(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Health Stat"), component.enemyHealthStatId
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Detection Range"), &component.enemyDetectionRange, 0.1f, 0.0f, 10000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Lose Range"), &component.enemyLoseRange, 0.1f, 0.0f, 10000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Range"), &component.enemyAttackRange, 0.1f, 0.0f, 10000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Move Speed"), &component.enemyMoveSpeed, 0.05f, 0.0f, 1000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Turn Speed"), &component.enemyTurnSpeed, 0.05f, 0.0f, 1000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Cooldown"), &component.enemyAttackCooldown, 0.01f, 0.0f, 1000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Windup"), &component.enemyAttackWindup, 0.01f, 0.0f, 1000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Active Time"), &component.enemyAttackActiveTime, 0.01f, 0.0f, 1000.0f
-				);
-				enemyChanged |= ImGui::DragFloat(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Recovery"), &component.enemyAttackRecovery, 0.01f, 0.0f, 1000.0f
-				);
-				enemyChanged |= ImGui::DragInt(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Animation Clip"), &component.enemyAttackAnimationClip, 1.0f, 0, 1024
-				);
-				enemyChanged |= InputTextString(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack Prefab Animation Clip"),
-					component.enemyAttackPrefabAnimationClip
-				);
-				enemyChanged |= ImGui::InputScalar(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack HitBox Entity Id"),
-					ImGuiDataType_U64,
-					&component.enemyAttackHitBoxEntityId
-				);
-				enemyChanged |= InputTextString(
-					LocalizedComponentWidgetLabel(editorLanguage_, "Attack HitBox Entity Name"),
-					component.enemyAttackHitBoxEntityName
-				);
-				component.enemyLoseRange = (std::max)(
-					component.enemyLoseRange,
-					component.enemyDetectionRange
-				);
-				if (enemyChanged) {
-					document.MarkDirty();
-				}
-				ImGui::EndDisabled();
+				if (DrawEnemyBehaviorFields(editorLanguage_, document, *entity, component,
+					editorSession_->IsEditing() && !entityLocked, sceneManager_, [&] { editorSession_->BeginEditFrame(); }, editorSession_->IsPaused())) document.MarkDirty();
 			} else if (component.type == "EnemySpawner") {
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
 				bool spawnerChanged = false;
@@ -16957,6 +19713,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				}
 				ImGui::EndDisabled();
 			} else if (component.type == "PlayerBehavior") {
+				if (ImGui::Button(SelectEditorText(editorLanguage_, "攻撃・被弾を編集###playerActionsLink", "Edit attack / hit reaction###playerActionsLink"), ImVec2(-1,0))) playerCombatContexts_[0].reveal = true;
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
 				bool playerChanged = false;
 				playerChanged |= ImGui::DragFloat(
@@ -17957,6 +20714,9 @@ void ImGuiManager::DrawInspectorWindow() {
 		if (uiRequest.entityId) {
 			const uint64_t id = entity->id; ApplyUIAuthoringRequest(document, uiRequest, false); entity = document.FindEntity(id);
 		}
+		if(addDeathEvent) AddDeathEvent(document,entity->id);
+		ApplyDeathAuthoringRequest(document,entity->id,false,deathRequest.addReplay,deathRequest.inspect,deathRequest.issue,deathRequest.previewCut,deathRequest.manualCut,deathRequest.endPreview);
+		ApplyStatTextAuthoringRequest(document,entity->id,false,statTextRequest.addText,statTextRequest.inspectId,statTextRequest.inspectType);
 		if (!removeComponentType.empty()) {
 			document.RemoveComponent(entity->id, removeComponentType);
 			editorSession_->RequestSceneReload();
@@ -18016,6 +20776,7 @@ void ImGuiManager::DrawInspectorWindow() {
 			ImGui::TextDisabled("Play mode changes are temporary");
 		}
 		DrawUIMigration(document, entity->id, false);
+		ApplyPlayerCombatRequests(document, false);
 	}
 	else {
 		// Default scene hierarchy inspector
@@ -18832,15 +21593,21 @@ void ImGuiManager::RequestOpenPrefab(
 	if (!prefabEditorSession_ || filePath.empty()) {
 		return;
 	}
+	// 初回自動復元より、利用者が明示したOpenを優先する。
+	// そのOpenが失敗した場合も、まだ表示していない前回の候補を空の状態で上書きしない。
+	if (prefabWorkspaceRestorePending_) prefabWorkspaceRestoreFailed_ = true;
+	prefabWorkspaceRestorePending_ = false;
 
 	const std::string resolvedPath = PathToUtf8(
 		EditableResourcePath::ResolveResource(
 			PathFromUtf8(filePath)
 		).lexically_normal()
 	);
-	showPrefab_ = true;
-	prefabFocusFramesRemaining_ = 2;
-
+	// 戻り操作と無関係なOpenへ、古いPlayer選択を持ち越さない。
+	auto& combatReturn = playerCombatContexts_[1];
+	if (combatReturn.returnOpenPending && resolvedPath != PathToUtf8(
+		EditableResourcePath::ResolveResource(PathFromUtf8(combatReturn.returnSource.key)).lexically_normal()))
+		combatReturn.returnOpenPending = false;
 	if (prefabEditorSession_->IsOpen()) {
 		const std::filesystem::path currentPath =
 			EditableResourcePath::ResolveResource(
@@ -18857,6 +21624,10 @@ void ImGuiManager::RequestOpenPrefab(
 			samePrefab ||
 			(equivalentError && currentPath == targetPath)
 		) {
+			showPrefab_ = true;
+			prefabFocusFramesRemaining_ = 2;
+			RevealPrefabInspector();
+			PersistPrefabWorkspace(true);
 			if (
 				historyIndex >= 0 &&
 				historyIndex <
@@ -18893,7 +21664,9 @@ bool ImGuiManager::OpenPrefab(
 		).lexically_normal()
 	);
 	if (!prefabEditorSession_->Open(resolvedPath)) {
+		playerCombatContexts_[1].returnOpenPending = false;
 		prefabNavigationStatus_ = prefabEditorSession_->GetLastError();
+		if (!prefabWorkspaceRestoring_) QueuePrefabWorkspaceWarning(false, resolvedPath, prefabNavigationStatus_);
 		return false;
 	}
 
@@ -18904,11 +21677,33 @@ bool ImGuiManager::OpenPrefab(
 	prefabSelectedEntityId_ = prefab.GetEntities().empty()
 		? 0
 		: prefab.GetEntities().front().id;
+	// 未保存確認が完了してOpenに成功した時点だけ、戻り先のPlayerを再解決する。
+	auto& combatReturn = playerCombatContexts_[1];
+	if (combatReturn.returnOpenPending) {
+		combatReturn.returnOpenPending = false;
+		const auto* actor = prefab.FindEntity(combatReturn.returnActor);
+		const std::string expected = PathToUtf8(EditableResourcePath::ResolveResource(
+			PathFromUtf8(combatReturn.returnSource.key)).lexically_normal());
+		if (resolvedPath == expected && actor && actor->name == combatReturn.returnActorName && FindComponent(*actor,"PlayerBehavior")) {
+			prefabSelectedEntityId_ = actor->id;
+			prefabSummarySelectedComponentType_ = "PlayerBehavior";
+			prefabClipFocusEnabled_ = false; combatReturn.reveal = true;
+		} else {
+			PlayerCombatEditor::Request request; request.serial = combatReturn.returnSerial;
+			request.operation = PlayerCombatEditor::Operation::ReturnToActor;
+			WarnPlayerCombat(request,{PlayerCombatEditor::IssueCode::Stale,{}});
+		}
+	}
 	++prefabPreviewFramingSerial_;
 	prefabNavigationStatus_.clear();
-	RecordRecentPrefab(resolvedPath);
 	const PrefabAssetReference openedReference =
 		PrefabAssetRegistry::CreateReference(resolvedPath);
+	prefabWorkspaceState_.asset = openedReference;
+	prefabWorkspaceRestoreFailed_ = false;
+	RevealPrefabInspector();
+	// Recentの保存にも表示状態が入る。初回復元中は未適用の保存候補を消さない。
+	if (!prefabWorkspaceRestoring_) prefabWorkspaceState_ = CapturePrefabWorkspace();
+	RecordRecentPrefab(resolvedPath);
 
 	if (
 		historyIndex >= 0 &&
@@ -19010,6 +21805,7 @@ void ImGuiManager::DrawPrefabOpenConfirmation() {
 		"キャンセル###CancelOpenPrefab",
 		"Cancel###CancelOpenPrefab"
 	))) {
+		playerCombatContexts_[1].returnOpenPending = false;
 		pendingPrefabOpenPath_.clear();
 		pendingPrefabHistoryIndex_ = -1;
 		ImGui::CloseCurrentPopup();
@@ -19548,7 +22344,7 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 		const SceneValidationIssue& issue = issues[issueIndex];
 		ImGui::PushID(static_cast<int>(issueIndex));
 		if (issue.entityId != 0 && document.FindEntity(issue.entityId)) {
-			if (ImGui::SmallButton((issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
+			if (ImGui::SmallButton((issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("StatText:") || issue.message.starts_with("DeathResponse:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
 				prefabSelectedEntityId_ = issue.entityId;
 			}
 			ImGui::SameLine();
@@ -19559,9 +22355,10 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 				? ImVec4(0.95f, 0.35f, 0.3f, 1.0f)
 				: ImVec4(0.95f, 0.65f, 0.25f, 1.0f),
 			"[%s] %s",
-			(issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
-			(issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
-			((issue.message.starts_with("Menu runtime:") || issue.message.starts_with("MenuItem marker") || issue.message.starts_with("MenuItem selection marker")) ? LocalizeMenuIssue(issue.message) : issue.message)).c_str()
+			(issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
+			((issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:")) ? std::string(EnemyPositioningIssue(editorLanguage_, issue.message)) :
+			(issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
+			((issue.message.starts_with("Menu runtime:") || issue.message.starts_with("MenuItem marker") || issue.message.starts_with("MenuItem selection marker")) ? LocalizeMenuIssue(issue.message) : issue.message))).c_str()
 		);
 		ImGui::PopID();
 	}
@@ -19606,15 +22403,12 @@ void ImGuiManager::DrawPrefabWindow() {
 			if (prefabEditorSession_->IsDirty()) {
 				prefabClosePopupRequested_ = true;
 			} else {
-				prefabEditorSession_->Close(true);
-				showPrefab_ = false;
-				prefabSelectedEntityId_ = 0;
+				ClosePrefabWorkspace();
 			}
 		}
 		if (!prefabEditorSession_->IsOpen()) {
 			DrawPrefabInspectorWindow();
 		}
-		DrawPrefabOpenConfirmation();
 		return;
 	}
 
@@ -19735,15 +22529,14 @@ void ImGuiManager::DrawPrefabWindow() {
 	if (!nestedBreadcrumbOpenPath.empty()) {
 		RequestOpenPrefab(nestedBreadcrumbOpenPath);
 		ImGui::End();
-		DrawPrefabOpenConfirmation();
 		return;
 	}
 	ImGui::Separator();
 
 	if (!prefabEditorSession_->IsOpen()) {
-		ImGui::TextDisabled(
-			"Select a .prefab.json asset in Project and choose Open Prefab Editor."
-		);
+		ImGui::TextDisabled("%s", SelectEditorText(editorLanguage_,
+			"Projectで.prefab.jsonを選択し、Prefab Editorで開いてください。",
+			"Select a .prefab.json asset in Project and choose Open Prefab Editor."));
 		if (!prefabNavigationStatus_.empty()) {
 			ImGui::TextColored(
 				ImVec4(0.95f, 0.35f, 0.3f, 1.0f),
@@ -19752,8 +22545,8 @@ void ImGuiManager::DrawPrefabWindow() {
 			);
 		}
 		ImGui::End();
+		if (!windowOpen) ClosePrefabWorkspace();
 		DrawPrefabInspectorWindow();
-		DrawPrefabOpenConfirmation();
 		return;
 	}
 
@@ -19800,7 +22593,7 @@ void ImGuiManager::DrawPrefabWindow() {
 		prefabInspectorFocusRequested_ = true;
 	}
 	ImGui::SameLine();
-	if (ImGui::Button("Close")) {
+	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる###ClosePrefab", "Close###ClosePrefab"))) {
 		windowOpen = false;
 	}
 	ImGui::SameLine();
@@ -19968,46 +22761,16 @@ void ImGuiManager::DrawPrefabWindow() {
 		if (prefabEditorSession_->IsDirty()) {
 			prefabClosePopupRequested_ = true;
 		} else {
-			prefabEditorSession_->Close(true);
-			showPrefab_ = false;
-			prefabSelectedEntityId_ = 0;
+			ClosePrefabWorkspace();
 		}
 	}
-	if (prefabClosePopupRequested_) {
-		ImGui::OpenPopup("Close Prefab?");
-		prefabClosePopupRequested_ = false;
-	}
-	if (ImGui::BeginPopupModal(
-		"Close Prefab?",
-		nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize
-	)) {
-		ImGui::TextUnformatted("The Prefab has unsaved changes.");
-		if (ImGui::Button("Save and Close")) {
-			if (CanSaveAnimationRotationMode(true) && prefabEditorSession_->Save()) {
-				prefabEditorSession_->Close(true);
-				showPrefab_ = false;
-				prefabSelectedEntityId_ = 0;
-				ImGui::CloseCurrentPopup();
-			}
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Discard")) {
-			prefabEditorSession_->Close(true);
-			showPrefab_ = false;
-			prefabSelectedEntityId_ = 0;
-			ImGui::CloseCurrentPopup();
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Cancel")) {
-			ImGui::CloseCurrentPopup();
-		}
-		ImGui::EndPopup();
-	}
-	DrawPrefabOpenConfirmation();
 }
 
 void ImGuiManager::DrawPrefabInspectorWindow() {
+	if (prefabInspectorObservedEntityId_ != prefabSelectedEntityId_) {
+		prefabInspectorObservedEntityId_ = prefabSelectedEntityId_;
+		if (prefabSelectedEntityId_ && prefabEditorSession_ && prefabEditorSession_->IsOpen()) RevealPrefabInspector();
+	}
 	if (!showPrefabInspector_) {
 		return;
 	}
@@ -20016,6 +22779,7 @@ void ImGuiManager::DrawPrefabInspectorWindow() {
 		ImGui::SetNextWindowFocus();
 		prefabInspectorFocusRequested_ = false;
 	}
+	if (prefabInspectorRevealRequested_) ImGui::SetNextWindowCollapsed(false);
 	bool windowOpen = true;
 	const bool inspectorContentsVisible = ImGui::Begin(
 		SelectEditorText(
@@ -20023,8 +22787,24 @@ void ImGuiManager::DrawPrefabInspectorWindow() {
 			"Prefab Inspector###PrefabInspector",
 			"Prefab Inspector###PrefabInspector"
 		),
-		&windowOpen
+		&windowOpen,
+		ImGuiWindowFlags_NoFocusOnAppearing
 	);
+	if (prefabInspectorRevealRequested_) {
+		// タブの表示だけを予約し、Prefab ViewからキーボードFocusを移さない。
+		ImGuiWindow* window = ImGui::GetCurrentWindow();
+		if (ImGuiDockNode* node = window->DockNode) {
+			node->SelectedTabId = window->TabId;
+			if (node->TabBar) {
+				// NextSelectedTabId経由はImGuiが入力Focusも移すため、既存Scene Inspectorと同じ表示選択を使う。
+				node->TabBar->SelectedTabId = window->TabId;
+				node->TabBar->NextSelectedTabId = 0;
+			}
+		} else {
+			ImGui::BringWindowToDisplayFront(window);
+		}
+		prefabInspectorRevealRequested_ = false;
+	}
 	DrawPrefabComponentPicker();
 	prefabKeyboardFocusThisFrame_ |= ImGui::IsWindowFocused(
 		ImGuiFocusedFlags_RootAndChildWindows
@@ -20059,6 +22839,9 @@ void ImGuiManager::DrawPrefabPreview() {
 		return;
 	}
 
+    if (replayFramingRequest_.prefab && replayFramingRequest_.preview &&
+        ImGui::Button(SelectEditorText(editorLanguage_,"編集視点へ戻る##ReplayPrefabReturn","Return to editing view##ReplayPrefabReturn"),ImVec2(-1,0)))
+        { replayFramingRequest_={}; replayFramingManualReady_=false; }
 	const SceneDocument& document = prefabEditorSession_->GetDocument();
 	const SceneEntity* uiSelection=document.FindEntity(prefabSelectedEntityId_);
 	const bool uiStage=uiSelection && SceneUILayout::IsUIEntity(document,*uiSelection);
@@ -22552,6 +25335,7 @@ bool ImGuiManager::PickPrefabEntity(
 	}
 
 	prefabSelectedEntityId_ = bestEntityId;
+	if (bestEntityId) RevealPrefabInspector();
 	return bestEntityId != 0;
 }
 
@@ -22636,6 +25420,7 @@ void ImGuiManager::DrawPrefabHierarchy() {
 		);
 		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
 			prefabSelectedEntityId_ = entityId;
+			RevealPrefabInspector();
 		}
 		if (ImGui::IsItemHovered() &&
 			ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -23187,6 +25972,7 @@ void ImGuiManager::DrawPrefabInspector() {
 	if (entityChanged) {
 		document.MarkDirty();
 	}
+	DrawPlayerCombatSection(document, entity->id, true);
 	if (DrawPersistentInspectorHeader(
 		prefabInspectorKey + "ComponentOverview",
 		SelectEditorText(
@@ -23248,6 +26034,9 @@ void ImGuiManager::DrawPrefabInspector() {
 	MenuAuthoringRequest menuAuthoringRequest;
 	UIAuthoringRequest uiRequest;
 	int removeComponentIndex = -1;
+	bool addDeathEvent = false;
+	DeathAuthoringRequest deathRequest;
+	StatTextAuthoringRequest statTextRequest;
 	for (size_t componentIndex = 0;
 		componentIndex < entity->components.size();
 		++componentIndex) {
@@ -23293,7 +26082,7 @@ void ImGuiManager::DrawPrefabInspector() {
 			component.type == "UICanvas" || component.type == "UITransform" || component.type == "SpriteRenderer" || component.type == "TextMotion";
 		const bool menuEditingAllowed = !entity->folder && !entity->locked &&
 			(!editorSession_ || editorSession_->IsEditing());
-		ImGui::BeginDisabled((menuAuthoringComponent || component.type == "EnemySpawner") && !menuEditingAllowed);
+		ImGui::BeginDisabled((menuAuthoringComponent || component.type == "EnemySpawner" || component.type == "DeathReplay" || component.type == "HitReaction" || component.type == "AttackSet" || component.type == "PlayerBehavior") && !menuEditingAllowed);
 		bool changed = ImGui::Checkbox(SelectEditorText(
 			editorLanguage_,
 			"有効###PrefabComponentEnabled",
@@ -23310,6 +26099,10 @@ void ImGuiManager::DrawPrefabInspector() {
 		} else if (component.type == "TextMotion") {
 			changed |= DrawUITextMotionFields(component);
 		} else if (component.type == "TextRenderer") {
+				if (FindEnabledComponent(*entity,"StatTextDisplay")) {
+					ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"内容は能力値表示から生成します。","Content is generated by Stat Text Display."));
+					if(ImGui::Button(SelectEditorText(editorLanguage_,"能力値表示を開く###OpenStatText","Open stat display###OpenStatText"),ImVec2(-1,0))) { statTextRequest.inspectId=entity->id; statTextRequest.inspectType="StatTextDisplay"; }
+				}
 			changed |= DrawMenuTextFields(component);
 		} else if (component.type == "MeshRenderer") {
 			const char* currentModel = component.modelPath.empty()
@@ -23389,58 +26182,16 @@ void ImGuiManager::DrawPrefabInspector() {
 				ImGui::EndCombo();
 			}
 			ImGui::TextDisabled("Only one enabled listener is allowed per Scene.");
+		} else if (component.type == "DeathResponse") {
+			changed |= DrawDeathFields(editorLanguage_,document,*entity,component,menuEditingAllowed,addDeathEvent,deathRequest,nullptr);
+		} else if (component.type == "DeathReplay") {
+			changed |= DrawDeathReplayFields(editorLanguage_,document,*entity,component,menuEditingAllowed,false,deathRequest,nullptr);
+		} else if (component.type == "StatTextDisplay") {
+			changed |= DrawStatTextFields(editorLanguage_,document,*entity,component,menuEditingAllowed,nullptr,statTextRequest);
+		} else if (component.type == "Health") {
+			changed |= DrawHealthFields(editorLanguage_, document, *entity, component, true);
 		} else if (component.type == "StatSet") {
-			int removeStatIndex = -1;
-			for (size_t statIndex = 0; statIndex < component.stats.size(); ++statIndex) {
-				SceneStatDefinition& stat = component.stats[statIndex];
-				ImGui::PushID(static_cast<int>(statIndex));
-				const std::string statLabel = stat.displayName.empty()
-					? stat.id
-					: stat.displayName;
-				if (ImGui::TreeNodeEx(
-					"Stat",
-					ImGuiTreeNodeFlags_DefaultOpen,
-					"%s",
-					statLabel.empty() ? "Stat" : statLabel.c_str()
-				)) {
-					changed |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Id"), stat.id);
-					changed |= InputTextString(LocalizedComponentWidgetLabel(editorLanguage_, "Display Name"), stat.displayName);
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Min"), &stat.minValue, 0.1f);
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Max"), &stat.maxValue, 0.1f);
-					changed |= ImGui::DragFloat(
-						LocalizedComponentWidgetLabel(editorLanguage_, "Initial"), &stat.initialValue, 0.1f
-					);
-					if (stat.maxValue < stat.minValue) {
-						stat.maxValue = stat.minValue;
-						changed = true;
-					}
-					const float clampedInitial = std::clamp(
-						stat.initialValue,
-						stat.minValue,
-						stat.maxValue
-					);
-					if (clampedInitial != stat.initialValue) {
-						stat.initialValue = clampedInitial;
-						changed = true;
-					}
-					if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Statを削除###RemoveStat", "Remove Stat###RemoveStat"))) {
-						removeStatIndex = static_cast<int>(statIndex);
-					}
-					ImGui::TreePop();
-				}
-				ImGui::PopID();
-			}
-			if (removeStatIndex >= 0) {
-				component.stats.erase(component.stats.begin() + removeStatIndex);
-				changed = true;
-			}
-			if (ImGui::Button(SelectEditorText(editorLanguage_, "Statを追加###AddStat", "Add Stat###AddStat"))) {
-				SceneStatDefinition stat{};
-				stat.id = "stat" + std::to_string(component.stats.size() + 1);
-				stat.displayName = stat.id;
-				component.stats.push_back(std::move(stat));
-				changed = true;
-			}
+			changed |= DrawStatSetFields(editorLanguage_, component, nullptr, nullptr, entity->id, true);
 		} else if (component.type == "OBBCollider") {
 			if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Shape"), component.colliderShape.c_str())) {
 				for (const char* shape : { "Box", "Sphere" }) {
@@ -23519,6 +26270,8 @@ void ImGuiManager::DrawPrefabInspector() {
 			changed |= InputTextString(
 				LocalizedComponentWidgetLabel(editorLanguage_, "Stats Entity Name"), component.hurtBoxStatsEntityName
 			);
+		} else if (component.type == "EnemyBehavior") {
+			changed |= DrawEnemyBehaviorFields(editorLanguage_, document, *entity, component, menuEditingAllowed, nullptr, [&] { prefabEditorSession_->BeginEditFrame(); });
 		} else if (component.type == "AgentBehavior") {
 			const bool isGroundAgent =
 				component.agentMovementMode == "GroundXZ";
@@ -23560,51 +26313,10 @@ void ImGuiManager::DrawPrefabInspector() {
 					"Requires PhysicsBody. EnemyBehavior retains movement and rotation ownership."
 				);
 			}
+		} else if (component.type == "PlayerBehavior") {
+			if (ImGui::Button(SelectEditorText(editorLanguage_, "攻撃・被弾を編集###playerActionsLink", "Edit attack / hit reaction###playerActionsLink"), ImVec2(-1,0))) playerCombatContexts_[1].reveal = true;
 		} else if (component.type == "HitReaction") {
-			changed |= ImGui::DragFloat(
-				"Knockback Multiplier",
-				&component.hitReactionKnockbackMultiplier,
-				0.01f, 0.0f, 100.0f
-			);
-			const char* reactionModePreview =
-				component.hitReactionTriggerMode == "PoiseBreak"
-				? "Poise Break" : "Minimum Damage";
-			if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Reaction Trigger"), reactionModePreview)) {
-				if (ImGui::Selectable(
-					"Minimum Damage",
-					component.hitReactionTriggerMode == "MinimumDamage"
-				)) {
-					component.hitReactionTriggerMode = "MinimumDamage";
-					changed = true;
-				}
-				if (ImGui::Selectable(
-					"Poise Break",
-					component.hitReactionTriggerMode == "PoiseBreak"
-				)) {
-					component.hitReactionTriggerMode = "PoiseBreak";
-					changed = true;
-				}
-				ImGui::EndCombo();
-			}
-			if (component.hitReactionTriggerMode == "PoiseBreak") {
-				changed |= InputTextString(
-					"Poise Stat", component.hitReactionPoiseStatId
-				);
-				changed |= ImGui::DragFloat(
-					"Poise Recovery Delay",
-					&component.hitReactionPoiseRecoveryDelay,
-					0.05f, 0.0f, 60.0f
-				);
-			} else {
-				changed |= ImGui::DragFloat(
-					"Minimum Poise Damage",
-					&component.hitReactionMinimumPoiseDamage,
-					0.1f, 0.0f, 100000.0f
-				);
-			}
-			changed |= InputTextString(
-				"Hit State", component.hitReactionStateName
-			);
+			DrawPlayerCombatFields(document, entity->id, component, true);
 		} else if (component.type == "DeathPresentation") {
 			changed |= InputTextString(
 				"Death State", component.deathPresentationStateName
@@ -23927,10 +26639,7 @@ void ImGuiManager::DrawPrefabInspector() {
 							animationClip = &*foundClip;
 						}
 					}
-					ImGui::SeparatorText(SelectEditorText(editorLanguage_, "タイミング", "Timing"));
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Windup"), &attack.windup, 0.01f, 0.0f, 60.0f);
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Active Time"), &attack.activeTime, 0.01f, 0.0f, 60.0f);
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Recovery"), &attack.recovery, 0.01f, 0.0f, 60.0f);
+					DrawPlayerCombatFields(document, entity->id, component, true, &attack.name);
 					const float attackDuration = attack.windup +
 						attack.activeTime + attack.recovery;
 					if (animationClip) {
@@ -23953,64 +26662,6 @@ void ImGuiManager::DrawPrefabInspector() {
 							ImVec4(0.95f, 0.65f, 0.25f, 1.0f),
 							"Animation '%s' was not found on this PrefabAnimator.",
 							attack.animation.c_str()
-						);
-					}
-					ImGui::SeparatorText(SelectEditorText(editorLanguage_, "移動", "Motion"));
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Forward Distance"), &attack.forwardDistance, 0.01f, -100.0f, 100.0f);
-					changed |= ImGui::DragFloat(LocalizedComponentWidgetLabel(editorLanguage_, "Side Distance"), &attack.sideDistance, 0.01f, -100.0f, 100.0f);
-					const char* facingPreview = "Fixed At Start";
-					if (attack.facingMode == "InputDirection") facingPreview = "Input Direction";
-					if (attack.facingMode == "TargetDirection") facingPreview = "Target Direction";
-					if (attack.facingMode == "RotateByAngle") facingPreview = "Rotate By Angle";
-					if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Facing"), facingPreview)) {
-						for (const char* mode : {
-							"FixedAtStart", "InputDirection", "TargetDirection", "RotateByAngle"
-						}) {
-							const bool selected = attack.facingMode == mode;
-							const char* label = mode[0] == 'I'
-								? "Input Direction"
-								: mode[0] == 'T'
-									? "Target Direction"
-									: mode[0] == 'R'
-										? "Rotate By Angle"
-										: "Fixed At Start";
-							if (ImGui::Selectable(label, selected)) {
-								attack.facingMode = mode;
-								changed = true;
-							}
-						}
-						ImGui::EndCombo();
-					}
-					if (attack.facingMode == "TargetDirection") {
-						const SceneEntity* target = attack.facingTargetEntityId != 0
-							? document.FindEntity(attack.facingTargetEntityId)
-							: nullptr;
-						if (!target && !attack.facingTargetEntityName.empty()) {
-							target = document.FindEntityByName(attack.facingTargetEntityName);
-						}
-						const char* targetPreview = target ? target->name.c_str() : "None (keep start facing)";
-					if (ImGui::BeginCombo(LocalizedComponentWidgetLabel(editorLanguage_, "Facing Target"), targetPreview)) {
-							if (ImGui::Selectable("None (keep start facing)", !target)) {
-								attack.facingTargetEntityId = 0;
-								attack.facingTargetEntityName.clear();
-								changed = true;
-							}
-							for (const SceneEntity& candidate : document.GetEntities()) {
-								if (candidate.id == entity->id) { continue; }
-								const bool selected = candidate.id == attack.facingTargetEntityId;
-								const std::string label = candidate.name + " (" + std::to_string(candidate.id) + ")";
-								if (ImGui::Selectable(label.c_str(), selected)) {
-									attack.facingTargetEntityId = candidate.id;
-									attack.facingTargetEntityName = candidate.name;
-									changed = true;
-								}
-							}
-							ImGui::EndCombo();
-						}
-					} else if (attack.facingMode == "RotateByAngle") {
-						changed |= ImGui::DragFloat(
-							SelectEditorText(editorLanguage_, "回転角度（Radians）###RotateAngle", "Rotate Angle (radians)###RotateAngle"), &attack.facingRotateAngle,
-							0.01f, -25.1328f, 25.1328f
 						);
 					}
 					ImGui::SeparatorText(SelectEditorText(editorLanguage_, "Loop", "Loop"));
@@ -24584,6 +27235,9 @@ void ImGuiManager::DrawPrefabInspector() {
 	if (uiRequest.entityId) {
 		const uint64_t id = entity->id; ApplyUIAuthoringRequest(document, uiRequest, true); entity = document.FindEntity(id);
 	}
+	if(addDeathEvent){AddDeathEvent(document,entity->id);}
+	ApplyDeathAuthoringRequest(document,entity->id,true,deathRequest.addReplay,deathRequest.inspect,deathRequest.issue,deathRequest.previewCut,deathRequest.manualCut,deathRequest.endPreview);
+	ApplyStatTextAuthoringRequest(document,entity->id,true,statTextRequest.addText,statTextRequest.inspectId,statTextRequest.inspectType);
 	if (removeComponentIndex >= 0) {
 		const std::string type = entity->components[removeComponentIndex].type;
 		document.RemoveComponent(entity->id, type);
@@ -24625,6 +27279,7 @@ void ImGuiManager::DrawPrefabInspector() {
 		));
 	}
 	DrawUIMigration(document, entity->id, true);
+	ApplyPlayerCombatRequests(document, true);
 }
 
 void ImGuiManager::DrawConsoleWindow() {
@@ -24739,4 +27394,32 @@ void ImGuiManager::DrawConsoleWindow() {
 
 bool ImGuiManager::IsSceneViewInputActive() {
 	return sceneViewInputActive_;
+}
+
+bool ImGuiManager::GetReplayFramingRequest(bool prefab, SceneReplayFramingRequest& out) {
+    if (!editorSession_ || !editorSession_->IsEditing()) { replayFramingRequest_={}; replayFramingManualReady_=false; return false; }
+    if (!replayFramingRequest_.serial || replayFramingRequest_.prefab!=prefab) return false;
+    const SceneDocument* document=prefab ? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument() : nullptr) : &editorSession_->GetEditDocument();
+    const auto* owner=document ? document->FindEntity(replayFramingRequest_.owner) : nullptr;
+    const auto* component=owner ? FindComponent(*owner,"DeathReplay") : nullptr;
+    if (!document || (prefab && prefabEditorSession_->GetFilePath()!=replayFramingRequest_.sourcePath) ||
+        document->GetContentGeneration()!=replayFramingRequest_.generation || !component ||
+        replayFramingRequest_.cut>=component->deathReplayViews.size()) {
+        replayFramingRequest_={}; replayFramingManualReady_=false; return false;
+    }
+    replayFramingRequest_.view=component->deathReplayViews[replayFramingRequest_.cut];
+    out=replayFramingRequest_; return true;
+}
+void ImGuiManager::SetReplayFramingResult(const SceneReplayFramingRequest& request, bool success, const SceneReplayViewSettings& manual) {
+    if (!request.serial || request.serial!=replayFramingRequest_.serial) return;
+    if (!success) {
+        if (replayFramingWarningSerial_!=request.serial) {
+            replayFramingWarningSerial_=request.serial;
+            spawnWarningRequested_=true; spawnWarningRuntime_=false; spawnWarningEntityId_=request.owner;
+            spawnWarningIssue_="DeathResponse:ReplayCamera"; spawnWarningDetail_.clear();
+        }
+        replayFramingRequest_={}; replayFramingManualReady_=false;
+    } else if (request.convertToManual) {
+        replayFramingManualResult_=manual; replayFramingResultSource_=request.view; replayFramingResultSerial_=request.serial; replayFramingManualReady_=true;
+    }
 }

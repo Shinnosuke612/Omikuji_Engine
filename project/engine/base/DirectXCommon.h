@@ -65,6 +65,8 @@ public:
 		Microsoft::WRL::ComPtr<IDxcBlob>& out, std::string& diagnostic);
 
 	Microsoft::WRL::ComPtr <ID3D12Resource> CreateBufferResource(size_t sizeInBytes);
+    // Replay準備用。失敗時out不変、assert/Map/command送信なし。
+    bool TryCreateBufferResource(size_t sizeInBytes, Microsoft::WRL::ComPtr<ID3D12Resource>& out);
 
 	Microsoft::WRL::ComPtr <ID3D12Resource> CreateTextureResource(const DirectX::TexMetadata& metadate);
 

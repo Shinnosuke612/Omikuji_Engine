@@ -8,6 +8,8 @@
 #include "SceneEntityReference.h"
 #include "ScenePreparationDiagnostic.h"
 #include "SceneMenuRuntime.h"
+#include "SceneReplayHistory.h"
+#include "SceneReplayPresentation.h"
 
 class Camera;
 class Object3d;
@@ -16,6 +18,26 @@ class SceneInstance;
 class SceneManager;
 struct ScenePostProcessSettings;
 struct SceneUIEditorView;
+struct SceneEnemyPositioningStatus;
+
+// 既存値を維持して、記録後の3視点再生状態を末尾へ追加する。
+enum class SceneDeathReplayPhase { Waiting, LiveSlow, Frozen, Failed, Preparing, ReplayA, ReplayB, ReplayC, FinishedHold };
+// Inspector向け値コピー。Sceneや演出状態の所有権を公開しない。
+struct SceneDeathReplayStatus {
+	SceneDeathReplayPhase phase = SceneDeathReplayPhase::Waiting;
+	uint64_t owner = 0;
+	float remainingRealSeconds = 0.0f;
+	std::string diagnostic;
+	double replaySeconds = 0.0, replayDuration = 0.0;
+	uint32_t cut = 0;
+	bool awaitingPresentation = false, staticClip = false;
+	uint64_t gpuBytes = 0, descriptors = 0;
+};
+// 読取専用の死亡世界時計。Scene参照や一回消費する通知を外へ渡さない。
+struct SceneViewEffectClock {
+	uint64_t contentGeneration = 0;
+	double deathWorldElapsedSeconds = 0.0;
+};
 
 // SceneInstanceを介してSceneManagerが所有するSceneの共通契約。派生側は各Passの順序を変えない。
 class BaseScene
@@ -37,6 +59,9 @@ public:
 	virtual SceneUiControlFrame GetUiControlFrame() const { return {}; }
 	// 入力だけを遮断する。Simulation/Editor Pauseの意味は変えない。
 	virtual void SetUiGameplayInputBlocked(bool blocked) { (void)blocked; }
+	// ゲーム内PauseはEditor Debug Cameraを動かさず、UI表示だけ更新する。
+	virtual bool SupportsGamePause() const { return false; }
+	virtual void UpdateGamePaused(float uiDeltaTime) { (void)uiDeltaTime; }
 	// Pause中はSimulationを進めず、Debug Cameraなど必要な表示状態だけを更新する。
 	virtual void UpdatePaused() {}
 	// 対応Sceneだけが、Simulationや開始Eventを進めずに描画準備できる。
@@ -98,6 +123,36 @@ public:
 		(void)generation;
 		return false;
 	}
+
+	// 全体敗北中だけ累積scaled秒を返す任意口。未対応/不一致ならout不変でfalse。
+	virtual bool TryGetViewEffectClock(SceneViewEffectClock& out) const { (void)out; return false; }
+
+	// Editor用の任意の読取口。Runtimeを持たないSceneはfalse、保存値へ反映しない。
+	virtual bool TryGetRuntimeStat(uint64_t, const std::string&, float&, float* = nullptr) const { return false; }
+	// -1は未対応。値は死亡演出の受付状態で、SceneやRuntimeへの可変参照を返さない。
+	virtual int GetDeathResponseStatus(uint64_t) const { return -1; }
+	// 値コピーのみ。未対応/対象不一致はfalseでout不変。
+	// Active Gameの最初の描画前だけ通知。時計を進めず、CPU履歴を確定する。
+    // Gameの全View GPU利用完了通知。Scene破棄前hookは必要時だけ未提出commandをdrainする。
+    // Gameだけが呼ぶ。Prepareは前frameの全GPU利用完了後、Shadowより前。
+    virtual bool TryGetReplayFraming(uint64_t, SceneReplayFramingBasis&) const { return false; }
+    virtual void AdvanceReplayPresentation(float, bool) {}
+    virtual bool PrepareReplayGameFrame(uint64_t, float, SceneReplayGameFrame&) { return false; }
+    virtual bool DrawReplayGameShadow(const SceneReplayPresentationToken&) { return false; }
+    virtual bool DrawReplayGameWorld(const SceneReplayPresentationToken&) { return false; }
+    virtual void RejectReplayGameFrame(const SceneReplayPresentationToken&) {}
+    virtual void AcceptReplayPresentationReceipt(const SceneReplayPresentationToken&) {}
+    // 成功時だけ実際に描いたPanelの出所を返す。GPU完了後に同じ値を返して入力を解禁する。
+    virtual bool DrawReplayMenu(const SceneReplayPresentationToken&, SceneMenuSource&) { return false; }
+    virtual void AcceptReplayMenuReceipt(const SceneReplayPresentationToken&, const SceneMenuSource&) {}
+    virtual void NotifyReplayGpuCompleted() {}
+    virtual void PrepareReplayForFinalize() {}
+	virtual void CaptureReplayBeforeDraw(const SceneReplayCaptureRequest&) {}
+	virtual bool TryGetReplayHistoryStatus(uint64_t, SceneReplayHistoryStatus&) const { return false; }
+	virtual bool TryGetDeathReplayStatus(uint64_t, SceneDeathReplayStatus&) const { return false; }
+	virtual bool TryGetRuntimeFlag(uint64_t, const std::string&, bool&) const { return false; }
+	// Editor向けの個体値コピー。未対応/未初期化はfalse、out不変。
+	virtual bool TryGetEnemyPositioningStatus(uint64_t, SceneEnemyPositioningStatus&) const { return false; }
 
 	virtual void SetSceneManager(SceneManager* sceneManager) { sceneManager_ = sceneManager; }
 	virtual void SetSceneInstance(SceneInstance* sceneInstance) {

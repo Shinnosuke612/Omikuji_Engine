@@ -173,3 +173,33 @@ void SceneProjectileSystem::Clear() {
 	runtimes_.clear();
 	pendingRemovals_.clear();
 }
+
+std::vector<uint64_t> SceneProjectileSystem::UpdateDeathContinuation(SceneDocument& document,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, float worldDelta) {
+	std::vector<uint64_t> moved;
+	if (!std::isfinite(worldDelta) || worldDelta <= 0.0f) return moved;
+	for (const auto& binding : bindings) {
+		if (!binding.entity || !binding.object) continue;
+		auto found = runtimes_.find(binding.entityId);
+		if (found == runtimes_.end() || !found->second.initialized) continue;
+		const auto* projectile = SceneEntityQuery::FindEnabledComponent(*binding.entity, "Projectile");
+		if (!projectile || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *binding.entity)) continue;
+		moved.push_back(binding.entityId);
+		auto& runtime = found->second;
+		runtime.age += worldDelta;
+		if (runtime.age >= (std::max)(projectile->projectileLifetime, 0.0f)) {
+			binding.entity->active = false;
+			pendingRemovals_.insert(binding.entityId);
+			continue;
+		}
+		runtime.velocity.y -= projectile->projectileGravity * worldDelta;
+		auto& transform = binding.object->GetTransform();
+		transform.translate = Math::Add(transform.translate, Math::Multiply(runtime.velocity, worldDelta));
+		binding.object->Update();
+		binding.entity->transform.translate = transform.translate;
+		binding.entity->transform.scale = transform.scale;
+		binding.entity->transform.rotate = transform.useQuaternionRotation
+			? transform.quaternionRotate : MakeQuaternionFromEuler(transform.rotate);
+	}
+	return moved;
+}

@@ -54,13 +54,13 @@ void AudioDirector::BeginFade(float duration) {
 	fading_ = true;
 }
 
-void AudioDirector::Resolve(const PersistentBgmRequest& request) {
+bool AudioDirector::Resolve(const PersistentBgmRequest& request) {
 	transitionHold_ = false;
 	transitionOwnerId_ = 0;
 	const std::string normalizedPath = NormalizePath(request.clipPath);
 	if (normalizedPath.empty()) {
 		ResolveNone(request.sceneOwnerId);
-		return;
+		return false;
 	}
 
 	if (current_ && current_->normalizedPath == normalizedPath) {
@@ -73,7 +73,7 @@ void AudioDirector::Resolve(const PersistentBgmRequest& request) {
 			request.options.loop
 		);
 		StopTrack(pendingIncoming_);
-		return;
+		return current_->handle.IsValid();
 	}
 	if (pendingIncoming_ && pendingIncoming_->normalizedPath == normalizedPath) {
 		ClearFinishedSignals(pendingIncoming_->request.sceneOwnerId);
@@ -84,7 +84,7 @@ void AudioDirector::Resolve(const PersistentBgmRequest& request) {
 			request.options.pitch,
 			request.options.loop
 		);
-		return;
+		return pendingIncoming_->handle.IsValid();
 	}
 
 	// 新しい要求を優先し、未開始の古いincomingはVoice上限へ数えないよう停止する。
@@ -104,10 +104,11 @@ void AudioDirector::Resolve(const PersistentBgmRequest& request) {
 		&error
 	);
 	if (!handle.IsValid()) {
-		return;
+		return false;
 	}
 	audio_.SetPlaybackFadeGain(handle, 0.0f);
 	pendingIncoming_ = Track{ request, normalizedPath, handle };
+	return true;
 }
 
 void AudioDirector::ResolveNone(uint64_t nextSceneOwnerId) {

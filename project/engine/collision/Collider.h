@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 
 #include "../math/Matrix4x4.h"
 #include "../math/Vector3.h"
@@ -56,3 +57,25 @@ protected:
 bool CheckCollision(const SphereCollider& a, const SphereCollider& b);
 bool CheckCollision(const SphereCollider& sphere, const OBBCollider& obb);
 bool CheckCollision(const OBBCollider& a, const OBBCollider& b);
+
+// World空間の形状コピー。行列/Colliderへの参照を持たず、一区間内の回転・寸法は固定する。
+struct ColliderSweepShape {
+	Collider::Type type = Collider::Type::Sphere;
+	Vector3 center{};
+	float radius = 0.0f;
+	std::array<Vector3, 3> axis{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+	Vector3 halfSize{};
+	uint32_t attribute = 0, mask = 0;
+};
+struct ColliderSweepHit {
+	float fraction = 0.0f;
+	Vector3 normal{}; // BからAへ向く。初期重なりでは最小分離方向。
+	Vector3 position{}; // 接触代表位置。接触面全体のmanifoldではない。
+	bool initialOverlap = false;
+};
+enum class ColliderSweepResult { Miss, Hit, Invalid };
+// 不正な形状ではfalse、out不変。active/triggerの採否は呼出側が決める。
+bool CaptureColliderSweepShape(const Collider& collider, ColliderSweepShape& out);
+// 両者のworld並進を同じ0..1時間で比較。Miss/Invalid時はout不変。
+ColliderSweepResult SweepColliderTranslation(const ColliderSweepShape& a, const Vector3& deltaA,
+	const ColliderSweepShape& b, const Vector3& deltaB, ColliderSweepHit& out);

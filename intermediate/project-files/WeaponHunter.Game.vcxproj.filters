@@ -20,6 +20,7 @@
     <Filter Include="Application\scene\systems\menu" />
     <Filter Include="Application\scene\systems\physics" />
     <Filter Include="Application\scene\systems\rendering" />
+    <Filter Include="Application\scene\systems\replay" />
     <Filter Include="Application\scene\systems\text" />
     <Filter Include="Application\transition" />
   </ItemGroup>
@@ -102,6 +103,10 @@
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.h"><Filter>Application\scene\systems\rendering</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneUIRenderSystem.cpp"><Filter>Application\scene\systems\rendering</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneUIRenderSystem.h"><Filter>Application\scene\systems\rendering</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayHistorySystem.cpp"><Filter>Application\scene\systems\replay</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayHistorySystem.h"><Filter>Application\scene\systems\replay</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayRenderSystem.cpp"><Filter>Application\scene\systems\replay</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayRenderSystem.h"><Filter>Application\scene\systems\replay</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.cpp"><Filter>Application\scene\systems\text</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.h"><Filter>Application\scene\systems\text</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><Filter>Application\scene\systems\text</Filter></ClCompile>

@@ -1,4 +1,5 @@
 // 役割: Object3dの更新、アニメーション遷移、モデル描画を実装する。
+#include <limits>
 #include "Object3d.h"
 #include "Object3dCommon.h"
 #include "../base/DirectXCommon.h"
@@ -10,6 +11,7 @@
 #include "../debug/DebugRenderer.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace {
 
@@ -48,6 +50,7 @@ void Object3d::Update(){
 }
 
 void Object3d::UpdateAnimation(float deltaTime) {
+	if (replayPoseActive_) return;
 	if (
 		deltaTime > 0.0f &&
 		animationPlayer_.IsEnabled() &&
@@ -64,6 +67,12 @@ void Object3d::UpdateForCamera(Camera* camera) {
 }
 
 void Object3d::UpdateInternal() {
+	if (replayPoseActive_) {
+		// ReplayのWorldは既にroot/親/表示補正込み。別ViewでもPoseを再評価しない。
+		transformationMatrixData->WVP = camera ? Multiply(transformationMatrixData->World, camera->GetViewProjectionMatrix()) : transformationMatrixData->World;
+		if (camera) cameraData->worldPosition = camera->GetTranslate();
+		return;
+	}
 	objectWorldMatrix_ = transform.useQuaternionRotation
 		? MakeAffineMatrix(
 			transform.scale,
@@ -127,6 +136,7 @@ void Object3d::UpdateInternal() {
 }
 
 void Object3d::SetModel(Model* model) {
+	replayPoseActive_ = false;
 	this->model = model;
 	CreateMaterialResources();
 	animationPlayer_.SetAnimations(
@@ -504,6 +514,7 @@ void Object3d::SetMaterialOverrides(
 	for (MaterialSlotResource& materialSlot : materialSlots_) {
 		materialSlot.colorOverrideEnabled = false;
 		materialSlot.textureOverride = {};
+		materialSlot.textureOverrideKey.clear();
 		for (const MaterialOverride& override : overrides) {
 			if (!override.enabled || override.materialName.empty()) {
 				continue;
@@ -519,6 +530,7 @@ void Object3d::SetMaterialOverrides(
 				TextureManager::GetInstance()->LoadTexture(override.texturePath)) {
 				materialSlot.textureOverride =
 					TextureManager::GetInstance()->GetSrvHandleGPU(override.texturePath);
+				materialSlot.textureOverrideKey = override.texturePath;
 			}
 			break;
 		}
@@ -593,4 +605,241 @@ void Object3d::UpdateMaterialResources() {
 			? textureOverrideHandle_
 			: materialSlot.textureOverride;
 	}
+}
+
+namespace {
+bool ReplayFinite(const Matrix4x4& value) {
+	for (const auto& row : value.m) for (float v : row) if (!std::isfinite(v)) return false;
+	return true;
+}
+bool ReplayFinite(const Vector4& v) {
+	return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && std::isfinite(v.w);
+}
+bool ReplayFinite(const Vector3& v) {
+	return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+// 入力を補正して異なる姿勢を作らず、非有限値/退化Quaternionは入口で拒否する。
+bool ReplayValuesValid(const Object3d::ReplayPose& pose) {
+	if (!ReplayFinite(pose.renderWorld) || !std::isfinite(pose.environmentCoefficient) ||
+		pose.cullMode < Object3dCommon::CullMode::kNone || pose.cullMode >= Object3dCommon::CullMode::kCount) return false;
+	for (const auto& j : pose.joints) {
+		const auto& q = j.transform.rotate;
+		const double length = double(q.x)*q.x + double(q.y)*q.y + double(q.z)*q.z + double(q.w)*q.w;
+		if (!ReplayFinite(j.transform.scale) || !ReplayFinite(j.transform.translate) ||
+			!std::isfinite(length) || length <= 0.0) return false;
+	}
+	for (const auto& m : pose.materials) {
+		if (!ReplayFinite(m.color) || !ReplayFinite(m.emissiveColor) || !ReplayFinite(m.uvTransform) ||
+			!std::isfinite(m.emissiveIntensity) || !std::isfinite(m.shininess) || !std::isfinite(m.dissolveAmount) ||
+			!std::isfinite(m.dissolveEdgeWidth) || !std::isfinite(m.dissolveNoiseScale) ||
+			m.dissolveAmount != pose.materials.front().dissolveAmount) return false;
+	}
+	return true;
+}
+}
+
+bool Object3d::EstimateReplayPoseBytes(const std::string& assetKey, uint64_t& out) const {
+	if (!model || assetKey.empty() || ModelManager::GetInstance()->FindModel(assetKey) != model ||
+		materialSlots_.size() != model->GetMaterialSlots().size()) return false;
+	uint64_t bytes = sizeof(ReplayPose) + 128;
+	const auto limit = (std::numeric_limits<uint64_t>::max)();
+	auto add = [&](uint64_t count, uint64_t size) {
+		if (count > (limit - bytes) / size) return false;
+		bytes += count * size; return true;
+	};
+	// reserve/string容量、同時に存在する一個の採取candidateも含め余地を持たせる。
+	if (!add(assetKey.size() + 32, 4) || !add(environmentTextureFilePath_.size() + 32, 4) ||
+		!add(skeleton_.joints.size(), sizeof(ReplayJoint) * 4) || !add(materialSlots_.size(), sizeof(ReplayMaterial) * 4)) return false;
+	for (const auto& j : skeleton_.joints) if (!add(j.name.size() + 32, 4)) return false;
+	for (size_t i = 0; i < materialSlots_.size(); ++i) {
+		const auto& key = materialSlots_[i].textureOverrideKey.empty() ? model->GetMaterialSlots()[i].textureFilePath : materialSlots_[i].textureOverrideKey;
+		if (!add(key.size() + 32, 4)) return false;
+	}
+	out = bytes; return true;
+}
+
+bool Object3d::CaptureReplayPose(const std::string& assetKey, ReplayPose& out) const {
+	// CaptureはCPU値のコピーのみ。未評価のAnimationをここで進めない。
+	if (!model || assetKey.empty() || ModelManager::GetInstance()->FindModel(assetKey) != model ||
+		animationPoseDirty_ || !transformationMatrixData || !cameraData || textureOverrideHandle_.ptr != 0 ||
+		materialSlots_.size() != model->GetMaterialSlots().size()) return false;
+	auto* textures = TextureManager::GetInstance();
+	if (!textures->HasTexture(environmentTextureFilePath_)) return false;
+	ReplayPose candidate;
+	candidate.joints.reserve(skeleton_.joints.size());
+	candidate.materials.reserve(materialSlots_.size());
+	candidate.modelKey = assetKey;
+	candidate.environmentKey = environmentTextureFilePath_;
+	candidate.renderWorld = transformationMatrixData->World;
+	candidate.environmentCoefficient = cameraData->environmentCoefficient;
+	candidate.cullMode = cullMode_;
+	for (const auto& joint : skeleton_.joints)
+		candidate.joints.push_back({joint.name, joint.parent.value_or(-1), joint.transform});
+	for (size_t i = 0; i < materialSlots_.size(); ++i) {
+		const auto& slot = materialSlots_[i];
+		if (!slot.data || (slot.textureOverride.ptr != 0 && slot.textureOverrideKey.empty())) return false;
+		ReplayMaterial value;
+		value.color = slot.data->color;
+		value.enableLighting = slot.data->enableLighting;
+		value.emissiveIntensity = slot.data->emissiveIntensity;
+		value.uvTransform = slot.data->uvTransform;
+		value.emissiveColor = slot.data->emissiveColor;
+		value.shininess = slot.data->shininess;
+		value.dissolveAmount = slot.data->dissolveAmount;
+		value.dissolveEdgeWidth = slot.data->dissolveEdgeWidth;
+		value.dissolveNoiseScale = slot.data->dissolveNoiseScale;
+		value.textureKey = slot.textureOverrideKey.empty() ? model->GetMaterialSlots()[i].textureFilePath : slot.textureOverrideKey;
+		if (!value.textureKey.empty() && !textures->HasTexture(value.textureKey)) return false;
+		candidate.materials.push_back(std::move(value));
+	}
+	if (!ReplayValuesValid(candidate)) return false;
+	out = std::move(candidate);
+	return true;
+}
+
+bool Object3d::ApplyReplayPose(const ReplayPose& pose) {
+	if (!model || pose.modelKey.empty() || ModelManager::GetInstance()->FindModel(pose.modelKey) != model ||
+		!transformationMatrixData || !cameraData || !shadowTransformationMatrixData ||
+		pose.joints.size() != skeleton_.joints.size() || pose.materials.size() != materialSlots_.size() ||
+		materialTexturesForDraw_.size() != materialSlots_.size() ||
+		!ReplayValuesValid(pose) || (model->HasSkinning() && (!skinCluster_ || !skinCluster_->IsValid()))) return false;
+	auto* textures = TextureManager::GetInstance();
+	if (!textures->HasTexture(pose.environmentKey)) return false;
+	for (size_t i = 0; i < pose.materials.size(); ++i) {
+		if (!materialSlots_[i].data || (!pose.materials[i].textureKey.empty() && !textures->HasTexture(pose.materials[i].textureKey))) return false;
+	}
+	// 骨構成と階層計算まで一時コピーで検証し、拒否時は表示先も変更しない。
+	Skeleton candidate = skeleton_;
+	for (size_t i = 0; i < pose.joints.size(); ++i) {
+		const auto& value = pose.joints[i];
+		if (value.name != candidate.joints[i].name || value.parent != candidate.joints[i].parent.value_or(-1)) return false;
+		candidate.joints[i].transform = value.transform;
+	}
+	if (candidate.IsValid()) UpdateSkeleton(candidate);
+	for (const auto& joint : candidate.joints) if (!ReplayFinite(joint.skeletonSpaceMatrix)) return false;
+
+	skeleton_ = std::move(candidate);
+	if (skinCluster_) { skinCluster_->Update(skeleton_); skinningDispatchPending_ = true; }
+	animationPoseDirty_ = false;
+	replayPoseActive_ = true;
+	transformationMatrixData->World = pose.renderWorld;
+	cullMode_ = pose.cullMode;
+	environmentTextureFilePath_ = pose.environmentKey;
+	cameraData->environmentCoefficient = pose.environmentCoefficient;
+	textureOverrideHandle_ = {};
+	for (size_t i = 0; i < pose.materials.size(); ++i) {
+		const auto& value = pose.materials[i];
+		auto& slot = materialSlots_[i];
+		slot.data->color = value.color;
+		slot.data->enableLighting = value.enableLighting;
+		slot.data->emissiveIntensity = value.emissiveIntensity;
+		slot.data->uvTransform = value.uvTransform;
+		slot.data->emissiveColor = value.emissiveColor;
+		slot.data->shininess = value.shininess;
+		slot.data->dissolveAmount = value.dissolveAmount;
+		slot.data->dissolveEdgeWidth = value.dissolveEdgeWidth;
+		slot.data->dissolveNoiseScale = value.dissolveNoiseScale;
+		slot.textureOverrideKey = value.textureKey;
+		slot.textureOverride = value.textureKey.empty() ? D3D12_GPU_DESCRIPTOR_HANDLE{} : textures->GetSrvHandleGPU(value.textureKey);
+		materialTexturesForDraw_[i] = slot.textureOverride;
+	}
+	// 影の非表示判定も、通常描画と同じ確定材質を使う。
+	materialDissolveAmount_ = pose.materials.empty() ? 0.0f : pose.materials.front().dissolveAmount;
+	UpdateInternal();
+	return true;
+}
+
+
+bool Object3d::TryInitializeReplay(Object3dCommon* common, const ReplayPose& pose) {
+    if (object3dCommon || !common || !common->GetDxCommon()) return false;
+    Model* cached = ModelManager::GetInstance()->FindModel(pose.modelKey);
+    if (!cached || cached->GetMaterialSlots().size() != pose.materials.size()) return false;
+    object3dCommon = common;
+    model = cached;
+    camera = common->GetDefaultCamera();
+    auto buffer = [&](size_t bytes, ID3D12Resource*& alias, void** mapped) {
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        if (!common->GetDxCommon()->TryCreateBufferResource(bytes, resource) ||
+            FAILED(resource->Map(0, nullptr, mapped)) || !*mapped) return false;
+        replayResources_.push_back(resource);
+        alias = resource.Get();
+        return true;
+    };
+    if (!buffer(sizeof(TransformationMatrix), transformationMatrixResource,
+            reinterpret_cast<void**>(&transformationMatrixData)) ||
+        !buffer(sizeof(CameraForGPU), cameraResource, reinterpret_cast<void**>(&cameraData)) ||
+        !buffer(sizeof(ShadowTransformationMatrix), shadowTransformationMatrixResource,
+            reinterpret_cast<void**>(&shadowTransformationMatrixData))) return false;
+    *transformationMatrixData = { MakeIdentity4x4(), MakeIdentity4x4() };
+    *cameraData = {};
+    *shadowTransformationMatrixData = { MakeIdentity4x4() };
+    materialSlots_.resize(pose.materials.size());
+    materialResourcesForDraw_.resize(pose.materials.size());
+    materialTexturesForDraw_.resize(pose.materials.size());
+    for (size_t i = 0; i < materialSlots_.size(); ++i) {
+        auto& slot = materialSlots_[i];
+        if (!buffer(sizeof(Material), slot.resource, reinterpret_cast<void**>(&slot.data))) return false;
+        *slot.data = {};
+        materialResourcesForDraw_[i] = slot.resource;
+    }
+    skeleton_ = CreateSkeleton(model->GetRootNode());
+    if (model->HasSkinning()) {
+        skinCluster_ = std::make_unique<SkinCluster>();
+        if (!skinCluster_->TryInitializeReplay(common->GetDxCommon(), SrvManager::GetInstance(), skeleton_, *model)) return false;
+    }
+    return ApplyReplayPose(pose);
+}
+
+bool Object3d::ComputeReplayBounds(const ReplayPose& pose, ReplayBounds& out) {
+    auto* source = ModelManager::GetInstance()->FindModel(pose.modelKey);
+    if (!source || !ReplayValuesValid(pose)) return false;
+    Skeleton skeleton = CreateSkeleton(source->GetRootNode());
+    if (skeleton.joints.size() != pose.joints.size()) return false;
+    for (size_t i = 0; i < skeleton.joints.size(); ++i) {
+        if (skeleton.joints[i].name != pose.joints[i].name ||
+            skeleton.joints[i].parent.value_or(-1) != pose.joints[i].parent) return false;
+        skeleton.joints[i].transform = pose.joints[i].transform;
+    }
+    if (skeleton.IsValid()) UpdateSkeleton(skeleton);
+    std::vector<SkinCluster::VertexInfluence> influences;
+    std::vector<Matrix4x4> palette;
+    if (source->HasSkinning()) {
+        influences.resize(source->GetVertexCount());
+        SkinCluster::BuildInfluences(skeleton, *source, influences, palette);
+        for (size_t i = 0; i < palette.size(); ++i)
+            palette[i] = Multiply(palette[i], skeleton.joints[i].skeletonSpaceMatrix);
+    }
+    auto transformPoint = [](const Vector4& v, const Matrix4x4& m) {
+        return Vector4{
+            v.x*m.m[0][0]+v.y*m.m[1][0]+v.z*m.m[2][0]+v.w*m.m[3][0],
+            v.x*m.m[0][1]+v.y*m.m[1][1]+v.z*m.m[2][1]+v.w*m.m[3][1],
+            v.x*m.m[0][2]+v.y*m.m[1][2]+v.z*m.m[2][2]+v.w*m.m[3][2], 1.0f };
+    };
+    ReplayBounds result;
+    const auto& vertices = source->GetVertices();
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        Vector4 position = vertices[i].position;
+        if (!influences.empty()) {
+            Vector4 sum{}; float total = 0;
+            for (float weight : influences[i].weights) { if (!std::isfinite(weight)) return false; total += weight; }
+            for (size_t w = 0; total > 0 && w < SkinCluster::kMaxInfluence; ++w) {
+                const float weight = influences[i].weights[w];
+                const auto joint = influences[i].jointIndices[w];
+                if (joint >= palette.size()) return false;
+                const auto v = transformPoint(position, palette[joint]);
+                sum.x += v.x*weight; sum.y += v.y*weight; sum.z += v.z*weight;
+            }
+            if (total > 0) position = {sum.x, sum.y, sum.z, 1};
+        }
+        const auto v = transformPoint(position, pose.renderWorld);
+        if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) return false;
+        if (!result.valid) { result.min = result.max = {v.x,v.y,v.z}; result.valid = true; }
+        else {
+            result.min = {(std::min)(result.min.x,v.x),(std::min)(result.min.y,v.y),(std::min)(result.min.z,v.z)};
+            result.max = {(std::max)(result.max.x,v.x),(std::max)(result.max.y,v.y),(std::max)(result.max.z,v.z)};
+        }
+    }
+    if (!result.valid) return false;
+    out = result;
+    return true;
 }

@@ -1,4 +1,6 @@
 // 役割: SceneDocumentと各Runtime Systemを連携し、更新と描画を実行する。
+#include <new>
+#include <stdexcept>
 #include "RuntimeScene.h"
 
 #include "../../engine/scene/SceneManager.h"
@@ -17,6 +19,8 @@
 #include "../player/Player.h"
 #include <algorithm>
 #include <utility>
+#include <cmath>
+#include <limits>
 
 namespace {
 	bool UiEntityActive(const SceneDocument& document, const SceneEntity* entity) {
@@ -95,6 +99,105 @@ bool RuntimeScene::TryGetRuntimePostProcessSettings(
 	settings = postProcessProfileSystem_.GetEffectiveSettings();
 	generation = postProcessProfileSystem_.GetGeneration();
 	return true;
+}
+
+bool RuntimeScene::TryGetViewEffectClock(SceneViewEffectClock& out) const {
+	const auto* document = GetSceneDocument();
+	if (!document || !deathSystem_.IsDefeated() ||
+		deathDocumentGeneration_ != document->GetContentGeneration() ||
+		(deathWorldInstance_ != 0 && (deathWorldInstance_ != GetSceneInstanceId() ||
+			deathWorldGeneration_ != document->GetContentGeneration()))) return false;
+	out = { document->GetContentGeneration(), deathWorldElapsedSeconds_ };
+	return true;
+}
+
+bool RuntimeScene::TryGetReplayHistoryStatus(uint64_t owner, SceneReplayHistoryStatus& out) const {
+	const auto* document = GetSceneDocument();
+	const auto* entity = document ? document->FindEntity(owner) : nullptr;
+	if (!entity || deathDocumentGeneration_ != document->GetContentGeneration() ||
+		!SceneEntityQuery::FindComponent(*entity, "DeathReplay")) return false;
+	const auto& identity = replayHistory_.Identity();
+	if (identity.owner && (identity.owner != owner || identity.instance != GetSceneInstanceId() ||
+		identity.generation != document->GetContentGeneration())) return false;
+	out = replayHistory_.Status(); out.owner = owner; return true;
+}
+void RuntimeScene::CaptureReplayBeforeDraw(const SceneReplayCaptureRequest& request) {
+	if (replayHistory_.Status().phase != SceneReplayHistoryPhase::Recording &&
+        replayHistory_.Status().phase != SceneReplayHistoryPhase::Sealed) return;
+	const auto* document = GetSceneDocument();
+	const auto& identity = replayHistory_.Identity();
+	if (!document || !sceneManager_ || sceneManager_->GetActiveSceneInstanceId() != GetSceneInstanceId() ||
+		identity.instance != GetSceneInstanceId() || identity.generation != document->GetContentGeneration() ||
+		identity.owner != deathReplayStarted_.owner || identity.deathSerial != deathReplayStarted_.serial) {
+		FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryIdentity"); return;
+	}
+	const auto* context = sceneManager_->GetExecutionContext();
+	if (context && context->IsEditing()) { replayHistory_.Clear(); replayBeginPending_ = replayFinalPending_ = false; return; }
+    // Sealした描画はliveのまま。次frameの最初の影より前に専用資源を準備するだけ。
+    // 3視点の適用はこの採取処理の後、PrepareReplayGameFrameで行う。
+    if (replayHistory_.Status().phase == SceneReplayHistoryPhase::Sealed) {
+        if (replayRender_.IsPrepared()) return;
+        try {
+            const auto environment = environmentSystem_.CaptureReplayEnvironment(*document);
+            if (!replayRender_.Prepare(replayHistory_, Object3dCommon::GetInstance()->GetDxCommon(),
+                SrvManager::GetInstance(), lightingSystem_, environment))
+                FailDeathReplay(deathReplayStarted_, "DeathResponse:RenderPreparation");
+        } catch (const std::bad_alloc&) { FailDeathReplay(deathReplayStarted_, "DeathResponse:RenderPreparation"); }
+          catch (const std::length_error&) { FailDeathReplay(deathReplayStarted_, "DeathResponse:RenderPreparation"); }
+        return;
+    }
+	if (!request.frameSerial || request.frameSerial == replayCapturedDraw_ || replayUpdateSerial_ == replayCapturedUpdate_ ||
+		(!replayBeginPending_ && !replayFinalPending_ && replayRealSeconds_ < replayNextDue_)) return;
+	try {
+		uint64_t estimated = 0;
+		if (!objectSystem_.EstimateReplayFrameBytes(*document, estimated, replayBeginPending_ ? identity.owner : 0)) {
+			FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryPose"); return;
+		}
+		if (!replayHistory_.PrepareCapture(estimated)) {
+			FailDeathReplay(deathReplayStarted_, replayHistory_.Status().diagnostic); return;
+		}
+		// 出現補正とCPU骨格を確定。delta加算やGPU dispatchはしない。
+		objectSystem_.ApplyRenderCamera(camera_);
+		SceneReplayFrame frame;
+		frame.identity = identity; frame.realSeconds = replayRealSeconds_;
+		frame.worldElapsedSeconds = deathWorldElapsedSeconds_;
+		frame.gameViewEffectTime = request.gameViewEffectTime;
+		frame.effectivePostProcess = postProcessProfileSystem_.GetEffectiveSettings();
+		float waterTime = 0;
+		if (environmentSystem_.TryGetWaterTime(*document, waterTime)) frame.waterTime = waterTime;
+		if (!objectSystem_.CaptureReplaySubjects(*document, replayHistory_, frame)) {
+			FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryPose"); return;
+		}
+		if (replayBeginPending_) {
+			const auto* ownerObject = objectSystem_.FindObject(identity.owner);
+			if (!ownerObject || !camera_) { FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryPose"); return; }
+			replayOwnerBasis_ = {ownerObject->GetWorldMatrix(), camera_->GetWorldMatrix(), camera_->GetProjectionMatrix()};
+		}
+		frame.ownerBasis = replayOwnerBasis_;
+		const bool accepted = replayFinalPending_ ? replayHistory_.Seal(std::move(frame)) : replayHistory_.Append(std::move(frame));
+		if (!accepted) { FailDeathReplay(deathReplayStarted_, replayHistory_.Status().diagnostic); return; }
+		replayCapturedDraw_ = request.frameSerial; replayCapturedUpdate_ = replayUpdateSerial_;
+		replayBeginPending_ = replayFinalPending_ = false;
+		replayNextDue_ = replayRealSeconds_ + replayInterval_;
+	} catch (const std::bad_alloc&) {
+		FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryAllocation");
+	} catch (const std::length_error&) {
+		FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryBudget");
+	}
+}
+
+bool RuntimeScene::TryGetDeathReplayStatus(uint64_t owner, SceneDeathReplayStatus& out) const {
+	const auto* document = GetSceneDocument();
+	const auto* entity = document ? document->FindEntity(owner) : nullptr;
+	if (!entity || deathDocumentGeneration_ != document->GetContentGeneration() ||
+		!SceneEntityQuery::FindComponent(*entity, "DeathReplay")) return false;
+	if (deathReplaySystem_.TryGetStatus(owner, out)) {
+        out.gpuBytes=replayRender_.EstimatedGpuBytes(); out.descriptors=replayRender_.EstimatedDescriptors();
+        if (out.phase==SceneDeathReplayPhase::Frozen && replayHistory_.Status().phase==SceneReplayHistoryPhase::Sealed)
+            out.phase=SceneDeathReplayPhase::Preparing;
+        return true;
+    }
+	out = { SceneDeathReplayPhase::Waiting, owner, 0.0f, {} }; return true;
 }
 
 void RuntimeScene::DrawSceneView(Camera* viewCamera, uint64_t skipEntityId) {
@@ -238,9 +341,13 @@ void RuntimeScene::Initialize()
 }
 
 void RuntimeScene::ClearUiRuntime() {
+	gamePauseSystem_.Clear();
+	pendingUiAudioRequests_.clear();
 	menuSystem_.Clear(); eventSystem_.ClearMenuInput(); pendingMenuRequests_.clear(); deferredMenuPulses_.clear();
 	uiTransitionSource_ = {}; uiLoadReservation_ = kInvalidSceneInstanceId; uiControl_ = {};
 	uiTerminalAttempted_ = false;
+    replayCompletion_ = {}; replayMenuSource_ = {}; replayMenuDrawToken_ = {};
+    replayMenuPresented_ = false;
 }
 void RuntimeScene::ReportMenuFailure(const std::string& detail) {
 	const auto* document = GetSceneDocument();
@@ -248,10 +355,52 @@ void RuntimeScene::ReportMenuFailure(const std::string& detail) {
 		menuSystem_.GetFrame().panelId, ++preparationDiagnosticSerial_, detail};
 	Logger::Log("[MenuRuntime] " + detail + "\n");
 }
+void RuntimeScene::SyncGamePause(const SceneDocument& document) {
+	std::string error;
+	const auto invalidRoot = gamePauseSystem_.Sync(document, menuSystem_, sceneManager_ && sceneManager_->CanPauseGame(), error);
+	if (invalidRoot) {
+		menuSystem_.RemoveBranch(document, invalidRoot);
+		gamePauseSystem_.Clear(); eventSystem_.RearmMenuKeys();
+		ReportMenuFailure(error);
+	}
+	uiControl_.gamePaused = gamePauseSystem_.IsPaused();
+	uiControl_.pauseBgm = gamePauseSystem_.PausesBgm();
+}
+void RuntimeScene::ApplyPendingUiAudio() {
+	const auto requests = std::exchange(pendingUiAudioRequests_, {});
+	if (const auto* document = GetSceneDocument()) audioSystem_.ApplyRequests(*document, requests);
+}
 void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests) {
 	for (const auto& request : requests) {
 		if (uiTransitionSource_.requestSerial || uiTerminalAttempted_) break;
 		if (!menuSystem_.IsSourceValid(document, request.source)) continue;
+        if (request.origin == SceneUiActionRequest::Origin::ReplayCompletion) {
+            // 通常Eventの出所検証を緩めず、自然完了一回から来たOpenだけ追加で許可する。
+            SceneDeathReplayStatus status;
+            if (!replayCompletion_.deathSerial || request.replayCompletion != replayCompletion_ ||
+                !deathReplaySystem_.TryGetStatus(replayCompletion_.owner,status) || status.phase!=SceneDeathReplayPhase::FinishedHold ||
+                replayMenuSource_.panelId || request.action.type!="OpenMenu") continue;
+            const auto* target=document.FindEntity(request.action.targetEntityId);
+            const auto* panel=target && UiEntityActive(document,target) ? SceneEntityQuery::FindEnabledComponent(*target,"MenuPanel") : nullptr;
+            std::string issue;
+            const auto* pause=SceneGamePauseSystem::FindSettings(document,request.action.targetEntityId,issue);
+            const auto* canvas=target ? SceneEntityQuery::FindEnabledComponent(*target,"UICanvas") : nullptr;
+            bool selectable=false;
+            if (panel) for (uint64_t id : panel->menuItemEntityIds) {
+                const auto* itemOwner=document.FindEntity(id);
+                const auto* item=itemOwner && UiEntityActive(document,itemOwner) ? SceneEntityQuery::FindEnabledComponent(*itemOwner,"MenuItem") : nullptr;
+                selectable |= item && item->menuInteractable;
+            }
+            if (!panel || panel->menuInitiallyOpen || pause || !issue.empty() || !canvas || canvas->uiRenderSpace!="ScreenOverlay" || !selectable) {
+                ReportMenuFailure("MenuRuntime:ReplayPanel"); continue;
+            }
+        } else if (deathReplayStarted_.serial && replayHistory_.Status().phase!=SceneReplayHistoryPhase::Idle) {
+            SceneDeathReplayStatus status;
+            if (deathReplaySystem_.TryGetStatus(deathReplayStarted_.owner,status) &&
+                status.phase!=SceneDeathReplayPhase::Waiting && status.phase!=SceneDeathReplayPhase::Failed &&
+                (!replayMenuPresented_ || request.source.panelId!=replayMenuSource_.panelId ||
+                 request.source.openSerial!=replayMenuSource_.openSerial)) continue;
+        }
 		const auto* owner = document.FindEntity(request.ownerEntityId);
 		if (!owner) continue;
 		if (request.origin == SceneUiActionRequest::Origin::PanelStandard) {
@@ -266,6 +415,19 @@ void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vec
 		uiControl_.blockGameplayInput = true;
 		const auto& action = request.action;
 		const auto before = menuSystem_.GetSource();
+		uint64_t targetPanelId = action.targetEntityId;
+		if (action.type == "PauseGame" || action.type == "ResumeGame") {
+			const auto* target = document.FindEntity(action.targetEntityId);
+			const auto* pause = target && UiEntityActive(document, target) ? SceneEntityQuery::FindEnabledComponent(*target, "GamePause") : nullptr;
+			if (!pause) { ReportMenuFailure("MenuRuntime:PauseInvalidPanel"); continue; }
+			targetPanelId = pause->gamePausePanelEntityId;
+		}
+		if (deathSystem_.IsDefeated() && (action.type == "PauseGame" || action.type == "OpenMenu")) {
+			const auto* panel = document.FindEntity(targetPanelId);
+			if (action.type == "PauseGame" || (panel && SceneEntityQuery::FindEnabledComponent(*panel, "GamePause"))) {
+				ReportMenuFailure("DeathResponse:PauseBlocked"); continue;
+			}
+		}
 		SceneMenuCommandType type{};
 		bool menuCommand = true;
 		if (action.type == "OpenMenu") type = SceneMenuCommandType::Open;
@@ -275,11 +437,37 @@ void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vec
 		else if (action.type == "ConfirmMenuItem") type = SceneMenuCommandType::Confirm;
 		else if (action.type == "CancelMenu") type = SceneMenuCommandType::Cancel;
 		else menuCommand = false;
+		if (action.type == "PauseGame") { type = SceneMenuCommandType::Open; menuCommand = true; }
+		if (action.type == "ResumeGame") {
+			// 互換のResumeはその理由を所有するrootだけを対象にし、上の確認も閉じる。
+			if (menuSystem_.GetOpenSource(targetPanelId).panelId) menuSystem_.RemoveBranch(document, targetPanelId);
+			SyncGamePause(document); eventSystem_.RearmMenuKeys(); continue;
+		}
 		if (menuCommand) {
-			if (!menuSystem_.Apply(document, SceneMenuCommand{request.source, type, action.targetEntityId})) {
+			if (type == SceneMenuCommandType::Open) {
+				std::string error;
+				const auto* setting = SceneGamePauseSystem::FindSettings(document, targetPanelId, error);
+				if (setting && !sceneManager_->CanPauseGame()) error = "MenuRuntime:PauseUnsupportedScene";
+				if (!error.empty()) { ReportMenuFailure(error); continue; }
+			}
+			if (!menuSystem_.Apply(document, SceneMenuCommand{request.source, type, targetPanelId})) {
 				const auto issue = menuSystem_.ConsumeDiagnostic();
 				ReportMenuFailure(issue.empty() ? "MenuRuntime:InvalidPanel" : issue);
 			}
+            if (request.origin==SceneUiActionRequest::Origin::ReplayCompletion) {
+                const auto opened=menuSystem_.GetSource();
+                if (opened.panelId==targetPanelId) {
+                    replayMenuSource_=opened; replayMenuPresented_=false;
+                    eventSystem_.RearmMenuKeys();
+                }
+            }
+			SyncGamePause(document);
+		} else if (action.type == "ExitGame") {
+			uiTerminalAttempted_ = true;
+			eventSystem_.RearmMenuKeys();
+			if (!sceneManager_->RequestGameExit(GetSceneInstanceId(), document.GetContentGeneration()))
+				ReportMenuFailure("MenuRuntime:ExitRejected");
+			break;
 		} else if (action.type == "SceneTransition") {
 			uiTerminalAttempted_ = true;
 			auto source = request.source; source.requestSerial = nextUiTransitionSerial_++;
@@ -298,7 +486,7 @@ void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vec
 				if (!UiEntityActive(document, target) || !SceneEntityQuery::FindEnabledComponent(*target, "AudioSource")) { ReportMenuFailure("MenuRuntime:InvalidTarget"); continue; }
 				const auto kind = action.type == "PlayAudio" ? SceneAudioRequestType::Play : action.type == "StopAudio" ? SceneAudioRequestType::Stop :
 					action.type == "PauseAudio" ? SceneAudioRequestType::Pause : SceneAudioRequestType::Resume;
-				audioSystem_.ApplyRequests(document, {{kind, target->id}});
+				pendingUiAudioRequests_.push_back({kind, target->id});
 			} else if (action.type == "PlayTextMotion" || action.type == "StopTextMotion" || action.type == "ResetTextMotion") {
 				if (!UiEntityActive(document, target) || !SceneEntityQuery::FindEnabledComponent(*target, "TextMotion")) { ReportMenuFailure("MenuRuntime:InvalidTarget"); continue; }
 				if (action.type == "PlayTextMotion") {
@@ -318,6 +506,7 @@ void RuntimeScene::ProcessMenuPulses(const SceneDocument& document, const std::v
 		ApplyUiRequests(document, eventSystem_.EvaluateUiNotifications(document, {pulse}, 0.0f));
 		const auto before = menuSystem_.GetSource();
 		if (!uiTransitionSource_.requestSerial && !uiTerminalAttempted_) menuSystem_.CompleteCancel(document, pulse);
+		SyncGamePause(document);
 		const auto after = menuSystem_.GetSource();
 		if (before.panelId != after.panelId || before.openSerial != after.openSerial) eventSystem_.RearmMenuKeys();
 	}
@@ -342,6 +531,7 @@ void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
 	const auto oldTop = menuSystem_.GetSource();
 	menuSystem_.Sync(*document, GetSceneInstanceId());
 	uiControl_ = {GetSceneInstanceId(), document->GetContentGeneration(), oldTop.panelId != 0 || menuSystem_.GetFrame().panelId != 0 || uiTransitionSource_.requestSerial != 0};
+	SyncGamePause(*document);
 	const auto top = menuSystem_.GetSource();
 	if (oldTop.panelId != top.panelId || oldTop.openSerial != top.openSerial) eventSystem_.RearmMenuKeys();
 	if ((context && context->IsPaused()) || sceneManager_->IsTransitionHeld()) { eventSystem_.RearmMenuKeys(); return; }
@@ -360,6 +550,27 @@ void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
 			ReportMenuFailure("MenuRuntime:TransitionFailed " + diagnostic);
 		}
 	}
+    // 完了は世界停止中もUI側で消費する。非表示/Pause中はSequenceに保留したままにする。
+    if (allowed && replayPresentationAllowed_ && !uiTransitionSource_.requestSerial && deathReplaySystem_.ConsumeReplayCompleted()) {
+        replayCompletion_={deathReplayStarted_.instance,deathReplayStarted_.generation,deathReplayStarted_.owner,deathReplayStarted_.serial};
+        const auto* replayOwner=document->FindEntity(replayCompletion_.owner);
+        if (replayCompletion_.instance==GetSceneInstanceId() && replayCompletion_.generation==document->GetContentGeneration() &&
+            replayOwner && UiEntityActive(*document,replayOwner) && SceneEntityQuery::FindEnabledComponent(*replayOwner,"DeathReplay")) {
+            std::string diagnostic;
+            const auto requests=eventSystem_.EvaluateReplayCompletion(*document,menuSystem_.GetSource(),replayCompletion_,diagnostic);
+            if (!diagnostic.empty()) ReportMenuFailure(diagnostic);
+            else ApplyUiRequests(*document,requests);
+        }
+    }
+    if (deathReplayStarted_.serial && replayHistory_.Status().phase!=SceneReplayHistoryPhase::Idle) {
+        SceneDeathReplayStatus replayStatus;
+        if (deathReplaySystem_.TryGetStatus(deathReplayStarted_.owner,replayStatus) &&
+            replayStatus.phase!=SceneDeathReplayPhase::Waiting && replayStatus.phase!=SceneDeathReplayPhase::Failed) {
+            const auto current=menuSystem_.GetSource();
+            allowed = allowed && replayPresentationAllowed_ && replayMenuPresented_ && current.panelId==replayMenuSource_.panelId &&
+                current.openSerial==replayMenuSource_.openSerial && current.generation==replayMenuSource_.generation;
+        }
+    }
 	// 通知clockは一Frame一回。入力非許可中はUIのonce/cooldownを進めない。
 	eventSystem_.EvaluateUiNotifications(*document, {}, allowed ? deltaTime : 0.0f);
 	auto pending = std::exchange(pendingMenuRequests_, {});
@@ -373,6 +584,7 @@ void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
 	ApplyUiRequests(*document, input);
 	ProcessMenuPulses(*document, menuSystem_.ConsumePulses());
 	uiControl_.blockGameplayInput |= menuSystem_.GetFrame().panelId != 0 || uiTransitionSource_.requestSerial != 0;
+	SyncGamePause(*document);
 	if (const auto issue = menuSystem_.ConsumeDiagnostic(); !issue.empty()) ReportMenuFailure(issue);
 }
 void RuntimeScene::SyncMenuPresentation() {
@@ -429,6 +641,9 @@ void RuntimeScene::ReportSceneRestartFailure(const std::string& detail) {
 
 void RuntimeScene::Update(float deltaTime)
 {
+	if (sceneManager_ && sceneManager_->IsGameExitPending()) return;
+	++replayUpdateSerial_;
+	ApplyPendingUiAudio();
 	// 成功時はこのRuntime自体が置換される。失敗時だけ生存側が結果を一回消費する。
 	if (sceneManager_ && pendingRestartSceneInstanceId_ != kInvalidSceneInstanceId) {
 		SceneLoadOutcome outcome;
@@ -444,6 +659,13 @@ void RuntimeScene::Update(float deltaTime)
 	const bool editing = executionContext && executionContext->IsEditing();
 	const bool playing = !executionContext || executionContext->IsPlaying();
 	SceneDocument* activeDocument = GetSceneDocument();
+	if (activeDocument && deathDocumentGeneration_ != activeDocument->GetContentGeneration()) {
+		// 内容差替え後の同じIDへ旧死亡flag/要求を持ち越さない。
+		statSystem_.Clear(); healthSystem_.Clear(); deathSystem_.Clear(); ClearDeathWorldContinuation();
+		pendingDeathActions_.clear(); pendingDeathGeneration_ = 0;
+		deathTextEntities_.clear(); deathTransformEntities_.clear(); heldDeathFlow_ = {};
+		deathDocumentGeneration_ = activeDocument->GetContentGeneration();
+	}
 	if (!activeDocument || (spawnFrame_.documentGeneration != 0 &&
 		spawnFrame_.documentGeneration != activeDocument->GetContentGeneration())) {
 		enemySpawnerSystem_.Clear();
@@ -464,8 +686,43 @@ void RuntimeScene::Update(float deltaTime)
 	} else {
 		postProcessProfileSystem_.Reset();
 	}
+	if (activeDocument && playing) deathSystem_.Observe(*activeDocument, statSystem_);
+	const bool defeatedAtFrameStart = deathSystem_.IsDefeated();
+	if (deathWorldInstance_ != 0 && (!activeDocument || deathWorldInstance_ != GetSceneInstanceId() ||
+		deathWorldGeneration_ != activeDocument->GetContentGeneration())) ClearDeathWorldContinuation();
+	if (deathReplayStarted_.serial) {
+		const auto* owner = activeDocument ? activeDocument->FindEntity(deathReplayStarted_.owner) : nullptr;
+		const auto* response = owner ? SceneEntityQuery::FindEnabledComponent(*owner, "DeathResponse") : nullptr;
+		SceneDeathReplayStatus status;
+		if (deathReplaySystem_.TryGetStatus(deathReplayStarted_.owner, status) && status.phase != SceneDeathReplayPhase::Failed &&
+			(!owner || !SceneEntityQuery::IsEntityActiveInHierarchy(*activeDocument, *owner) ||
+			!SceneEntityQuery::FindEnabledComponent(*owner, "DeathReplay") || !response || response->deathResponseScope != "Scene" ||
+			!SceneEntityQuery::FindEnabledComponent(*owner, "Health")))
+			FailDeathReplay(deathReplayStarted_, "DeathResponse:ReplayOwnerLost");
+	}
+	// t=0未採取のままWorldを進めると開始姿勢を復元できないため、その前に停止する。
+	if (replayBeginPending_ && playing && std::isfinite(deltaTime) && deltaTime > 0)
+		FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryMissingStart");
+	if (replayHistory_.Status().phase == SceneReplayHistoryPhase::Recording &&
+		(!sceneManager_ || sceneManager_->GetActiveSceneInstanceId() != GetSceneInstanceId()))
+		FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryIdentity");
+	// Phaseは最終stepを返す時点でFrozenになる。正のstepを先に全consumerへ渡す。
+	const SceneDeathWorldStep deathWorldStep = playing && deathWorldInstance_ != 0
+		? deathWorldClock_.Advance(deltaTime) : SceneDeathWorldStep{};
+	deathReplaySystem_.AdvancePresentation(deathWorldStep);
+	if (replayHistory_.Status().phase == SceneReplayHistoryPhase::Recording) {
+		replayRealSeconds_ += deathWorldStep.elapsedRealDelta;
+		replayFinalPending_ = replayFinalPending_ || deathWorldStep.freezeAfterStep;
+	}
+	const bool deathWorldMoving = deathWorldStep.worldDelta > 0.0f;
+	// 最終stepは既にFrozenでも正の秒を持つ。query/Drawでは加算しない。
+	if (deathWorldMoving) deathWorldElapsedSeconds_ += static_cast<double>(deathWorldStep.worldDelta);
+	std::vector<SceneRuntimeObjectBinding> deathWorldBindings;
+	std::vector<uint64_t> deathAttackEnded, deathReactionEnded;
+	std::unordered_set<uint64_t> deathReactionOwned;
+
 	std::vector<uint64_t> spawnerResetEntityIds;
-	const float gameplayDeltaTime = playing
+	const float gameplayDeltaTime = playing && deathSystem_.IsDefeated() ? 0.0f : playing
 		? hitStopSystem_.Advance(deltaTime)
 		: deltaTime;
 
@@ -479,13 +736,13 @@ void RuntimeScene::Update(float deltaTime)
 			SyncMenuPresentation();
 			objectSystem_.SyncSprites(activeDocument);
 			PrepareGameFlowTextOverrides(false);
-			textRenderSystem_.Sync(activeDocument);
+			textRenderSystem_.Sync(activeDocument, editing ? nullptr : &statSystem_);
 			sceneManager_->ChangeScene(targetSceneId);
 			return;
 		}
 	}
 	SceneGameFlowResult gameFlowResult{};
-	if (activeDocument && playing) {
+	if (activeDocument && playing && !deathSystem_.IsDefeated()) {
 		gameFlowResult = gameFlowSystem_.Update(
 			*activeDocument,
 			enemySpawnerSystem_,
@@ -509,9 +766,12 @@ void RuntimeScene::Update(float deltaTime)
 			if (request.type == SceneGameFlowMotionRequestType::Reset) textMotionSystem_.Reset(request.entityId);
 			else textMotionSystem_.Play(*activeDocument, request.entityId, request.clipId);
 		}
-	} else {
+	} else if (!playing) {
 		gameFlowSystem_.Clear();
-	}
+	} else { gameFlowResult = heldDeathFlow_; gameFlowResult.gameplayAllowed = false; }
+	// pulseをheldDeathFlow/finalizeへ持ち越さない。Scene交換時もローカル値と共に破棄する。
+	const uint64_t startedDirectorId = std::exchange(gameFlowResult.startedDirectorEntityId, uint64_t{0});
+	const uint64_t startedGeneration = std::exchange(gameFlowResult.startedDocumentGeneration, uint64_t{0});
 	const std::string runtimeSceneId = GetSceneAssetId().empty()
 		? "runtime"
 		: GetSceneAssetId();
@@ -524,12 +784,13 @@ void RuntimeScene::Update(float deltaTime)
 		}
 	}
 
-	particleSystem_.Update(
+	if (!playing || !deathSystem_.IsDefeated()) particleSystem_.Update(
 		runtimeSceneId,
 		editing
 	);
-	effectRenderSystem_.Update(deltaTime);
-	environmentSystem_.Update(deltaTime);
+	effectRenderSystem_.Update(deathSystem_.IsDefeated() ? 0.0f : deltaTime);
+	// 最後の正stepも水面へ渡す。Frozenの描画同期は後段のSyncで継続する。
+	environmentSystem_.Update(playing && deathSystem_.IsDefeated() ? deathWorldStep.worldDelta : deltaTime);
 
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (editing) {
@@ -560,8 +821,8 @@ void RuntimeScene::Update(float deltaTime)
 		// 保存値を実行時状態へ展開し、Transform AnimationをObject同期前に反映する。
 		statSystem_.Update(*activeDocument);
 		// Statのinactive除去後にPoolを復元し、同じFrameの全consumerへ参加制限を渡す。
-		enemySpawnerSystem_.Update(*activeDocument, SceneSpawnUpdateContext{
-			gameplayDeltaTime, deltaTime, gameFlowResult.gameplayAllowed, gameFlowResult.preparationSpawnerIds
+		if (!deathSystem_.IsDefeated()) enemySpawnerSystem_.Update(*activeDocument, SceneSpawnUpdateContext{
+			gameplayDeltaTime, deltaTime, gameFlowResult.gameplayAllowed, gameFlowResult.preparationSpawnerIds, deathSystem_.Blocked()
 		});
 		spawnerResetEntityIds = enemySpawnerSystem_.ConsumeResetEntityIds();
 		const std::unordered_set<uint64_t> resetIds(spawnerResetEntityIds.begin(), spawnerResetEntityIds.end());
@@ -571,15 +832,43 @@ void RuntimeScene::Update(float deltaTime)
 			stateMachineSystem_.ResetEntity(entityId);
 			prefabAnimationSystem_.ResetEntity(entityId);
 			enemySystem_.ResetEntity(entityId);
+			combatSystem_.ResetEntity(entityId);
 			hitReactionSystem_.ResetEntity(entityId);
 			eventSystem_.ResetEntity(entityId);
+			healthSystem_.ResetEntity(entityId);
+			statSystem_.ResetEntity(entityId); deathSystem_.ResetEntity(entityId);
+			deathWorldParticipants_.erase(entityId); deathWorldBaseVelocities_.erase(entityId);
+			objectSystem_.ResetDeathContinuationEntity(entityId);
+			objectSystem_.ResetReplayEntity(entityId);
+			deathTextEntities_.erase(entityId); deathTransformEntities_.erase(entityId);
+			// Poolの新しい実体へ旧要求を持ち越さない。発生元が残る場合は失敗を保持する。
+			std::erase_if(pendingDeathActions_, [&](const auto& a) {
+				if (a.owner == entityId) return true;
+				if (a.action.targetEntityId != entityId) return false;
+				if (!resetIds.contains(a.owner)) {
+					deathSystem_.SetStatus(a.owner, 4);
+					preparationDiagnostic_ = {ScenePreparationDiagnosticCode::InvalidReference,
+						activeDocument->GetContentGeneration(), a.owner, ++preparationDiagnosticSerial_,
+						"DeathResponse:StartFailed " + a.action.type + " " + std::to_string(entityId)};
+				}
+				return true;
+			});
 		}
+		if (!spawnerResetEntityIds.empty()) statSystem_.Update(*activeDocument);
+		deathSystem_.Sync(*activeDocument, statSystem_, GetSceneInstanceId());
+		// Event等で確定した死亡も、演出が姿勢を取得する前に攻撃所有分を返却する。
+		objectSystem_.RefreshTransforms(*activeDocument,enemySystem_.FinishChargeCombat(*activeDocument,statSystem_,{}));
+		ApplyDeathActions(*activeDocument, true);
 		spawnFrame_ = enemySpawnerSystem_.BuildPresentationFrame(*activeDocument, gameFlowResult.gameplayAllowed);
+		spawnFrame_.blockedEntityIds.insert(deathSystem_.Blocked().begin(), deathSystem_.Blocked().end());
+		hitReactionSystem_.DiscardBlocked(deathSystem_.IsDefeated()
+			? deathSystem_.TargetBlocked() : deathSystem_.Blocked());
+		healthSystem_.Advance(*activeDocument, gameFlowResult.gameplayAllowed ? gameplayDeltaTime : 0.0f, spawnFrame_.blockedEntityIds);
 		ReportPreparationDiagnostic(enemySpawnerSystem_.GetPreparationDiagnostic(), spawnerDiagnosticSerial_);
 		// 前Frame Eventの順を保ち、active化と時刻0 PoseをObject同期より前にまとめる。
 		// 内容差替え後の同IDへ古い要求を適用しない。Persistent detachは同世代を維持する。
 		if (pendingPresentationDocumentGeneration_ != 0 &&
-			pendingPresentationDocumentGeneration_ == activeDocument->GetContentGeneration()) {
+			pendingPresentationDocumentGeneration_ == activeDocument->GetContentGeneration() && !deathSystem_.IsDefeated()) {
 			for (const ScenePresentationRequest& request : pendingPresentationRequests_) {
 				if (request.type == ScenePresentationRequestType::Play) {
 					prefabAnimationSystem_.PlayPresentation(*activeDocument, request.entityId, request.clipName, spawnFrame_.blockedEntityIds);
@@ -593,7 +882,9 @@ void RuntimeScene::Update(float deltaTime)
 		pendingPresentationRequests_.clear();
 		pendingPresentationDocumentGeneration_ = 0;
 		// 演出だけ通常deltaTimeで更新し、GameFlow permission/HitStopから独立させる。
-		prefabAnimationSystem_.UpdatePresentations(*activeDocument, deltaTime, spawnFrame_.blockedEntityIds);
+		prefabAnimationSystem_.UpdatePresentations(*activeDocument, deltaTime,
+			enemySpawnerSystem_.BuildPresentationFrame(*activeDocument, gameFlowResult.gameplayAllowed).blockedEntityIds,
+			deathSystem_.Blocked(), deathTransformEntities_);
 		if (gameFlowResult.gameplayAllowed) {
 			hitReactionSystem_.AdvanceRecoveries(statSystem_, gameplayDeltaTime);
 			attackRunnerSystem_.Advance(
@@ -616,6 +907,8 @@ void RuntimeScene::Update(float deltaTime)
 	} else {
 		audioSystem_.Clear();
 		statSystem_.Clear();
+		deathSystem_.Clear(); ClearDeathWorldContinuation(); pendingDeathActions_.clear(); pendingDeathGeneration_ = 0; deathTextEntities_.clear(); deathTransformEntities_.clear(); heldDeathFlow_ = {};
+		healthSystem_.Clear();
 		attackRunnerSystem_.Clear(activeDocument);
 		runtimeEffectSystem_.Clear(activeDocument);
 		prefabAnimationSystem_.Clear(activeDocument);
@@ -638,15 +931,46 @@ void RuntimeScene::Update(float deltaTime)
 		attachmentSystem_.Clear(&objectSystem_);
 	}
 
+	SceneSpawnFrame worldFrame;
+	if (activeDocument && deathWorldMoving) {
+		worldFrame = spawnFrame_;
+		worldFrame.blockedEntityIds.clear();
+		for (const auto& entity : activeDocument->GetEntities()) {
+			if (!deathWorldParticipants_.contains(entity.id) || deathSystem_.TargetBlocked().contains(entity.id) ||
+				!SceneEntityQuery::IsEntityActiveInHierarchy(*activeDocument, entity)) worldFrame.blockedEntityIds.insert(entity.id);
+		}
+		attackRunnerSystem_.AdvanceDeathContinuation(*activeDocument, deathWorldStep.worldDelta);
+		// Particle時計の接続前は表示要求を発生させず、このFrameで破棄する。
+		attackRunnerSystem_.ConsumeDeathEffectRequests();
+		prefabAnimationSystem_.UpdateDeathContinuation(*activeDocument, deathWorldStep.worldDelta, worldFrame.blockedEntityIds);
+	}
 	// Objectが実体を所有し、以降のSystemは再構築したbindingsだけを借用する。
-	objectSystem_.SetSpawnPresentationFrame(spawnFrame_);
+	objectSystem_.SetSpawnPresentationFrame(deathWorldMoving ? worldFrame : spawnFrame_);
 	objectSystem_.SyncModels(
 		activeDocument,
 		physicsSystem_,
-		gameplayDeltaTime,
+		deathWorldMoving ? deathWorldStep.worldDelta : gameplayDeltaTime,
 		playing,
 		editing
 	);
+	// 値形状の寿命は呼出元の同期点まで。Agent用と攻撃直前用を別採取し、古い通路を許可に使わない。
+	auto captureAttackProbe = [&]() {
+		if (!activeDocument) return SceneMovementProbeSnapshot{};
+		std::vector<uint64_t> roots;
+		for (const auto& request : enemySystem_.PositioningRequests()) if (request.canMove && request.targetId) {
+			roots.push_back(request.entityId); roots.push_back(request.targetId);
+		}
+		if (roots.empty()) return SceneMovementProbeSnapshot{};
+		std::sort(roots.begin(), roots.end()); roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
+		// Playerは入力更新で実Objectの姿勢を先に変える。採取用の再反映で古いEntity姿勢へ戻さない。
+		SceneEntity* playerEntity = player_ ? activeDocument->FindEntityByName("Player") : nullptr;
+		Object3d* playerObject = player_ ? player_->GetObject() : nullptr;
+		if (playerEntity && playerObject && objectSystem_.FindObject(playerEntity->id) == playerObject) {
+			SynchronizeSceneTransform(playerEntity->transform, playerObject->GetTransform());
+		}
+		objectSystem_.RefreshTransforms(*activeDocument, roots);
+		return physicsSystem_.CaptureMovementProbeSnapshot(*activeDocument, gameplayObjectBindings_, player_, enemySystem_.PositioningFrameToken());
+	};
 	if (activeDocument) {
 		objectSystem_.BuildBindings(
 			*activeDocument,
@@ -656,10 +980,18 @@ void RuntimeScene::Update(float deltaTime)
 		for (const auto& binding : runtimeObjectBindings_) {
 			if (!spawnFrame_.blockedEntityIds.contains(binding.entityId)) gameplayObjectBindings_.push_back(binding);
 		}
+		if (deathWorldMoving) {
+			for (auto binding : runtimeObjectBindings_) {
+				if (worldFrame.blockedEntityIds.contains(binding.entityId)) continue;
+				if (binding.entity && SceneEntityQuery::HasComponent(*binding.entity, "PlayerBehavior") && player_ && binding.entity == activeDocument->FindEntityByName("Player"))
+					binding.body = &player_->GetPhysicsBody();
+				deathWorldBindings.push_back(binding);
+			}
+		}
 		physicsSystem_.SyncSceneSettings(
 			*activeDocument,
 			player_,
-			gameplayObjectBindings_,
+			deathWorldMoving ? deathWorldBindings : gameplayObjectBindings_,
 			editing
 		);
 		physicsSystem_.ResetBodies(
@@ -667,6 +999,9 @@ void RuntimeScene::Update(float deltaTime)
 			spawnerResetEntityIds
 		);
 		if (playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
+			// Physicsが使用する実Playerと同じScene対応を渡す。別のPlayerBehaviorを敵だけで選ばない。
+			const auto* enemyPlayer = player_ ? activeDocument->FindEntityByName("Player") : nullptr;
+			const uint64_t enemyPlayerId = enemyPlayer && SceneEntityQuery::FindEnabledComponent(*enemyPlayer, "PlayerBehavior") ? enemyPlayer->id : 0;
 			enemySystem_.Update(
 				*activeDocument,
 				gameplayObjectBindings_,
@@ -674,14 +1009,19 @@ void RuntimeScene::Update(float deltaTime)
 				prefabAnimationSystem_,
 				hitReactionSystem_,
 				stateMachineSystem_,
-				gameplayDeltaTime
+				gameplayDeltaTime,
+				enemyPlayerId
 			);
-			// GroundXZ Agentは敵AIが決めた速度へ離隔補正だけを加える。
+			const auto attackProbe = captureAttackProbe();
+			enemySystem_.PrepareAttackApproaches(*activeDocument, attackProbe, gameplayDeltaTime);
+			// 新方式は値要求から位置取り速度を決める。従来GroundXZは既存の離隔加算を維持する。
 			agentSystem_.Update(
 				*activeDocument,
 				gameplayObjectBindings_,
-				gameplayDeltaTime
+				gameplayDeltaTime,
+				enemySystem_.PositioningRequests(), &attackProbe
 			);
+			enemySystem_.AcceptPositioningResults(agentSystem_.PositioningResults());
 			enemySystem_.ApplyMovementStops(gameplayObjectBindings_);
 			projectileSystem_.Update(
 				*activeDocument,
@@ -709,13 +1049,19 @@ void RuntimeScene::Update(float deltaTime)
 		pendingPresentationDocumentGeneration_ = 0;
 		projectileSystem_.Clear();
 		statSystem_.Clear();
+		deathSystem_.Clear(); ClearDeathWorldContinuation(); pendingDeathActions_.clear(); pendingDeathGeneration_ = 0; deathTextEntities_.clear(); deathTransformEntities_.clear(); heldDeathFlow_ = {};
+		healthSystem_.Clear();
 		physicsSystem_.Clear();
 		cameraSystem_.Reset();
 	}
 
+	const auto* playerEntityForDeath = activeDocument ? activeDocument->FindEntityByName("Player") : nullptr;
+	const bool playerDead = deathSystem_.IsDefeated() || (playerEntityForDeath && deathSystem_.IsBlocked(playerEntityForDeath->id));
 	// Camera入力、Player移動、Physics、追従Cameraの順序は相互依存を持つ。
 	if (activeDocument) {
-		cameraSystem_.UpdateBeforeSimulation(
+		if (deathWorldMoving) cameraSystem_.UpdateDeathBeforeSimulation(
+			*activeDocument, camera_, player_, runtimeObjectBindings_, deathWorldStep.worldDelta);
+		else if (!deathSystem_.IsDefeated()) cameraSystem_.UpdateBeforeSimulation(
 			*activeDocument,
 			camera_,
 			player_,
@@ -726,8 +1072,15 @@ void RuntimeScene::Update(float deltaTime)
 			!uiGameplayInputBlocked_
 		);
 	}
+    // 見た目ObjectのBodyではなく、Physicsが進める実Player BodyをReactionだけへ渡す。
+	std::vector<SceneRuntimeObjectBinding> reactionBindings = gameplayObjectBindings_;
+	for (auto& binding : reactionBindings) if (player_ && playerEntityForDeath && binding.entityId == playerEntityForDeath->id &&
+		SceneEntityQuery::FindEnabledComponent(*playerEntityForDeath, "PlayerBehavior")) binding.body = &player_->GetPhysicsBody();
+	std::vector<SceneControlledMotionResult> chargeResults;
+	std::vector<SceneEnemyContactRequest> chargeContacts;
+	std::vector<SceneHitReactionDecision> reactionDecisions;
 	Vector3 playerAttackInputDirection{};
-	if (player_ && playing) {
+	if (player_ && playing && !playerDead) {
 		player_->Update(camera_, gameFlowResult.gameplayAllowed && !uiGameplayInputBlocked_);
 		const Vector3& playerVelocity = player_->GetPhysicsBody().velocity;
 		playerAttackInputDirection = { playerVelocity.x, 0.0f, playerVelocity.z };
@@ -757,19 +1110,64 @@ void RuntimeScene::Update(float deltaTime)
 		// Combat後に予約した被弾速度を、AI/Agent/Stateの書込み後に上書きする。
 		hitReactionSystem_.ApplyMotionOverrides(
 			*activeDocument,
-			gameplayObjectBindings_,
+			reactionBindings,
 			gameplayDeltaTime
 		);
 	}
+	if (activeDocument && playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
+		const auto attackProbe = captureAttackProbe();
+		enemySystem_.PrepareChargeFrame(*activeDocument, gameplayObjectBindings_, statSystem_, prefabAnimationSystem_,
+			hitReactionSystem_, stateMachineSystem_, gameplayDeltaTime, false, &attackProbe);
+	}
+	if (activeDocument && deathWorldMoving) {
+		for (const auto& binding : deathWorldBindings) {
+			const auto base = deathWorldBaseVelocities_.find(binding.entityId);
+			if (binding.body && base != deathWorldBaseVelocities_.end()) {
+				binding.body->velocity.x = base->second.x; binding.body->velocity.z = base->second.z;
+			}
+			if (hitReactionSystem_.IsKnockbackActive(binding.entityId)) deathReactionOwned.insert(binding.entityId);
+		}
+		deathAttackEnded = attackRunnerSystem_.ApplyDeathContinuationMotion(*activeDocument, deathWorldBindings, deathWorldStep.worldDelta);
+		deathReactionEnded = hitReactionSystem_.ApplyDeathContinuationMotion(*activeDocument, deathWorldBindings, deathWorldStep.worldDelta);
+		projectileSystem_.UpdateDeathContinuation(*activeDocument, deathWorldBindings, deathWorldStep.worldDelta);
+		// 全Projectileを除外し、未初期化弾もPhysics経由で飛び始めさせない。
+		std::vector<SceneRuntimeObjectBinding> physical;
+		for (const auto& binding : deathWorldBindings) {
+			if (binding.entity && SceneEntityQuery::IsEntityActiveInHierarchy(*activeDocument, *binding.entity) &&
+				!SceneEntityQuery::FindEnabledComponent(*binding.entity, "Projectile")) physical.push_back(binding);
+		}
+		const bool movePlayer = player_ && std::any_of(physical.begin(), physical.end(), [&](const auto& b) { return b.entity == playerEntityForDeath; });
+		enemySystem_.PrepareChargeFrame(*activeDocument, physical, statSystem_, prefabAnimationSystem_,
+			hitReactionSystem_, stateMachineSystem_, deathWorldStep.worldDelta, true);
+		std::vector<uint64_t> chargeRoots;
+		for(const auto& motion:enemySystem_.ChargeMotions())chargeRoots.push_back(motion.ownerId);
+		objectSystem_.RefreshTransforms(*activeDocument,chargeRoots);
+		physicsSystem_.Step(movePlayer ? player_ : nullptr, physical, deathWorldStep.worldDelta, true,
+			activeDocument, enemySystem_.ChargeMotions(), &chargeResults);
+		enemySystem_.AcceptChargePhysics(*activeDocument, chargeResults);
+	}
 	if (activeDocument && (!playing || gameplayDeltaTime > 0.0f)) {
+		if(activeDocument && gameFlowResult.gameplayAllowed) {
+			std::vector<uint64_t> chargeRoots;
+			for(const auto& motion:enemySystem_.ChargeMotions())chargeRoots.push_back(motion.ownerId);
+			objectSystem_.RefreshTransforms(*activeDocument,chargeRoots);
+		}
 		physicsSystem_.Step(
-			player_,
+			playerDead ? nullptr : player_,
 			gameplayObjectBindings_,
 			gameplayDeltaTime,
-			playing
+			playing, activeDocument,
+			gameFlowResult.gameplayAllowed ? enemySystem_.ChargeMotions() : std::vector<SceneControlledMotion>{}, &chargeResults
 		);
+		if (playing && gameFlowResult.gameplayAllowed) {
+			enemySystem_.AcceptChargePhysics(*activeDocument, chargeResults);
+			for (const auto& result : chargeResults) for (const auto& contact : result.contacts)
+				chargeContacts.push_back({activeDocument->GetContentGeneration(), contact.ownerId, contact.serial,
+					contact.hitBoxId, contact.hurtBoxId, contact.fraction, contact.position, contact.normal});
+		}
 	}
-	if (player_ && playing && gameplayDeltaTime > 0.0f) {
+	if (player_ && playing && ((!playerDead && gameplayDeltaTime > 0.0f) ||
+		(deathWorldMoving && std::any_of(deathWorldBindings.begin(), deathWorldBindings.end(), [&](const auto& b) { return b.entity == playerEntityForDeath; })))) {
 		player_->PostPhysicsUpdate();
 		SceneEntity* playerEntity = activeDocument
 			? activeDocument->FindEntityByName("Player")
@@ -789,31 +1187,55 @@ void RuntimeScene::Update(float deltaTime)
 			runtimeObjectBindings_
 		);
 	}
+	if (deathWorldMoving) {
+		std::unordered_set<uint64_t> ended(deathReactionEnded.begin(), deathReactionEnded.end());
+		for (uint64_t id : deathAttackEnded) {
+			deathWorldBaseVelocities_[id].x = deathWorldBaseVelocities_[id].z = 0.0f;
+			if (!deathReactionOwned.contains(id)) ended.insert(id);
+		}
+		for (uint64_t id : ended) {
+			deathWorldBaseVelocities_[id].x = deathWorldBaseVelocities_[id].z = 0.0f;
+			for (const auto& binding : deathWorldBindings) if (binding.entityId == id && binding.body)
+				binding.body->velocity.x = binding.body->velocity.z = 0.0f;
+		}
+	}
 	if (activeDocument && playing && gameFlowResult.gameplayAllowed && gameplayDeltaTime > 0.0f) {
 		combatSystem_.Update(
 			*activeDocument,
 			gameplayObjectBindings_,
 			statSystem_,
+			healthSystem_,
+			deathSystem_,
 			gameplayDeltaTime,
-			spawnFrame_.blockedEntityIds
+			spawnFrame_.blockedEntityIds, chargeContacts, enemySystem_.ChargeHitBoxes(),
+			[&](const SceneCombatHitEvent& hit) {
+				reactionDecisions.push_back(enemySystem_.EvaluateAcceptedHit(*activeDocument, hit));
+			}
 		);
+		objectSystem_.RefreshTransforms(*activeDocument,enemySystem_.FinishChargeCombat(*activeDocument,statSystem_,reactionBindings));
 		std::vector<SceneCombatHitEvent> hitEvents = combatSystem_.ConsumeHitEvents();
 		for (const SceneCombatHitEvent& hitEvent : hitEvents) {
 			hitStopSystem_.Request(hitEvent.hitStopDuration);
 		}
-		runtimeEffectSystem_.SpawnHitEffects(hitEvents);
-		hitReactionSystem_.Update(
+		if (!deathSystem_.IsDefeated()) runtimeEffectSystem_.SpawnHitEffects(hitEvents);
+		std::erase_if(hitEvents, [&](const auto& hit) { return deathSystem_.IsDefeated() || statSystem_.IsManagedDead(hit.targetEntityId, hit.healthStatId); });
+		hitReactionSystem_.DiscardBlocked(deathSystem_.IsDefeated()
+			? deathSystem_.TargetBlocked() : deathSystem_.Blocked());
+		if (!deathSystem_.IsDefeated()) hitReactionSystem_.Update(
 			*activeDocument,
-			gameplayObjectBindings_,
+			reactionBindings,
 			statSystem_,
 			stateMachineSystem_,
 			hitEvents,
-			gameplayDeltaTime
+			gameplayDeltaTime, reactionDecisions
 		);
 		runtimeEffectSystem_.SpawnDeathEffects(
 			*activeDocument,
 			hitReactionSystem_.ConsumeDeathEffectRequests()
 		);
+	}
+	if (activeDocument && playing) {
+		objectSystem_.RefreshTransforms(*activeDocument, enemySystem_.ApplyChargePoses(*activeDocument));
 	}
 	// 有効化は資源同期用の複製だけに行う。保存DocumentやRuntime overrideは変更しない。
 	SceneDocument editorResourceDocument;
@@ -824,7 +1246,10 @@ void RuntimeScene::Update(float deltaTime)
 		resourceDocument = &editorResourceDocument;
 	}
 	if (activeDocument) {
-		cameraSystem_.UpdateAfterSimulation(
+		if (deathWorldMoving) cameraSystem_.UpdateDeathAfterSimulation(
+			*activeDocument, camera_, player_, runtimeObjectBindings_, deathWorldStep.worldDelta);
+		else if (deathSystem_.IsDefeated()) cameraSystem_.HoldDeathCamera(camera_);
+		else cameraSystem_.UpdateAfterSimulation(
 			*activeDocument,
 			camera_,
 			player_,
@@ -841,7 +1266,10 @@ void RuntimeScene::Update(float deltaTime)
 	environmentSystem_.Sync(activeDocument, runtimeObjectBindings_);
 	if (activeDocument && playing) {
 		// TextMotionの自然終了もTransform演出の完了も、この後のEvent段階で受け取る。
-		textMotionSystem_.Update(*activeDocument, deltaTime);
+		std::vector<uint64_t> allowedText;
+		for (const auto& e : activeDocument->GetEntities())
+			if (!deathSystem_.IsBlocked(e.id) || deathTextEntities_.contains(e.id)) allowedText.push_back(e.id);
+		textMotionSystem_.Update(*activeDocument, deltaTime, &allowedText, false);
 	} else {
 		textMotionSystem_.Clear();
 	}
@@ -857,24 +1285,42 @@ void RuntimeScene::Update(float deltaTime)
 		false
 	);
 #endif
-	if (activeDocument && playing && gameplayDeltaTime > 0.0f) {
+	const auto* startedDirector = activeDocument && startedDirectorId &&
+		startedGeneration == activeDocument->GetContentGeneration() ? activeDocument->FindEntity(startedDirectorId) : nullptr;
+	const bool hasGameFlowStart = startedDirector && SceneEntityQuery::IsEntityActiveInHierarchy(*activeDocument, *startedDirector) &&
+		SceneEntityQuery::FindEnabledComponent(*startedDirector, "GameFlowDirector");
+	if (activeDocument && playing && !deathSystem_.IsDefeated() && (gameplayDeltaTime > 0.0f || hasGameFlowStart)) {
 		// Prefab生成はEntity配列を再配置し得るため、bindingを使い終えた最後に行う。
-		// HitStop中は既存Event gateを維持し、演出完了pulseは次の評価まで保持する。
-		const SceneEventRuntimeSignals eventSignals{
-			cameraSystem_.ConsumeCompletedCameraPathEntityId(),
-			audioSystem_.ConsumeFinishedEntityIds(*activeDocument),
-			textMotionSystem_.ConsumeCompletions(),
-			prefabAnimationSystem_.ConsumePresentationCompletions()
-		};
+		// HitStop中は開始通知だけ評価し、通常の演出完了pulseとbinding時計は保持する。
+		const bool evaluateGameplay = gameplayDeltaTime > 0.0f;
+		SceneEventRuntimeSignals eventSignals{};
+		if (evaluateGameplay) {
+			eventSignals.completedCameraPathEntityId = cameraSystem_.ConsumeCompletedCameraPathEntityId();
+			eventSignals.finishedAudioEntityIds = audioSystem_.ConsumeFinishedEntityIds(*activeDocument);
+			eventSignals.textMotionCompletions = textMotionSystem_.ConsumeCompletions();
+			eventSignals.presentationCompletions = prefabAnimationSystem_.ConsumePresentationCompletions();
+		}
+		if (hasGameFlowStart) {
+			eventSignals.startedDirectorEntityId = startedDirectorId;
+			eventSignals.startedDocumentGeneration = startedGeneration;
+		}
 		const SceneEventResult eventResult = eventSystem_.Update(
 			*activeDocument,
 			statSystem_,
+			healthSystem_,
+			deathSystem_,
 			stateMachineSystem_,
 			gameplayDeltaTime,
 			eventSignals,
 			spawnFrame_.blockedEntityIds,
-			!uiGameplayInputBlocked_
+			!uiGameplayInputBlocked_,
+			evaluateGameplay
 		);
+		if (!eventResult.deathDiagnostic.empty()) preparationDiagnostic_ = {ScenePreparationDiagnosticCode::InvalidReference, activeDocument->GetContentGeneration(), eventResult.deathDiagnosticEntityId, ++preparationDiagnosticSerial_, eventResult.deathDiagnostic};
+		if (eventResult.exitGameRequested) {
+			if (sceneManager_->RequestGameExit(GetSceneInstanceId(), activeDocument->GetContentGeneration())) return;
+			ReportMenuFailure("MenuRuntime:ExitRejected");
+		}
 		if (eventResult.restartSceneRequested) {
 			pendingRestartSceneInstanceId_ = sceneManager_->RequestSceneRestart(GetSceneInstanceId());
 			if (pendingRestartSceneInstanceId_ != kInvalidSceneInstanceId) return;
@@ -893,7 +1339,7 @@ void RuntimeScene::Update(float deltaTime)
 			SyncMenuPresentation();
 			objectSystem_.SyncSprites(activeDocument);
 			PrepareGameFlowTextOverrides(false);
-			textRenderSystem_.Sync(activeDocument);
+			textRenderSystem_.Sync(activeDocument, editing ? nullptr : &statSystem_);
 			sceneManager_->ChangeScene(eventResult.sceneTransitionId);
 			return;
 		}
@@ -923,6 +1369,23 @@ void RuntimeScene::Update(float deltaTime)
 		audioSystem_.ApplyRequests(*activeDocument, eventResult.audioRequests);
 		postProcessProfileSystem_.ApplyEventResult(*activeDocument, eventResult);
 	}
+	if (activeDocument && playing) {
+		deathSystem_.Observe(*activeDocument, statSystem_);
+		if (!deathSystem_.IsDefeated() && gameFlowSystem_.NeedsFinalize()) {
+			gameFlowResult = gameFlowSystem_.Update(*activeDocument, enemySpawnerSystem_, 0.0f, true);
+			ReportPreparationDiagnostic(gameFlowResult.diagnostic, flowDiagnosticSerial_);
+			for (const auto& r : gameFlowResult.entityRequests) if (auto* e = activeDocument->FindEntity(r.entityId)) e->active = r.active;
+			for (const auto& r : gameFlowResult.waveRequests) enemySpawnerSystem_.BeginFiniteWave(r.spawnerEntityId, r.generation, r.count, r.holdUntilGameplay);
+			for (const auto& r : gameFlowResult.motionRequests) {
+				if (r.type == SceneGameFlowMotionRequestType::Reset) textMotionSystem_.Reset(r.entityId);
+				else textMotionSystem_.Play(*activeDocument, r.entityId, r.clipId);
+			}
+		}
+		if (!defeatedAtFrameStart) heldDeathFlow_ = gameFlowResult;
+		DispatchDeaths(*activeDocument);
+		// スローを受理した対象は既存Reactionを継続する。即時停止の敗北だけ従来通り破棄。
+		if (deathSystem_.IsDefeated() && deathWorldInstance_ == 0) hitReactionSystem_.DiscardBlocked(deathSystem_.Blocked());
+	}
 	if (activeDocument) {
 		audioSystem_.Sync(
 			*activeDocument,
@@ -935,7 +1398,8 @@ void RuntimeScene::Update(float deltaTime)
 			audioSystem_.UpdateSpatial(*activeDocument, camera_);
 		}
 	}
-	postProcessProfileSystem_.Update(playing ? gameplayDeltaTime : 0.0f);
+	postProcessProfileSystem_.Update(playing
+		? (deathSystem_.IsDefeated() ? deathWorldStep.worldDelta : gameplayDeltaTime) : 0.0f);
 	textRenderSystem_.ClearTextOverrides();
 	textRenderSystem_.ClearPresentationOverrides();
 	// Flowがまだ内容を要求しない文字も空表示にし、この後の要求だけを表示する。
@@ -975,10 +1439,42 @@ void RuntimeScene::Update(float deltaTime)
 	}
 	SyncMenuPresentation();
 	objectSystem_.SyncSprites(resourceDocument);
-	textRenderSystem_.Sync(resourceDocument);
+	textRenderSystem_.Sync(resourceDocument, editing ? nullptr : &statSystem_);
 	// Eventによる消失/階層変更をIDで再確認。Simulation中のsnapshotは変えない。
 	if (activeDocument && playing) objectSystem_.SetSpawnPresentationFrame(
 		enemySpawnerSystem_.BuildPresentationFrame(*activeDocument, gameFlowResult.gameplayAllowed));
+	if (activeDocument) objectSystem_.ObserveReplaySubjects(*activeDocument);
+	// 最終Pose/Camera/環境の更新を終えてから中間停止状態を公開する。
+	if (deathWorldStep.freezeAfterStep) deathReplaySystem_.FinishLiveSlow();
+}
+
+void RuntimeScene::UpdateGamePaused(float uiDeltaTime)
+{
+	ApplyPendingUiAudio();
+	auto* document = GetSceneDocument();
+	if (!document) return;
+	std::vector<uint64_t> movingText;
+	const auto top = menuSystem_.GetFrame().panelId;
+	if (top) {
+		for (const auto& entity : document->GetEntities()) {
+			const SceneEntity* node = &entity;
+			for (size_t depth = 0; node && depth <= document->GetEntities().size(); ++depth) {
+				if (SceneEntityQuery::FindComponent(*node, "MenuPanel")) {
+					if (node->id == top) movingText.push_back(entity.id);
+					break;
+				}
+				node = document->FindEntity(node->parentId);
+			}
+		}
+	}
+	textMotionSystem_.Update(*document, uiDeltaTime, &movingText);
+	// Flow文字とworld Poseは保持し、UIで変更された文字演出/色/cacheだけ同期する。
+	textRenderSystem_.ClearPresentationOverrides();
+	for (const auto& [id, p] : textMotionSystem_.GetPresentationOverrides())
+		textRenderSystem_.SetPresentationOverride(id, p.positionOffset, p.rotationOffset, p.scaleMultiplier, p.opacityMultiplier);
+	SyncMenuPresentation();
+	objectSystem_.SyncSprites(document);
+	textRenderSystem_.Sync(document, &statSystem_);
 }
 
 void RuntimeScene::UpdateTransitionHold()
@@ -992,13 +1488,14 @@ void RuntimeScene::UpdateTransitionHold()
 	objectSystem_.BuildBindings(*document, runtimeObjectBindings_);
 	attachmentSystem_.Update(*document, objectSystem_, runtimeObjectBindings_);
 	objectSystem_.SyncSprites(document);
-	cameraSystem_.UpdateTransitionHold(*document, camera_, player_, runtimeObjectBindings_);
+	if (deathSystem_.IsDefeated()) cameraSystem_.HoldDeathCamera(camera_);
+	else cameraSystem_.UpdateTransitionHold(*document, camera_, player_, runtimeObjectBindings_);
 	lightingSystem_.Sync(document);
 	environmentSystem_.Sync(document, runtimeObjectBindings_);
 	// 新Sceneの管理文字は初回から隠し、旧Sceneの進行済み表示/演出時計は保持する。
 	PrepareGameFlowTextOverrides(false);
 	SyncMenuPresentation();
-	textRenderSystem_.Sync(document);
+	textRenderSystem_.Sync(document, &statSystem_);
 }
 
 void RuntimeScene::UpdatePaused()
@@ -1015,7 +1512,8 @@ void RuntimeScene::UpdatePaused()
 	// UI時計はprepassで凍結済み。参照と文字cacheだけ同期し、内容置換後の旧色を残さない。
 	SyncMenuPresentation();
 	PrepareGameFlowTextOverrides(false);
-	textRenderSystem_.Sync(GetSceneDocument());
+	const auto* context = sceneManager_ ? sceneManager_->GetExecutionContext() : nullptr;
+	textRenderSystem_.Sync(GetSceneDocument(), context && context->IsEditing() ? nullptr : &statSystem_);
 	SceneDocument* document = GetSceneDocument();
 	lightingSystem_.Sync(document);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -1197,6 +1695,7 @@ void RuntimeScene::RenderShadowCasters(
 
 void RuntimeScene::Finalize()
 {
+	PrepareReplayForFinalize();
 	pendingRestartSceneInstanceId_ = kInvalidSceneInstanceId;
 	gameFlowTextDocumentGeneration_ = 0;
 	spawnFrame_ = {};
@@ -1226,6 +1725,8 @@ void RuntimeScene::Finalize()
 	pendingPresentationDocumentGeneration_ = 0;
 	projectileSystem_.Clear();
 	statSystem_.Clear();
+	deathSystem_.Clear(); ClearDeathWorldContinuation(); pendingDeathActions_.clear(); pendingDeathGeneration_ = 0; deathTextEntities_.clear(); deathTransformEntities_.clear(); heldDeathFlow_ = {};
+	healthSystem_.Clear();
 
 	if (player_) {
 		player_->Finalize();
@@ -1265,4 +1766,314 @@ void RuntimeScene::PrepareForSceneTransition()
 	if (!executionContext || executionContext->IsPlaying()) {
 		audioSystem_.PrepareForSceneTransition();
 	}
+}
+
+void RuntimeScene::FailDeathReplay(const SceneDeathStarted& pulse, const std::string& issue) {
+    replayGameFrameReady_ = false;
+    replayRender_.Cancel(); // Draw中でも即解放しない。次の安全境界で返却。
+	SceneDeathReplayStatus status;
+	if (deathReplaySystem_.TryGetStatus(pulse.owner, status) && status.phase == SceneDeathReplayPhase::Failed) return;
+	if (replayHistory_.Status().phase == SceneReplayHistoryPhase::Recording ||
+		replayHistory_.Status().phase == SceneReplayHistoryPhase::Sealed) replayHistory_.Fail(issue.c_str());
+	replayBeginPending_ = replayFinalPending_ = false;
+	deathReplayStarted_ = pulse;
+	deathReplaySystem_.FailStart(pulse, issue);
+	deathWorldClock_.Freeze();
+	preparationDiagnostic_ = { ScenePreparationDiagnosticCode::InvalidReference, pulse.generation,
+		pulse.owner, ++preparationDiagnosticSerial_, issue };
+	Logger::Log(issue + "\n");
+}
+
+void RuntimeScene::DispatchDeaths(SceneDocument& document) {
+	const auto pulses = deathSystem_.ConsumeStarted();
+	// 同時死亡は最初の全体敗北だけを採用。別ownerの設定を流用しない。
+	const SceneDeathStarted* first = nullptr;
+	for (const auto& pulse : pulses) if (pulse.wholeScene && (!first || pulse.serial < first->serial)) first = &pulse;
+	if (first && deathWorldClock_.Phase() == SceneDeathWorldPhase::Normal) {
+		const auto* owner = document.FindEntity(first->owner);
+		const auto* replay = owner ? SceneEntityQuery::FindEnabledComponent(*owner, "DeathReplay") : nullptr;
+		if (replay) {
+			const auto* response = SceneEntityQuery::FindEnabledComponent(*owner, "DeathResponse");
+			const auto* health = SceneEntityQuery::FindEnabledComponent(*owner, "Health");
+			const SceneEntity* statsOwner = nullptr;
+			if (health) {
+				if (health->healthStatsEntityId) statsOwner = document.FindEntity(health->healthStatsEntityId);
+				else if (health->healthStatsEntityName.empty()) statsOwner = owner;
+				else for (const auto& e : document.GetEntities()) if (e.name == health->healthStatsEntityName) {
+					if (statsOwner) { statsOwner = nullptr; break; }
+					statsOwner = &e;
+				}
+			}
+			const auto* stats = statsOwner ? SceneEntityQuery::FindEnabledComponent(*statsOwner, "StatSet") : nullptr;
+			const bool sourceValid = response && health && stats && statsOwner->id == first->stats &&
+				std::any_of(stats->stats.begin(), stats->stats.end(), [&](const auto& s) {
+					return s.id == health->healthStatId && s.minValue == 0 &&
+						std::isfinite(s.maxValue) && s.maxValue > 0 && std::isfinite(s.initialValue) && s.initialValue > 0;
+				}) &&
+				std::any_of(stats->flags.begin(), stats->flags.end(), [&](const auto& f) { return f.id == response->deathResponseFlagId && !f.initialValue; });
+			size_t activeCount = 0, ownCount = 0;
+			for (const auto& e : document.GetEntities()) for (const auto& c : e.components) if (c.type == "DeathReplay") {
+				if (e.id == owner->id) ++ownCount;
+				if (c.enabled && SceneEntityQuery::IsEntityActiveInHierarchy(document, e)) ++activeCount;
+			}
+			if (!sceneManager_ || sceneManager_->GetActiveSceneInstanceId() != GetSceneInstanceId()) {
+				FailDeathReplay(*first, "DeathResponse:ReplayInactiveScene");
+			} else if (ownCount != 1 || activeCount != 1 || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *owner) ||
+				!sourceValid || response->deathResponseScope != "Scene" ||
+				!std::isfinite(replay->deathReplaySlowScale) || replay->deathReplaySlowScale <= 0 || replay->deathReplaySlowScale > 1 ||
+				!std::isfinite(replay->deathReplaySlowDuration) || replay->deathReplaySlowDuration <= 0) {
+				FailDeathReplay(*first, "DeathResponse:ReplayInvalidSettings");
+			} else if (BeginDeathWorldContinuation(*first, replay->deathReplaySlowScale, replay->deathReplaySlowDuration)) {
+				deathReplayStarted_ = *first;
+				deathReplaySystem_.AcceptStart(*first, replay->deathReplaySlowDuration);
+				if (replay->deathReplayEnabled) {
+					if (replayHistory_.Start({first->instance, first->generation, first->owner, first->serial},
+						replay->deathReplayCaptureHz, replay->deathReplayHistoryBudgetMiB)) {
+						replayBeginPending_ = true;
+						replayInterval_ = 1.0 / replay->deathReplayCaptureHz;
+					} else FailDeathReplay(*first, replayHistory_.Status().diagnostic);
+				}
+			} else {
+				SceneDeathReplayStatus status;
+				if (!deathReplaySystem_.TryGetStatus(first->owner, status)) FailDeathReplay(*first, "DeathResponse:ReplayStartFailed");
+			}
+		}
+		if (deathWorldClock_.Phase() == SceneDeathWorldPhase::Normal) deathWorldClock_.Freeze();
+	}
+	for (const auto& p : pulses) deathSystem_.SetStatus(p.owner, 1);
+	const auto actions = eventSystem_.EvaluateDeaths(document, pulses);
+	for (const auto& a : actions) { deathSystem_.SetStatus(a.owner, 2); pendingDeathActions_.push_back(a); }
+	if (!actions.empty()) pendingDeathGeneration_ = document.GetContentGeneration();
+	ApplyDeathActions(document, false);
+}
+void RuntimeScene::ApplyDeathActions(SceneDocument& document, bool transformOnly) {
+	if (pendingDeathGeneration_ != document.GetContentGeneration()) {
+		pendingDeathActions_.clear(); pendingDeathGeneration_ = 0; return;
+	}
+	for (auto it = pendingDeathActions_.begin(); it != pendingDeathActions_.end();) {
+		const auto& action = it->action;
+		if ((action.type == "PlayPresentationClip") != transformOnly) { ++it; continue; }
+		const auto* source = document.FindEntity(it->owner);
+		const SceneEntity* target = action.targetEntityId ? document.FindEntity(action.targetEntityId) : nullptr;
+		if (!action.targetEntityId && !action.targetEntityName.empty()) {
+			for (const auto& e : document.GetEntities()) if (e.name == action.targetEntityName) {
+				if (target) { target = nullptr; break; } target = &e;
+			}
+		}
+		bool accepted = false;
+		if (source && SceneEntityQuery::FindEnabledComponent(*source, "DeathResponse") && target) {
+			if (action.type == "PlayAudio") accepted = audioSystem_.ApplyRequests(document, {{SceneAudioRequestType::Play, target->id}});
+			else if (action.type == "PlayTextMotion") { accepted = textMotionSystem_.Play(document, target->id, action.textMotionClipId); if (accepted) deathTextEntities_.insert(target->id); }
+			else if (action.type == "PlayPresentationClip") {
+				auto blocked = enemySpawnerSystem_.BuildPresentationFrame(document, !deathSystem_.IsDefeated()).blockedEntityIds;
+				// Frozen後もWorld姿勢の所有を維持し、別の演出による書込みを拒否する。
+				if (deathWorldInstance_) blocked.insert(deathWorldParticipants_.begin(), deathWorldParticipants_.end());
+				accepted = prefabAnimationSystem_.PlayPresentation(document, target->id, action.presentationClipName, blocked);
+			}
+			if (accepted && action.type == "PlayPresentationClip") deathTransformEntities_.insert(target->id);
+		}
+		if (!accepted) {
+			deathSystem_.SetStatus(it->owner, 4);
+			preparationDiagnostic_ = {ScenePreparationDiagnosticCode::InvalidReference, document.GetContentGeneration(),
+				it->owner, ++preparationDiagnosticSerial_, "DeathResponse:StartFailed " + action.type + " " + std::to_string(action.targetEntityId)};
+		} else if (deathSystem_.Status(it->owner) != 4) deathSystem_.SetStatus(it->owner, 3);
+		it = pendingDeathActions_.erase(it);
+	}
+	for (const auto& a : pendingDeathActions_) if (deathSystem_.Status(a.owner) != 4) deathSystem_.SetStatus(a.owner, 2);
+}
+
+void RuntimeScene::ClearDeathWorldContinuation() {
+    replayCompletion_={}; replayMenuSource_={}; replayMenuDrawToken_={};
+    replayMenuPresented_=false; replayPresentationAllowed_=false;
+    replayGameFrameReady_ = false; replayGameFrame_ = {}; replayViews_.clear();
+    replayRender_.Cancel();
+    replayRender_.ReleaseAtSafeBoundary(); // 使用中なら完了通知まで資源だけ保持。
+	deathReplaySystem_.Clear(); deathReplayStarted_ = {};
+	replayHistory_.Clear(); replayOwnerBasis_ = {};
+	replayRealSeconds_ = replayNextDue_ = replayInterval_ = 0;
+	replayCapturedUpdate_ = replayCapturedDraw_ = 0;
+	replayBeginPending_ = replayFinalPending_ = false;
+	cameraSystem_.ClearDeathContinuation();
+	deathWorldClock_.Clear();
+	deathWorldElapsedSeconds_ = 0.0;
+	deathWorldInstance_ = deathWorldGeneration_ = 0;
+	deathWorldParticipants_.clear(); deathWorldBaseVelocities_.clear();
+	attackRunnerSystem_.ClearDeathContinuation();
+	hitReactionSystem_.ClearDeathContinuation();
+	prefabAnimationSystem_.ClearDeathContinuation();
+	objectSystem_.ClearDeathContinuation();
+}
+
+bool RuntimeScene::BeginDeathWorldContinuation(const SceneDeathStarted& started, float scale, float duration) {
+	auto* document = GetSceneDocument();
+	if (!document || !started.wholeScene || !deathSystem_.IsDefeated() ||
+		started.instance != GetSceneInstanceId() || started.generation != document->GetContentGeneration() ||
+		!document->FindEntity(started.owner) || deathWorldClock_.Phase() != SceneDeathWorldPhase::Normal ||
+		!std::isfinite(scale) || scale <= 0.0f || scale > 1.0f || !std::isfinite(duration) || duration <= 0.0f) return false;
+	const auto preparation = enemySpawnerSystem_.BuildPresentationFrame(*document, heldDeathFlow_.gameplayAllowed);
+	std::unordered_set<uint64_t> participants;
+	std::unordered_map<uint64_t, Vector3> velocities;
+	for (const auto& entity : document->GetEntities()) {
+		if (!SceneEntityQuery::IsEntityActiveInHierarchy(*document, entity) || preparation.blockedEntityIds.contains(entity.id) ||
+			deathSystem_.TargetBlocked().contains(entity.id)) continue;
+		if (SceneEntityQuery::HasComponent(entity, "PlayerBehavior") && SceneEntityQuery::FindEnabledComponent(entity, "Projectile")) return false;
+		// 非有限の姿勢/移動設定を、状態を変更する前に拒否する。
+		if (attackRunnerSystem_.IsRunning(entity.id) &&
+			(!std::isfinite(attackRunnerSystem_.GetDuration(entity.id)) || !std::isfinite(attackRunnerSystem_.GetTime(entity.id)))) return false;
+		if (const auto* attacks = SceneEntityQuery::FindEnabledComponent(entity, "AttackSet")) {
+			for (const auto& definition : attacks->attackDefinitions) {
+				if (!std::isfinite(definition.windup) || !std::isfinite(definition.activeTime) || !std::isfinite(definition.recovery) ||
+					!std::isfinite(definition.forwardDistance) || !std::isfinite(definition.sideDistance) || !std::isfinite(definition.facingRotateAngle) ||
+					!std::isfinite(definition.windup + definition.activeTime + definition.recovery)) return false;
+				// 対応easingの最大傾きは3。XZ速度がfloatで表現可能な範囲を確認する。
+				const double maxSpeed = 3.0 * (std::abs(static_cast<double>(definition.forwardDistance)) +
+					std::abs(static_cast<double>(definition.sideDistance))) / (std::max)(static_cast<double>(definition.activeTime), 0.0001);
+				if (maxSpeed > (std::numeric_limits<float>::max)()) return false;
+			}
+		}
+		participants.insert(entity.id);
+	}
+	if (prefabAnimationSystem_.HasPresentationTargetsIn(participants)) {
+		FailDeathReplay(started, "DeathResponse:ReplayTransformConflict");
+		return false;
+	}
+	std::vector<SceneRuntimeObjectBinding> bindings;
+	objectSystem_.BuildBindings(*document, bindings);
+	for (auto& binding : bindings) {
+		if (!participants.contains(binding.entityId)) continue;
+		if (player_ && binding.entity == document->FindEntityByName("Player")) binding.body = &player_->GetPhysicsBody();
+		if (binding.body) {
+			const auto& v = binding.body->velocity;
+			if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) return false;
+			velocities.emplace(binding.entityId, v);
+		}
+	}
+	if (!deathWorldClock_.Begin(started.instance, started.generation, started.owner, started.serial, scale, duration)) return false;
+	deathWorldElapsedSeconds_ = 0.0;
+	deathWorldInstance_ = started.instance; deathWorldGeneration_ = started.generation;
+	deathWorldParticipants_ = std::move(participants); deathWorldBaseVelocities_ = std::move(velocities);
+	attackRunnerSystem_.BeginDeathContinuation(*document, bindings, deathWorldParticipants_);
+	hitReactionSystem_.BeginDeathContinuation(deathWorldParticipants_);
+	prefabAnimationSystem_.BeginDeathContinuation(*document, deathWorldParticipants_, attackRunnerSystem_.DeathAnimationTargets());
+	objectSystem_.BeginDeathContinuation(deathWorldParticipants_, attackRunnerSystem_.DeathAnimationTargets());
+	cameraSystem_.BeginDeathContinuation(*document);
+	return true;
+}
+
+void RuntimeScene::NotifyReplayGpuCompleted() { replayRender_.NotifyGpuCompleted(); }
+void RuntimeScene::PrepareReplayForFinalize() {
+    replayRender_.Cancel();
+    if (replayRender_.HasPendingGpuUse()) {
+        // 通常はGame末尾で完了済み。例外的な破棄だけ、元Asset解放より先にdrainする。
+        Object3dCommon::GetInstance()->GetDxCommon()->ExecuteCommandListAndWait();
+        replayRender_.NotifyGpuCompleted();
+    }
+    replayRender_.ReleaseAtSafeBoundary();
+}
+
+void RuntimeScene::AdvanceReplayPresentation(float delta, bool allowed) {
+    replayPresentationAllowed_ = allowed;
+    deathReplaySystem_.AdvanceReplay(delta, allowed);
+}
+bool RuntimeScene::PrepareReplayGameFrame(uint64_t drawSerial, float aspect, SceneReplayGameFrame& out) {
+    replayGameFrameReady_ = false;
+    if (!replayRender_.IsPrepared() || replayHistory_.Status().phase != SceneReplayHistoryPhase::Sealed) return false;
+    const auto* document = GetSceneDocument();
+    const auto& identity = replayHistory_.Identity();
+    if (!document || identity.instance != GetSceneInstanceId() || identity.generation != document->GetContentGeneration()) {
+        FailDeathReplay(deathReplayStarted_, "DeathResponse:HistoryIdentity"); return false;
+    }
+    try {
+        if (!deathReplaySystem_.IsReplaying()) {
+            const auto* owner = document->FindEntity(identity.owner);
+            const auto* settings = owner ? SceneEntityQuery::FindEnabledComponent(*owner,"DeathReplay") : nullptr;
+            if (!settings || settings->deathReplayViews.size()!=3 ||
+                !std::all_of(settings->deathReplayViews.begin(),settings->deathReplayViews.end(),IsValidReplayView)) {
+                FailDeathReplay(deathReplayStarted_, "DeathResponse:ReplayViewSettings"); return false;
+            }
+            replayViews_ = settings->deathReplayViews;
+            // 全cutの構図を開始前に検証し、B/C到達時の設定エラーを先送りしない。
+            for (size_t cut=0;cut<replayViews_.size();++cut) {
+                const auto& view=replayViews_[cut];
+                Camera camera;
+                const auto& basis=replayRender_.OriginBasis();
+                const auto& origin=replayRender_.OriginBounds(); const auto& clip=replayRender_.ClipBounds();
+                if (!origin.valid || !clip.valid || !ResolveReplayCamera(view,basis.world,basis.cameraWorld,
+                    origin.min,origin.max,clip.min,clip.max,aspect,camera)) {
+                    FailDeathReplay(deathReplayStarted_, "DeathResponse:ReplayCamera"); return false;
+                }
+                replayCameras_[cut]=camera;
+            }
+            const auto& history = replayHistory_.Status();
+            if (!deathReplaySystem_.BeginReplay(history.realSeconds,history.sampleCount,settings->deathReplaySpeed)) {
+                FailDeathReplay(deathReplayStarted_, "DeathResponse:ReplayViewSettings"); return false;
+            }
+        }
+        SceneReplayGameFrame game;
+        game.token = deathReplaySystem_.PresentationToken(drawSerial);
+        if (!game.token.drawSerial || game.token.cut>=replayViews_.size()) return false;
+        if (!std::isfinite(aspect) || aspect<=0) return false;
+        game.camera=replayCameras_[game.token.cut];
+        game.camera.SetAspectRatio(aspect); game.camera.UpdatePreviewMatrices();
+        SceneDeathReplayStatus status;
+        deathReplaySystem_.TryGetStatus(identity.owner,status);
+        game.finishedHold=status.phase==SceneDeathReplayPhase::FinishedHold;
+        SceneReplayFrame evaluated;
+        if (!replayHistory_.Evaluate(deathReplaySystem_.ReplaySampleSeconds(),evaluated) ||
+            !replayRender_.ApplyEvaluatedFrame(evaluated,game.camera)) {
+            FailDeathReplay(deathReplayStarted_, "DeathResponse:RenderPreparation"); return false;
+        }
+        game.postProcess=evaluated.effectivePostProcess; game.effectTime=evaluated.gameViewEffectTime;
+        replayGameFrame_=game; replayGameFrameReady_=true; out=game;
+        return true;
+    } catch (const std::bad_alloc&) { FailDeathReplay(deathReplayStarted_, "DeathResponse:RenderPreparation"); }
+      catch (const std::length_error&) { FailDeathReplay(deathReplayStarted_, "DeathResponse:RenderPreparation"); }
+    return false;
+}
+bool RuntimeScene::DrawReplayGameShadow(const SceneReplayPresentationToken& token) {
+    if (!replayGameFrameReady_ || token!=replayGameFrame_.token) return false;
+    if (replayRender_.DrawShadow()) return true;
+    RejectReplayGameFrame(token); return false;
+}
+bool RuntimeScene::DrawReplayGameWorld(const SceneReplayPresentationToken& token) {
+    if (!replayGameFrameReady_ || token!=replayGameFrame_.token) return false;
+    if (replayRender_.DrawWorld()) return true;
+    RejectReplayGameFrame(token); return false;
+}
+bool RuntimeScene::DrawReplayMenu(const SceneReplayPresentationToken& token, SceneMenuSource& out) {
+    const auto* document=GetSceneDocument();
+    const auto source=menuSystem_.GetSource();
+    if (!document || !replayGameFrameReady_ || token!=replayGameFrame_.token || !replayGameFrame_.finishedHold ||
+        !replayMenuSource_.panelId || source.panelId!=replayMenuSource_.panelId || source.openSerial!=replayMenuSource_.openSerial ||
+        source.instanceId!=token.instance || source.generation!=token.generation || token.deathSerial!=replayCompletion_.deathSerial ||
+        !menuSystem_.IsSourceValid(*document,source)) return false;
+    // 下層Menuと通常HUDを含めず、この完了通知が開いた一枚だけを描く。
+    auto frame=menuSystem_.GetFrame(); frame.visiblePanelIds={source.panelId};
+    if (!uiRenderSystem_.HasMenu(*document,frame)) return false;
+    uiRenderSystem_.DrawMenu(*document,objectSystem_,textRenderSystem_,frame);
+    replayMenuDrawToken_=token; out=source; return true;
+}
+void RuntimeScene::AcceptReplayMenuReceipt(const SceneReplayPresentationToken& token, const SceneMenuSource& source) {
+    const auto* document=GetSceneDocument();
+    if (!document || !replayGameFrameReady_ || !replayGameFrame_.finishedHold || token!=replayGameFrame_.token ||
+        token!=replayMenuDrawToken_ || replayRender_.HasPendingGpuUse() || !source.panelId ||
+        source.panelId!=replayMenuSource_.panelId || source.openSerial!=replayMenuSource_.openSerial ||
+        source.instanceId!=token.instance || source.generation!=token.generation || !menuSystem_.IsSourceValid(*document,source)) return;
+    if (!replayMenuPresented_) { replayMenuPresented_=true; eventSystem_.RearmMenuKeys(); }
+}
+void RuntimeScene::AcceptReplayPresentationReceipt(const SceneReplayPresentationToken& token) {
+    if (replayGameFrameReady_ && token==replayGameFrame_.token && !replayRender_.HasPendingGpuUse())
+        deathReplaySystem_.AcceptPresentationReceipt(token);
+}
+
+bool RuntimeScene::TryGetReplayFraming(uint64_t owner, SceneReplayFramingBasis& out) const {
+    const auto* document=GetSceneDocument();
+    if (!document) return false;
+    try { return objectSystem_.TryGetReplayFraming(*document,owner,out); }
+    catch (const std::bad_alloc&) { return false; } catch (const std::length_error&) { return false; }
+}
+
+void RuntimeScene::RejectReplayGameFrame(const SceneReplayPresentationToken& token) {
+    if (replayGameFrameReady_ && token==replayGameFrame_.token)
+        FailDeathReplay(deathReplayStarted_,"DeathResponse:RenderPreparation");
 }

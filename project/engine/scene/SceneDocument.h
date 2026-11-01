@@ -9,10 +9,102 @@
 #include <vector>
 
 #include "SceneSettings.h"
+#include "SceneReplayPresentation.h"
 #include "SceneEntityReference.h"
 #include "../math/Transform.h"
 #include "../math/Vector2.h"
 #include "../math/Vector4.h"
+
+// 地上敵の位置取り設定。距離はXZ上の移動Collider外周からの余裕、速度はScene単位/秒。
+struct SceneEnemyPositioningSettings {
+	float distance = 4.0f, tolerance = 0.5f, spacing = 1.0f;
+	float retreatRatio = 0.6f, orbitRatio = 0.5f, acceleration = 8.0f;
+	bool variation = true, randomizeOnPlay = true;
+	float distanceVariation = 1.0f, spacingVariation = 0.25f, speedVariation = 0.15f;
+	uint32_t seed = 1;
+	// 設定値だけを検証する。Collider/参照先の存在は呼出側で確認する。
+	bool IsValid(float baseSpeed) const;
+};
+
+// 新方式の攻撃段階。保存設定の対象段階bitはAim/Locked/Chargeだけを使う。
+enum class SceneEnemyChargePhase { Idle, Aim, Locked, Charge, Recovery, Returning, Interrupted };
+enum class SceneEnemyChargeEnd { None, Distance, Wall, Enemy, Player, Interrupted, Invalid, TargetLost };
+enum class SceneEnemyInterruptConditionType { SingleHpDamage, AccumulatedHpDamage, HitCount, HorizontalKnockback, VerticalKnockback, PoiseDepleted };
+struct SceneEnemyInterruptCondition {
+	SceneEnemyInterruptConditionType type = SceneEnemyInterruptConditionType::HitCount;
+	float threshold = 3.0f;
+};
+struct SceneEnemyInterruptRule {
+	bool all = false;
+	bool validCombination = true; // 未知の保存enumをAnyへ黙って変換しないための読込状態。
+	std::vector<SceneEnemyInterruptCondition> conditions{{}};
+	bool IsValid() const;
+};
+struct SceneEnemyInterruptSettings {
+	bool enabled = false;
+	uint8_t phases = 7;
+	bool countWindows = false;
+	float idleResetSeconds = 0.0f;
+	SceneEnemyInterruptRule common;
+	std::array<bool, 3> overrideEnabled{};
+	std::array<SceneEnemyInterruptRule, 3> overrides;
+	bool IsValid() const;
+};
+// 時間は秒、移動はworld Scene単位、姿勢角は度。姿勢は見た目の子のlocal差分。
+struct SceneEnemyChargeSettings {
+	float startDistance = 0.0f; // 0は最大突進距離から自動。正数は接触までの移動量の開始上限。
+	std::string movementEasing = "Linear"; // 未知名も保存して保持する。時間/距離の意味は曲線で変えない。
+	bool poseEnabled = true; // 旧保存値は姿勢必須。Editorでの新規追加だけOFFにする。
+	float aimSeconds = 0.4f, lockedSeconds = 0.25f, speed = 10.0f, distance = 8.0f;
+	float recoverySeconds = 0.5f, returnSeconds = 0.25f, cooldownSeconds = 1.0f, firstWaitSeconds = 0.5f;
+	float aimVariation = 0.1f, lockedVariation = 0.05f, cooldownVariation = 0.3f, firstWaitVariation = 0.3f;
+	uint64_t poseEntityId = 0;
+	float backAngle = 15.0f, forwardAngle = 25.0f, leanSeconds = 0.1f;
+	Vector3 axis{1.0f, 0.0f, 0.0f}, pivot{}, aimOffset{}, chargeOffset{};
+	bool IsValid(bool variation) const;
+};
+
+// 保存参照の方式。Unknownは原文を保持し、既知方式へ暗黙変換しない。
+enum class SceneEnemyTargetMode { LegacyReference, AutoPlayer, Entity, Name, Unknown };
+enum class SceneEnemyTargetIssue { None, Unassigned, Missing, Ambiguous, Inactive, Self, UnsupportedPlayer, UnknownMode, Dead };
+struct SceneEnemyTargetResolution {
+	uint64_t entityId = 0;
+	SceneEnemyTargetIssue issue = SceneEnemyTargetIssue::None;
+};
+enum class SceneEnemyAttackWaitReason {
+	Configuration, Target, Range, Suppressed, Positioning, Cooldown, Attacking, Ready,
+	ProbePending, StartDistance, FrontEnemy, FrontObstacle, HorizontalPath, CollisionMask,
+	OwnerShape, TargetShape, InvalidShape
+};
+// 攻撃判断を所有するEnemyから、速度を選ぶAgentへ渡す非保存の目的。
+enum class SceneEnemyPositioningIntent { KeepSpacing, ApproachForAttack, FindClearLane };
+
+// Editorへ値コピーする非保存状態。Scene/Object/Runtimeへの可変参照を渡さない。
+enum class SceneEnemyPositioningPhase { Waiting, Approaching, Retreating, Holding, Orbiting, Blocked, Suppressed, Invalid };
+struct SceneEnemyPositioningStatus {
+	uint64_t resolvedTargetEntityId = 0;
+	std::string targetDisplayName;
+	SceneEnemyTargetIssue targetIssue = SceneEnemyTargetIssue::Unassigned;
+	SceneEnemyAttackWaitReason attackWaitReason = SceneEnemyAttackWaitReason::Target;
+	std::string configurationIssue;
+	bool positioningAvailable = false;
+	SceneEnemyPositioningPhase phase = SceneEnemyPositioningPhase::Waiting;
+	float distance = 0.0f, spacing = 0.0f, speed = 0.0f;
+	int orbitSide = 1;
+	uint64_t generation = 0;
+	SceneEnemyChargePhase chargePhase = SceneEnemyChargePhase::Idle;
+	SceneEnemyChargeEnd chargeEnd = SceneEnemyChargeEnd::None;
+	float accumulatedDamage = 0.0f;
+	uint32_t hitCount = 0;
+	uint8_t achievedConditions = 0;
+	bool attackReady = false; // 構成上の準備。今の開始可否はcanStartAttackで区別する。
+	bool canStartAttack = false, contactDistanceValid = false, firstAttackWait = true;
+	float contactDistance = 0.0f, startDistanceLimit = 0.0f, attackWaitSeconds = 0.0f;
+	uint64_t blockerEntityId = 0;
+	std::string blockerDisplayName;
+	SceneEnemyPositioningIntent positioningIntent = SceneEnemyPositioningIntent::KeepSpacing;
+	bool noSafePositioningCandidate = false;
+};
 
 struct SceneTeamSettings {
 	std::string name = "Team";
@@ -91,12 +183,21 @@ struct SceneStatDefinition {
 	float initialValue = 100.0f;
 };
 
+// 数値Statとは別型。保存するのは初期値だけで、現在値はStatSystemが所有する。
+struct SceneFlagDefinition {
+	std::string id;
+	std::string displayName;
+	bool initialValue = false;
+};
+
 struct SceneEventAction {
 	std::string type = "SetEntityActive";
 	uint64_t targetEntityId = 0;
 	std::string targetEntityName;
 	std::string statId;
 	std::string statOperation = "Add";
+	std::string flagId;
+	bool flagValue = false;
 	float value = 0.0f;
 	bool active = true;
 	std::string sceneId;
@@ -119,11 +220,15 @@ struct SceneEventBinding {
 	std::string uiInputScope = "WhenNoMenu";
 	std::string triggerType = "OnStart";
 	std::string triggerKey;
+	// OnKeyPressedのOR候補。先頭はtriggerKeyに保持し、旧データは追加なしとして読む。
+	std::vector<std::string> additionalTriggerKeys;
 	uint64_t targetEntityId = 0;
 	std::string targetEntityName;
 	std::string statId = "hp";
 	std::string statComparison = "LessOrEqual";
 	float statValue = 0.0f;
+	std::string flagId;
+	bool flagValue = true;
 	Vector3 targetPosition{};
 	float radius = 1.0f;
 	bool triggerOnce = true;
@@ -634,7 +739,32 @@ struct SceneComponent {
 	bool cameraPathAutoCollectChildPoints = true;
 	float cameraPathPointDurationToNext = 1.0f;
 	std::string cameraPathPointEasingToNext = "SmoothStep";
+	// 表示設定だけを保存する。現在値はStatSystemから借用し、文字原文へ書き戻さない。
+	uint64_t statTextStatsEntityId = 0;
+	std::string statTextStatsEntityName;
+	std::string statTextStatId = "hp";
+	std::string statTextDisplayMode = "CurrentAndMax";
+	std::string statTextPrefix = "HP ";
+	std::string statTextSuffix;
+	int statTextDecimalPlaces = 0;
+	// Healthは参照と受付設定だけを保存し、HP実値/無敵時計は保存しない。ID 0・名前空欄は自分。
+	uint64_t healthStatsEntityId = 0;
+	std::string healthStatsEntityName;
+	std::string healthStatId = "hp";
+	float healthInvulnerabilityDuration = 0.5f;
 	std::vector<SceneStatDefinition> stats;
+	std::vector<SceneFlagDefinition> flags;
+	// DeathReplayは同EntityのDeathResponseだけを使い、実行状態を保存しない。
+	bool deathReplayEnabled = false; // trueで記録+3視点再生。欠落した旧Sceneはスローのみ。
+	float deathReplaySpeed = 1.0f;
+	std::vector<SceneReplayViewSettings> deathReplayViews = DefaultReplayViews();
+	float deathReplayCaptureHz = 30.0f;
+	uint64_t deathReplayHistoryBudgetMiB = 256;
+	float deathReplaySlowScale = 0.2f;
+	float deathReplaySlowDuration = 1.5f; // 実秒。世界の進行秒は倍率との積。
+	// 同一EntityのHealthを使う。Runtimeの死亡/演出状態は保存しない。
+	std::string deathResponseFlagId;
+	std::string deathResponseScope = "Target";
 	std::vector<SceneAttackDefinition> attackDefinitions;
 	std::vector<SceneEventBinding> eventBindings;
 	// Menuは設定だけを保存し、開閉・選択・Pause理由はRuntime側が所有する。
@@ -642,6 +772,19 @@ struct SceneComponent {
 	// 欠落時は旧構成を保持。Editorの標準構成操作だけが新方式を選ぶ。
 	std::string menuLayoutMode = "Hierarchical";
 	std::string menuInputMode = "Events";
+	// 非使用軸も保持する。標準操作の実行状態はEventSystem側にのみ置く。
+	std::vector<std::string> menuStandardUpKeys{"UP"}, menuStandardDownKeys{"DOWN"};
+	std::vector<std::string> menuStandardLeftKeys{"LEFT"}, menuStandardRightKeys{"RIGHT"};
+	std::vector<std::string> menuStandardConfirmKeys{"ENTER"}, menuStandardCancelKeys{"ESCAPE"};
+	// 順序は上/下/左/右/決定/キャンセル。ポインタはこのComponentの寿命内だけ有効。
+	auto MenuStandardKeyGroups() {
+		return std::array<std::vector<std::string>*, 6>{&menuStandardUpKeys, &menuStandardDownKeys,
+			&menuStandardLeftKeys, &menuStandardRightKeys, &menuStandardConfirmKeys, &menuStandardCancelKeys};
+	}
+	auto MenuStandardKeyGroups() const {
+		return std::array<const std::vector<std::string>*, 6>{&menuStandardUpKeys, &menuStandardDownKeys,
+			&menuStandardLeftKeys, &menuStandardRightKeys, &menuStandardConfirmKeys, &menuStandardCancelKeys};
+	}
 	std::vector<uint64_t> menuItemEntityIds;
 	uint64_t menuInitialItemEntityId = 0;
 	std::string menuNavigationAxis = "Vertical";
@@ -703,6 +846,8 @@ struct SceneComponent {
 	std::string boneAttachmentAlignmentMode = "ManualOffset";
 	std::string boneAttachmentSourceJointName;
 	bool boneAttachmentInheritScale = true;
+	SceneEnemyTargetMode enemyTargetMode = SceneEnemyTargetMode::LegacyReference;
+	std::string enemyTargetModeUnknown;
 	uint64_t enemyTargetEntityId = 0;
 	std::string enemyTargetEntityName = "Player";
 	std::string enemySpawnerPrefabPath;
@@ -717,6 +862,11 @@ struct SceneComponent {
 	float enemySpawnerSpawnDuration = 0.5f;
 	std::string enemySpawnerSpawnCurve = "EaseOutCubic";
 	std::string enemyHealthStatId = "hp";
+	// 未指定はLegacy。新方式は位置取りのみで、体当たりは後続工程で接続する。
+	std::string enemyMovementMode = "Legacy";
+	SceneEnemyPositioningSettings enemyPositioning;
+	SceneEnemyChargeSettings enemyCharge;
+	SceneEnemyInterruptSettings enemyInterruption;
 	float enemyDetectionRange = 12.0f;
 	float enemyLoseRange = 18.0f;
 	float enemyAttackRange = 2.0f;
@@ -957,3 +1107,11 @@ private:
 	std::string lastLoadError_;
 	std::string lastSaveError_;
 };
+
+// 保存設定だけの構成検査。未設定も理由コードで返し、呼出側が警告/拒否を選ぶ。
+const char* ValidateEnemyChargeConfiguration(const SceneDocument& document, const SceneEntity& owner, const SceneComponent& behavior);
+
+// Documentだけの参照検査。実Player IDは値借用で、HP/死亡・攻撃・所有を変更しない。
+// issueがNone以外のentityIdは診断用であり、攻撃対象として使用しない。
+SceneEnemyTargetResolution ResolveEnemyTarget(const SceneDocument& document, const SceneEntity& owner,
+	const SceneComponent& behavior, uint64_t runtimePlayerEntityId);

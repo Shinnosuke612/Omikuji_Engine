@@ -346,12 +346,261 @@ namespace {
 		};
 	}
 
+
+	// 地上の位置取り専用計算。Collider/BodyはこのUpdate中だけ借用し、姿勢や保存値は変更しない。
+	struct PositioningFootprint {
+		const SceneRuntimeObjectBinding* binding = nullptr;
+		Vector3 center{}, half{};
+		float radius = 0.0f, spacing = 0.0f;
+		bool enemy = false;
+	};
+
+	PositioningFootprint BuildPositioningFootprint(const SceneRuntimeObjectBinding& binding) {
+		PositioningFootprint result;
+		result.binding = &binding;
+		result.center = binding.collider->GetWorldCenter();
+		if (binding.collider->GetType() == Collider::Type::Sphere) {
+			const float radius = static_cast<const SphereCollider*>(binding.collider)->GetRadius();
+			result.half = { radius, radius, radius };
+			result.radius = radius;
+		} else {
+			const auto obb = static_cast<const OBBCollider*>(binding.collider)->GetOBB();
+			const float sizes[] = { obb.halfSize.x, obb.halfSize.y, obb.halfSize.z };
+			for (size_t i = 0; i < 3; ++i) {
+				result.half.x += std::abs(obb.axis[i].x) * sizes[i];
+				result.half.y += std::abs(obb.axis[i].y) * sizes[i];
+				result.half.z += std::abs(obb.axis[i].z) * sizes[i];
+			}
+			result.center = obb.center;
+			// AABBの対角ではyawで半径が膨らむため、実際の8頂点のXZ投影から外接円を取る。
+			for (unsigned corner = 0; corner < 8; ++corner) {
+				Vector3 offset{};
+				for (unsigned axis = 0; axis < 3; ++axis)
+					offset = AddScaled(offset, obb.axis[axis], sizes[axis] * ((corner & (1u << axis)) ? 1.0f : -1.0f));
+				result.radius = (std::max)(result.radius, std::sqrt(offset.x * offset.x + offset.z * offset.z));
+			}
+		}
+		result.enemy = FindEnabledComponent(*binding.entity, "EnemyBehavior") != nullptr;
+		return result;
+	}
+
+	float LengthXZ(const Vector3& value) { return std::sqrt(value.x * value.x + value.z * value.z); }
+	Vector3 XZDirection(const Vector3& value, const Vector3& fallback) {
+		const float length = LengthXZ(value);
+		return length > 0.0001f ? Vector3{value.x / length, 0.0f, value.z / length} : fallback;
+	}
+	float ClosestPathDistance(const Vector3& offset, const Vector3& displacement) {
+		const float denominator = displacement.x * displacement.x + displacement.z * displacement.z;
+		const float t = denominator > 0.000001f ? std::clamp(
+			-(offset.x * displacement.x + offset.z * displacement.z) / denominator, 0.0f, 1.0f) : 0.0f;
+		return LengthXZ(Math::Add(offset, Math::Multiply(displacement, t)));
+	}
+	bool PathHitsExpandedBox(const Vector3& origin, const Vector3& displacement,
+		const Vector3& center, const Vector3& half, float radius) {
+		float first = 0.0f, last = 1.0f;
+		const float offsets[] = {origin.x - center.x, origin.z - center.z};
+		const float deltas[] = {displacement.x, displacement.z};
+		const float sizes[] = {half.x + radius, half.z + radius};
+		const bool inside = std::abs(offsets[0]) < sizes[0] && std::abs(offsets[1]) < sizes[1];
+		if (inside) {
+			const float before = (std::min)(sizes[0] - std::abs(offsets[0]), sizes[1] - std::abs(offsets[1]));
+			const float after = (std::min)(sizes[0] - std::abs(offsets[0] + deltas[0]), sizes[1] - std::abs(offsets[1] + deltas[1]));
+			return after >= before - 0.0001f; // 重なって開始した場合は外へ抜ける方向だけ許可する。
+		}
+		for (size_t i = 0; i < 2; ++i) {
+			if (std::abs(deltas[i]) < 0.000001f) { if (std::abs(offsets[i]) >= sizes[i]) return false; continue; }
+			float a = (-sizes[i] - offsets[i]) / deltas[i], b = (sizes[i] - offsets[i]) / deltas[i];
+			if (a > b) std::swap(a, b);
+			first = (std::max)(first, a); last = (std::min)(last, b);
+			if (first > last) return false;
+		}
+		return true;
+	}
+
+	std::vector<SceneEnemyPositioningResult> SolveEnemyPositioning(const SceneDocument& document,
+		const std::vector<SceneRuntimeObjectBinding>& bindings,
+		const std::vector<SceneEnemyPositioningRequest>& requests, float dt, const SceneMovementProbeSnapshot* snapshot) {
+		if (requests.empty()) return {};
+		std::vector<PositioningFootprint> footprints;
+		std::unordered_map<uint64_t, size_t> indices;
+		std::unordered_map<uint64_t, const SceneEnemyPositioningRequest*> requestById;
+		for (const auto& request : requests) requestById.emplace(request.entityId, &request);
+		for (const auto& binding : bindings) {
+			if (!binding.entity || !binding.collider || !binding.collider->IsActive() || binding.collider->IsTrigger() ||
+				!IsEntityActiveInHierarchy(document, *binding.entity)) continue;
+			auto footprint = BuildPositioningFootprint(binding);
+			if (!std::isfinite(footprint.radius) || footprint.radius <= 0.0f || !std::isfinite(footprint.half.y) ||
+				!std::isfinite(footprint.center.x) || !std::isfinite(footprint.center.y) || !std::isfinite(footprint.center.z)) continue;
+			const auto individual = requestById.find(binding.entityId);
+			if (individual != requestById.end()) footprint.spacing = individual->second->status.spacing;
+			indices.emplace(binding.entityId, footprints.size());
+			footprints.push_back(footprint);
+		}
+		std::vector<SceneEnemyPositioningResult> results;
+		for (const auto& request : requests) {
+			SceneEnemyPositioningResult result{request.entityId, request.status, {}, (std::max)(0.0f, request.orbitHold - dt)};
+			result.status.noSafePositioningCandidate = false;
+			const bool probeCurrent = snapshot && request.probeFrameToken && snapshot->frameToken == request.probeFrameToken &&
+				snapshot->contentGeneration == document.GetContentGeneration();
+			const auto intent = probeCurrent ? request.status.positioningIntent : SceneEnemyPositioningIntent::KeepSpacing;
+			result.status.positioningIntent = intent;
+			if (!request.canMove) {
+				if (result.status.phase != SceneEnemyPositioningPhase::Suppressed) result.status.phase = SceneEnemyPositioningPhase::Waiting;
+				results.push_back(result); continue;
+			}
+			const auto selfIndex = indices.find(request.entityId), targetIndex = indices.find(request.targetId);
+			if (selfIndex == indices.end() || targetIndex == indices.end()) {
+				result.status.phase = SceneEnemyPositioningPhase::Invalid; results.push_back(result); continue;
+			}
+			const auto& self = footprints[selfIndex->second]; const auto& target = footprints[targetIndex->second];
+			const auto* behavior = FindEnabledComponent(*self.binding->entity, "EnemyBehavior");
+			if (!behavior || !request.settings.IsValid(behavior->enemyMoveSpeed) ||
+				!self.binding->body || self.binding->body->type != PhysicsBodyType::Dynamic ||
+				!std::isfinite(result.status.distance) || !std::isfinite(result.status.spacing) || !std::isfinite(result.status.speed) ||
+				result.status.distance < 0.0f || result.status.spacing < 0.0f || result.status.speed < 0.0f ||
+				!std::isfinite(request.settings.acceleration) || request.settings.acceleration <= 0.0f) {
+				result.status.phase = SceneEnemyPositioningPhase::Invalid; results.push_back(result); continue;
+			}
+			const Vector3 toTarget = Math::Subtract(target.center, self.center);
+			const Vector3 forward = XZDirection(toTarget, {0.0f, 0.0f, 1.0f});
+			const Vector3 tangent{-forward.z, 0.0f, forward.x};
+			const float gap = LengthXZ(toTarget) - self.radius - target.radius;
+			const float error = gap - result.status.distance;
+			// 停止帯へ入った後の移動再開に0.2の幅を設ける。許容帯外では内縁まで減速する。
+			const bool wasHolding = request.status.phase == SceneEnemyPositioningPhase::Holding ||
+				request.status.phase == SceneEnemyPositioningPhase::Orbiting || request.status.phase == SceneEnemyPositioningPhase::Blocked;
+			const float threshold = request.settings.tolerance + (wasHolding ? 0.2f : 0.0f);
+			const int radial = error > threshold ? 1 : error < -threshold ? -1 : 0;
+			const float radialSpeed = result.status.speed * (radial < 0 ? request.settings.retreatRatio : 1.0f) *
+				std::clamp(std::abs(error) - request.settings.tolerance, 0.0f, 1.0f);
+			Vector3 desired = Math::Multiply(forward, static_cast<float>(radial) * radialSpeed);
+			std::vector<std::pair<float, size_t>> neighbors;
+			for (size_t i = 0; i < footprints.size(); ++i) {
+				const auto& other = footprints[i];
+				if (!other.enemy || other.binding->entityId == request.entityId || other.binding->entityId == request.targetId) continue;
+				if (std::abs(other.center.y - self.center.y) >= self.half.y + other.half.y) continue;
+				neighbors.emplace_back(LengthXZ(Math::Subtract(self.center, other.center)), i);
+			}
+			std::sort(neighbors.begin(), neighbors.end(), [&](const auto& a, const auto& b) {
+				return a.first != b.first ? a.first < b.first : footprints[a.second].binding->entityId < footprints[b.second].binding->entityId;
+			});
+			if (neighbors.size() > 12) neighbors.resize(12);
+			Vector3 away{}; bool crowded = false;
+			for (const auto& neighbor : neighbors) {
+				const auto& other = footprints[neighbor.second];
+				const float wanted = self.radius + other.radius + (result.status.spacing + other.spacing) * 0.5f;
+				if (neighbor.first >= wanted) continue;
+				crowded = true;
+				const Vector3 fallback = self.binding->entityId < other.binding->entityId ? tangent : Math::Multiply(tangent, -1.0f);
+				away = AddScaled(away, XZDirection(Math::Subtract(self.center, other.center), fallback), wanted - neighbor.first);
+			}
+			const float horizon = (std::max)(dt, 0.35f);
+			if (intent == SceneEnemyPositioningIntent::ApproachForAttack && request.status.contactDistanceValid) {
+				// 希望距離の停止帯にいても、攻撃距離が不足するなら接近候補を用意する。
+				const float missing = (std::max)(0.0f, request.status.contactDistance - request.status.startDistanceLimit);
+				desired = Math::Multiply(forward, (std::min)(result.status.speed, missing / horizon));
+			}
+			auto safeVelocity = [&](const Vector3& velocity) {
+				const Vector3 displacement = Math::Multiply(velocity, horizon);
+				const Vector3 targetOffset = Math::Subtract(self.center, target.center);
+				const float beforeTarget = LengthXZ(targetOffset);
+				const float physicalTarget = self.radius + target.radius;
+				if (ClosestPathDistance(targetOffset, displacement) < (std::min)(beforeTarget, physicalTarget) - 0.0001f) return false;
+				for (const auto& neighbor : neighbors) {
+					const auto& other = footprints[neighbor.second];
+					const float wanted = self.radius + other.radius + (result.status.spacing + other.spacing) * 0.5f;
+					const Vector3 offset = Math::Subtract(self.center, other.center);
+					if (ClosestPathDistance(offset, displacement) < (std::min)(neighbor.first, wanted) - 0.0001f) return false;
+				}
+				for (const auto& obstacle : footprints) {
+					if (obstacle.binding == self.binding || obstacle.enemy || obstacle.binding == target.binding ||
+						(obstacle.binding->body && obstacle.binding->body->type == PhysicsBodyType::Dynamic) ||
+						!self.binding->collider->CanCollideWith(*obstacle.binding->collider)) continue;
+					// 足元の床と頭上の天井はXZ進路障害から除く。実際の接地はPhysicsが担当。
+					if (obstacle.center.y + obstacle.half.y <= self.center.y - self.half.y + 0.05f ||
+						obstacle.center.y - obstacle.half.y >= self.center.y + self.half.y - 0.05f) continue;
+					if (PathHitsExpandedBox(self.center, displacement, obstacle.center, obstacle.half, self.radius)) return false;
+				}
+				return true;
+			};
+			const float orbitSpeed = result.status.speed * request.settings.orbitRatio;
+			const Vector3 left = Math::Multiply(tangent, orbitSpeed * static_cast<float>(result.status.orbitSide));
+			std::vector<Vector3> candidates{desired};
+			if (radial != 0 || crowded || intent != SceneEnemyPositioningIntent::KeepSpacing) {
+				candidates.push_back(Math::Add(desired, left)); candidates.push_back(left);
+				if (result.orbitHold <= 0.0f || !safeVelocity(left)) {
+					candidates.push_back(Math::Subtract(desired, left)); candidates.push_back(Math::Multiply(left, -1.0f));
+				}
+				if (LengthXZ(away) > 0.0001f) candidates.push_back(Math::Multiply(XZDirection(away, tangent), result.status.speed));
+			}
+			candidates.push_back({});
+			float bestScore = -1.0e30f, bestMissing = 0.0f; Vector3 best{};
+			int bestAttackRank = -1;
+			for (Vector3 candidate : candidates) {
+				candidate = ClampVectorLength(candidate, result.status.speed);
+				candidate = MoveVectorToward(request.previousVelocity, candidate, request.settings.acceleration * dt);
+				if (self.binding->body->freezePositionX) candidate.x = 0.0f;
+				if (self.binding->body->freezePositionZ) candidate.z = 0.0f;
+				if (!safeVelocity(candidate)) continue;
+				const Vector3 displacement = Math::Multiply(candidate, horizon);
+				const Vector3 endpoint = Math::Add(self.center, displacement);
+				float score = -std::abs(LengthXZ(Math::Subtract(target.center, endpoint)) - self.radius - target.radius - result.status.distance);
+				for (const auto& neighbor : neighbors) {
+					const auto& other = footprints[neighbor.second];
+					const float wanted = self.radius + other.radius + (result.status.spacing + other.spacing) * 0.5f;
+					score -= 4.0f * (std::max)(0.0f, wanted - LengthXZ(Math::Subtract(endpoint, other.center)));
+				}
+				if (!std::isfinite(score)) continue;
+				int attackRank = 0; float missing = 0.0f;
+				if (intent != SceneEnemyPositioningIntent::KeepSpacing) {
+					// 候補は形状コピーへ並進するだけ。時計/実Object/攻撃段階を変更しない。
+					const auto route = ScenePhysicsSystem::ProbeTargetApproach(*snapshot, request.entityId, request.targetId, displacement);
+					if (route.issue != SceneMovementProbeIssue::None) continue;
+					const bool inRange = route.contactDistance <= request.status.startDistanceLimit;
+					const bool sideways = std::abs(candidate.x * tangent.x + candidate.z * tangent.z) > 0.001f;
+					if (intent == SceneEnemyPositioningIntent::ApproachForAttack) {
+						missing = (std::max)(0.0f, route.contactDistance - request.status.startDistanceLimit);
+						attackRank = inRange ? 3 : route.contactDistance < request.status.contactDistance - 0.0001f ? 2 : sideways ? 1 : 0;
+					} else {
+						// 通路が空く候補を最優先。全部塞がれていても安全な横移動を停止より先に試す。
+						attackRank = inRange && !route.blocked ? 3 : sideways ? 2 : LengthXZ(candidate) > 0.001f ? 1 : 0;
+					}
+				}
+				const bool sameRank = attackRank == bestAttackRank;
+				const bool betterDistance = intent == SceneEnemyPositioningIntent::ApproachForAttack && missing < bestMissing - 0.0001f;
+				const bool sameDistance = intent != SceneEnemyPositioningIntent::ApproachForAttack || std::abs(missing - bestMissing) <= 0.0001f;
+				// 同順位なら既存の距離/離隔評価と候補順を使い、保持中の左右を不要に反転させない。
+				const bool better = intent == SceneEnemyPositioningIntent::KeepSpacing ? score > bestScore + 0.0001f :
+					attackRank > bestAttackRank || (sameRank && (betterDistance || (sameDistance && score > bestScore + 0.0001f)));
+				if (better) {
+					bestAttackRank = attackRank; bestMissing = missing; bestScore = score; best = candidate;
+				}
+			}
+			// 安全な減速候補すらない場合は即停止。加減速より非侵入を優先する。
+			result.velocity = best;
+			result.status.noSafePositioningCandidate = intent != SceneEnemyPositioningIntent::KeepSpacing && LengthXZ(best) < 0.001f;
+			const float sideMotion = best.x * tangent.x + best.z * tangent.z;
+			if (std::abs(sideMotion) > 0.001f) {
+				const int side = sideMotion < 0.0f ? -1 : 1;
+				if (result.orbitHold <= 0.0f || side != result.status.orbitSide) result.orbitHold = 0.75f;
+				result.status.orbitSide = side; result.status.phase = SceneEnemyPositioningPhase::Orbiting;
+			} else if (LengthXZ(best) < 0.001f) result.status.phase = radial == 0 && !crowded && intent == SceneEnemyPositioningIntent::KeepSpacing ? SceneEnemyPositioningPhase::Holding : SceneEnemyPositioningPhase::Blocked;
+			else result.status.phase = intent != SceneEnemyPositioningIntent::KeepSpacing ?
+				(Math::Dot(best, forward) < 0 ? SceneEnemyPositioningPhase::Retreating : SceneEnemyPositioningPhase::Approaching) :
+				(radial < 0 ? SceneEnemyPositioningPhase::Retreating : SceneEnemyPositioningPhase::Approaching);
+			results.push_back(result);
+		}
+		return results;
+	}
+
 }
 
 void SceneAgentSystem::Update(
 	SceneDocument& document,
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
-	float deltaTime
+	float deltaTime,
+	const std::vector<SceneEnemyPositioningRequest>& positioningRequests,
+	const SceneMovementProbeSnapshot* snapshot
 ) {
 	struct AgentUpdateEntry {
 		SceneEntity* entity = nullptr;
@@ -370,9 +619,21 @@ void SceneAgentSystem::Update(
 		std::string crowdKey;
 	};
 
+	positioningResults_.clear();
 	const float dt = std::clamp(deltaTime, 0.0f, 0.1f);
 	if (dt <= 0.0f) {
 		return;
+	}
+
+	positioningResults_ = SolveEnemyPositioning(document, bindings, positioningRequests, (std::min)(dt, 1.0f / 15.0f), snapshot);
+	std::unordered_set<uint64_t> positioningIds;
+	for (const auto& request : positioningRequests) positioningIds.insert(request.entityId);
+	// 全員の候補を同じ位置snapshotで決めた後に速度を書き込む。
+	for (const auto& result : positioningResults_) for (const auto& binding : bindings) {
+		if (binding.entityId == result.entityId && binding.body) {
+			binding.body->velocity.x = result.velocity.x; binding.body->velocity.z = result.velocity.z;
+			break;
+		}
 	}
 
 	// 実行対象だけを収集し、削除済みEntityのランタイム状態を後段で破棄する。
@@ -384,6 +645,7 @@ void SceneAgentSystem::Update(
 			continue;
 		}
 		SceneEntity& entity = *binding.entity;
+		if (positioningIds.contains(entity.id)) continue;
 		if (!IsEntityActiveInHierarchy(document, entity)) {
 			continue;
 		}
@@ -1468,6 +1730,7 @@ void SceneAgentSystem::Update(
 
 
 void SceneAgentSystem::Clear() {
+	positioningResults_.clear();
 	agentRuntimes_.clear();
 	teamRuntimes_.clear();
 }

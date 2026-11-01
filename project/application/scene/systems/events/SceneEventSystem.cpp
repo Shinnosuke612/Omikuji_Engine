@@ -1,5 +1,6 @@
 // 役割: 汎用Trigger/Actionをゲーム進行要求へ変換する。
 #include "SceneEventSystem.h"
+#include "../gameplay/combat/SceneCombatSystem.h"
 
 #include "../gameplay/combat/SceneStatSystem.h"
 #include "../gameplay/state/SceneStateMachineSystem.h"
@@ -181,13 +182,17 @@ namespace {
 SceneEventResult SceneEventSystem::Update(
 	SceneDocument& document,
 	SceneStatSystem& statSystem,
+	SceneHealthSystem& healthSystem,
+	SceneDeathResponseSystem& deathSystem,
 	SceneStateMachineSystem& stateMachineSystem,
 	float deltaTime,
 	const SceneEventRuntimeSignals& signals,
 	const std::unordered_set<uint64_t>& blockedEntityIds,
-	bool acceptGameplayInput
+	bool acceptGameplayInput,
+	bool evaluateGameplay
 ) {
 	SceneEventResult result{};
+	if (deathSystem.IsDefeated()) return result;
 	struct QueuedAction {
 		uint64_t ownerEntityId = 0;
 		SceneEventAction action{};
@@ -196,7 +201,7 @@ SceneEventResult SceneEventSystem::Update(
 	std::unordered_set<uint64_t> requiredEntities;
 
 	for (const SceneEntity& entity : document.GetEntities()) {
-		if (blockedEntityIds.contains(entity.id)) { requiredEntities.insert(entity.id); continue; }
+		if (blockedEntityIds.contains(entity.id) || deathSystem.IsBlocked(entity.id)) { requiredEntities.insert(entity.id); continue; }
 		if (!SceneEntityQuery::IsEntityActiveInHierarchy(document, entity)) {
 			continue;
 		}
@@ -207,7 +212,8 @@ SceneEventResult SceneEventSystem::Update(
 		}
 		requiredEntities.insert(entity.id);
 		auto& states = runtimes_[entity.id];
-		states.resize(eventComponent->eventBindings.size());
+		if (evaluateGameplay || states.size() < eventComponent->eventBindings.size())
+			states.resize(eventComponent->eventBindings.size());
 		for (size_t index = 0;
 			index < eventComponent->eventBindings.size();
 			++index) {
@@ -217,8 +223,9 @@ SceneEventResult SceneEventSystem::Update(
 			if (binding.executionDomain != "Gameplay") {
 				continue;
 			}
+			if (!evaluateGameplay && binding.triggerType != "OnGameFlowStarted") continue;
 			BindingRuntime& state = states[index];
-			state.cooldown = (std::max)(state.cooldown - deltaTime, 0.0f);
+			state.cooldown = (std::max)(state.cooldown - (evaluateGameplay ? deltaTime : 0.0f), 0.0f);
 			SceneEntity* target = ResolveEntity(
 				document,
 				binding.targetEntityId,
@@ -227,12 +234,59 @@ SceneEventResult SceneEventSystem::Update(
 			);
 			bool condition = false;
 			bool shouldFire = false;
-			if (binding.triggerType == "OnStart") {
+			if (binding.triggerType == "OnGameFlowStarted") {
+				// 明示IDはfallbackしない。名前だけの参照は一意な場合だけ受け取る。
+				target = binding.targetEntityId || !binding.targetEntityName.empty()
+					? ResolvePresentationOwner(document, binding.targetEntityId, binding.targetEntityName)
+					: document.FindEntity(entity.id);
+				condition = target && target->id == signals.startedDirectorEntityId &&
+					signals.startedDocumentGeneration == document.GetContentGeneration() &&
+					SceneEntityQuery::IsEntityActiveInHierarchy(document, *target) &&
+					SceneEntityQuery::FindEnabledComponent(*target, "GameFlowDirector");
+				shouldFire = condition;
+			} else if (binding.triggerType == "OnStart") {
 				shouldFire = !state.initialized;
 				condition = true;
 			} else if (binding.triggerType == "OnInterval") {
 				condition = true;
 				shouldFire = !state.initialized || state.cooldown <= 0.0f;
+			} else if (binding.triggerType == "OnHealthDamaged") {
+				target = binding.targetEntityId || !binding.targetEntityName.empty()
+					? ResolvePresentationOwner(document, binding.targetEntityId, binding.targetEntityName) : document.FindEntity(entity.id);
+				const uint64_t targetId = target ? target->id : 0;
+				const uint64_t revision = healthSystem.DamageRevision(targetId);
+				// 初回評価前の実被弾も通知する。初期化revision=0は通知しない。
+				const bool retargeted = state.initialized && state.healthTarget != targetId;
+				shouldFire = !retargeted && target && !blockedEntityIds.contains(targetId) &&
+					SceneEntityQuery::IsEntityActiveInHierarchy(document, *target) &&
+					SceneEntityQuery::FindEnabledComponent(*target, "Health") &&
+					revision != 0 && revision != state.healthRevision;
+				condition = shouldFire;
+				// cooldown中も観測済みにする。通知を後で再送しない。
+				state.healthRevision = revision;
+				state.healthTarget = targetId;
+			} else if (binding.triggerType == "OnFlagChanged" || binding.triggerType == "OnFlagCompare") {
+				// 新しい型付き参照は壊れたIDや同名候補へfallbackしない。
+				target = binding.targetEntityId || !binding.targetEntityName.empty()
+					? ResolvePresentationOwner(document, binding.targetEntityId, binding.targetEntityName) : document.FindEntity(entity.id);
+				bool value = false;
+				uint64_t revision = 0;
+				const bool found = target && statSystem.TryGetFlag(target->id, binding.flagId, value, &revision);
+				const bool retargeted = state.initialized &&
+					(state.flagTarget != (target ? target->id : 0) || state.flagId != binding.flagId);
+				if (retargeted) { state.flagRevision = revision; state.wasConditionTrue = false; }
+				if (binding.triggerType == "OnFlagChanged") {
+					// 全条件を評価してからActionを適用する既存順序を維持。
+					// 最初の観測を基準にし、複数変更は次の評価で一回にまとめる。
+					shouldFire = state.initialized && found && revision != 0 && revision != state.flagRevision;
+					condition = shouldFire;
+				} else {
+					condition = found && value == binding.flagValue;
+					shouldFire = condition && !state.wasConditionTrue;
+				}
+				state.flagRevision = revision;
+				state.flagTarget = target ? target->id : 0;
+				state.flagId = binding.flagId;
 			} else if (binding.triggerType == "OnStatReachedMin") {
 				condition = target && statSystem.IsAtMin(target->id, binding.statId);
 				shouldFire = condition && !state.wasConditionTrue;
@@ -258,8 +312,9 @@ SceneEventResult SceneEventSystem::Update(
 			} else if (binding.triggerType == "OnKeyPressed") {
 				if (!acceptGameplayInput) continue;
 				Input* input = Input::GetInstance();
-				const BYTE key = ResolveSceneInputKey(binding.triggerKey);
-				condition = input && key != 0 && input->TriggerKey(key);
+				const auto keys = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+				condition = input && std::any_of(keys.begin(), keys.end(),
+					[input](BYTE key) { return input->TriggerKey(key); });
 				shouldFire = condition;
 			} else if (binding.triggerType == "OnCameraPathCompleted") {
 				condition =
@@ -324,7 +379,7 @@ SceneEventResult SceneEventSystem::Update(
 		}
 	}
 
-	for (auto iterator = runtimes_.begin(); iterator != runtimes_.end();) {
+	for (auto iterator = runtimes_.begin(); evaluateGameplay && iterator != runtimes_.end();) {
 		if (!requiredEntities.contains(iterator->first)) {
 			iterator = runtimes_.erase(iterator);
 		} else {
@@ -333,6 +388,9 @@ SceneEventResult SceneEventSystem::Update(
 	}
 
 	for (const QueuedAction& queued : queuedActions) {
+		deathSystem.Observe(document, statSystem);
+		if (deathSystem.IsDefeated()) break;
+		if (deathSystem.IsBlocked(queued.ownerEntityId)) continue;
 		const SceneEventAction& action = queued.action;
 		SceneEntity* target = ResolveEntity(
 			document,
@@ -340,10 +398,28 @@ SceneEventResult SceneEventSystem::Update(
 			action.targetEntityName,
 			queued.ownerEntityId
 		);
+		// 終了はEntity操作ではないため、以前のActionに残った参照には依存しない。
+		if (action.type == "ExitGame") target = nullptr;
+		if (target && action.type == "SetFlag" && !action.flagValue && statSystem.IsManagedFlag(target->id, action.flagId)) {
+			if (!statSystem.SetFlag(target->id, action.flagId, false)) { result.deathDiagnostic = "DeathResponse:ManagedWrite"; result.deathDiagnosticEntityId = target->id; }
+			continue;
+		}
+		if (target && deathSystem.IsBlocked(target->id)) continue;
 		// 外部Eventから出現中branchへ書かない。明示取消だけは次のSpawner検証へ渡す。
 		if (target && blockedEntityIds.contains(target->id) && !(action.type == "SetEntityActive" && !action.active)) continue;
 		if (action.type == "OpenMenu" || action.type == "PauseGame") {
 			result.menuRequests.push_back({{}, queued.ownerEntityId, action});
+		} else if (action.type == "ApplyDamage") {
+			target = action.targetEntityId || !action.targetEntityName.empty()
+				? ResolvePresentationOwner(document, action.targetEntityId, action.targetEntityName) : document.FindEntity(queued.ownerEntityId);
+			if (target) healthSystem.ApplyDamage(document, statSystem, target->id, action.value, blockedEntityIds);
+		} else if (action.type == "SetFlag") {
+			target = action.targetEntityId || !action.targetEntityName.empty()
+				? ResolvePresentationOwner(document, action.targetEntityId, action.targetEntityName) : document.FindEntity(queued.ownerEntityId);
+			if (target && !blockedEntityIds.contains(target->id) &&
+				SceneEntityQuery::IsEntityActiveInHierarchy(document, *target) &&
+				SceneEntityQuery::FindEnabledComponent(*target, "StatSet"))
+				statSystem.SetFlag(target->id, action.flagId, action.flagValue);
 		} else if (action.type == "ModifyStat") {
 			if (target) {
 				statSystem.Modify(
@@ -387,12 +463,14 @@ SceneEventResult SceneEventSystem::Update(
 			if (target) {
 				stateMachineSystem.RequestState(target->id, action.stateName);
 			}
-		} else if (action.type == "RestartScene" && result.sceneTransitionId.empty()) {
-			// 遷移と再起動のうち先に並んだ要求だけを採用し、Scene操作を二重予約しない。
+		} else if (action.type == "ExitGame" && !result.restartSceneRequested && result.sceneTransitionId.empty()) {
+			result.exitGameRequested = true;
+		} else if (action.type == "RestartScene" && !result.exitGameRequested && result.sceneTransitionId.empty()) {
+			// 終了・遷移・再起動のうち先に並んだ要求だけを採用し、二重予約しない。
 			result.restartSceneRequested = true;
 		} else if (
 			action.type == "SceneTransition" &&
-			!result.restartSceneRequested && result.sceneTransitionId.empty()
+			!result.exitGameRequested && !result.restartSceneRequested && result.sceneTransitionId.empty()
 		) {
 			result.sceneTransitionId = action.sceneId;
 			result.transitionAssetPath = action.transitionAssetPath;
@@ -488,7 +566,7 @@ SceneEventResult SceneEventSystem::Update(
 			});
 		}
 	}
-	if (result.restartSceneRequested || !result.sceneTransitionId.empty()) {
+	if (deathSystem.IsDefeated() || result.restartSceneRequested || !result.sceneTransitionId.empty()) {
 		result.menuRequests.clear();
 		result.postProcessRequest.type = ScenePostProcessRequestType::None;
 		result.cameraRequests.clear();
@@ -496,6 +574,7 @@ SceneEventResult SceneEventSystem::Update(
 		result.textMotionRequests.clear();
 		result.presentationRequests.clear();
 	}
+	deathSystem.Observe(document, statSystem);
 	return result;
 }
 
@@ -523,7 +602,7 @@ namespace {
 	}
 	bool KnownUiAction(const std::string& type) {
 		for (const char* name : {"OpenMenu", "CloseMenu", "SelectPreviousMenuItem", "SelectNextMenuItem", "ConfirmMenuItem", "CancelMenu",
-			"SceneTransition", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio", "PlayTextMotion", "StopTextMotion", "ResetTextMotion",
+			"SceneTransition", "ExitGame", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio", "PlayTextMotion", "StopTextMotion", "ResetTextMotion",
 			"PauseGame", "ResumeGame", "RequestApplicationExit"}) if (type == name) return true;
 		return false;
 	}
@@ -544,10 +623,38 @@ SceneEventSystem::BindingRuntime& SceneEventSystem::UiBindingState(uint64_t owne
 	std::ostringstream signature;
 	signature << std::setprecision(std::numeric_limits<float>::max_digits10) << b.executionDomain << '|' << b.uiInputScope << '|' <<
 		b.triggerType << '|' << b.triggerKey << '|' << b.targetEntityId << '|' << b.triggerOnce << '|' << b.cooldown;
+	// 長さを含め、無効な手編集値でもキー列の境界がsignature上で衝突しないようにする。
+	for (const auto& key : b.additionalTriggerKeys) signature << '|' << key.size() << ':' << key;
 	for (const auto& a : b.actions) signature << '|' << a.type << ':' << a.targetEntityId << ':' << a.targetEntityName << ':' << a.sceneId << ':' << a.transitionAssetPath << ':' << a.textMotionClipId;
 	if (signatures[index] != signature.str()) { states[index] = {}; signatures[index] = signature.str(); }
 	return states[index];
 }
+std::vector<SceneUiActionRequest> SceneEventSystem::EvaluateReplayCompletion(const SceneDocument& document,
+    const SceneMenuSource& source, const SceneReplayPresentationToken& completion, std::string& diagnostic) const {
+    std::vector<SceneUiActionRequest> result;
+    diagnostic.clear();
+    if (!completion.deathSerial || completion.instance != source.instanceId || completion.generation != document.GetContentGeneration()) return result;
+    for (const auto& owner : document.GetEntities()) {
+        if (!UiOwnerActive(document, owner)) continue;
+        const auto* events = SceneEntityQuery::FindEnabledComponent(owner, "EventTrigger");
+        if (!events) continue;
+        for (const auto& binding : events->eventBindings) {
+            if (binding.executionDomain != "UI" || binding.triggerType != "OnDeathReplayCompleted" ||
+                (binding.targetEntityId ? binding.targetEntityId : owner.id) != completion.owner) continue;
+            if (!binding.targetEntityName.empty() || binding.actions.size() != 1 || binding.actions.front().type != "OpenMenu" ||
+                !binding.actions.front().targetEntityName.empty() || !binding.actions.front().targetEntityId) {
+                diagnostic = "MenuRuntime:ReplayBinding"; return {};
+            }
+            SceneUiActionRequest request;
+            request.source=source; request.ownerEntityId=owner.id; request.action=binding.actions.front();
+            request.origin=SceneUiActionRequest::Origin::ReplayCompletion; request.replayCompletion=completion;
+            result.push_back(std::move(request));
+        }
+    }
+    if (result.size()>1) { diagnostic="MenuRuntime:ReplayAmbiguous"; return {}; }
+    return result;
+}
+
 std::vector<SceneUiActionRequest> SceneEventSystem::EvaluateUiInput(const SceneDocument& document,
 	const SceneMenuFrame& frame, float deltaTime, bool allowed) {
 	std::vector<SceneUiActionRequest> result;
@@ -556,8 +663,12 @@ std::vector<SceneUiActionRequest> SceneEventSystem::EvaluateUiInput(const SceneD
 	menuGeneration_ = frame.generation; menuInstance_ = frame.instanceId;
 	const auto* panelOwner = document.FindEntity(frame.panelId);
 	const auto* panel = panelOwner ? SceneEntityQuery::FindEnabledComponent(*panelOwner, "MenuPanel") : nullptr;
-	const std::string inputSignature = std::to_string(frame.panelId) + ":" + std::to_string(frame.openSerial) +
+	std::string inputSignature = std::to_string(frame.panelId) + ":" + std::to_string(frame.openSerial) +
 		(panel ? panel->menuInputMode + ":" + panel->menuNavigationAxis : "");
+	if (panel) for (const auto* group : panel->MenuStandardKeyGroups()) {
+		inputSignature += "|";
+		for (const auto& key : *group) inputSignature += std::to_string(key.size()) + ":" + key;
+	}
 	if (menuInputSignature_ != inputSignature) { RearmMenuKeys(); menuInputSignature_ = inputSignature; }
 	if (!allowed) { RearmMenuKeys(); return result; }
 	Input* input = Input::GetInstance();
@@ -576,19 +687,24 @@ std::vector<SceneUiActionRequest> SceneEventSystem::EvaluateUiInput(const SceneD
 	// 合成候補も同じ押下snapshotと優先順位を通す。Documentのbindingには保存しない。
 	SceneComponent standardEvents("EventTrigger");
 	if (panel && panel->menuInputMode == "Standard" && UiOwnerActive(document, *panelOwner)) {
-		const bool horizontal = panel->menuNavigationAxis == "Horizontal";
-		const char* keys[] = {horizontal ? "LEFT" : "UP", horizontal ? "RIGHT" : "DOWN", "ENTER", "ESCAPE"};
+		const auto groups = panel->MenuStandardKeyGroups();
+		const auto activeGroups = MenuActiveKeyGroups(panel->menuNavigationAxis);
 		const char* actions[] = {"SelectPreviousMenuItem", "SelectNextMenuItem", "ConfirmMenuItem", "CancelMenu"};
 		for (size_t i = 0; i < 4; ++i) {
-			SceneEventBinding binding; binding.triggerKey = keys[i]; binding.triggerOnce = false;
+			const auto& keys = *groups[activeGroups[i]];
+			SceneEventBinding binding; binding.triggerKey = keys.empty() ? "" : keys.front(); binding.triggerOnce = false;
+			if (!keys.empty()) binding.additionalTriggerKeys.assign(keys.begin() + 1, keys.end());
 			SceneEventAction action; action.type = actions[i]; action.targetEntityId = frame.panelId;
 			binding.actions.push_back(action); standardEvents.eventBindings.push_back(binding);
 		}
 		for (size_t i = 0; i < standardEvents.eventBindings.size(); ++i) {
 			const auto& binding = standardEvents.eventBindings[i];
-			const BYTE key = ResolveSceneInputKey(binding.triggerKey);
-			seenKeys.insert(key); // 旧bindingに標準予約キーを横取りさせない。
-			if (!pressed[key]) continue;
+			bool triggered = false;
+			for (BYTE key : ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys)) {
+				seenKeys.insert(key); // 押されていない登録キーも標準操作が予約する。
+				triggered |= pressed[key];
+			}
+			if (!triggered) continue;
 			const int rank = UiPriority(binding); priority = (std::max)(priority, rank);
 			candidates.push_back({frame.panelId, i, &standardEvents, rank, true});
 		}
@@ -608,11 +724,18 @@ std::vector<SceneUiActionRequest> SceneEventSystem::EvaluateUiInput(const SceneD
 				const bool focused = action.type == "CloseMenu" || action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" || action.type == "ConfirmMenuItem" || action.type == "CancelMenu";
 				return !focused || (frame.panelId && action.targetEntityId == frame.panelId);
 			});
-			const BYTE key = ResolveSceneInputKey(binding.triggerKey);
-			if (!supported || !key || !std::isfinite(binding.cooldown) || binding.cooldown < 0 || !seenKeys.insert(key).second) continue;
+			if (!supported || !std::isfinite(binding.cooldown) || binding.cooldown < 0) continue;
+			const auto keys = ResolveSceneInputKeys(binding.triggerKey, binding.additionalTriggerKeys);
+			bool available = false, triggered = false;
+			// 予約/先勝ちはキー単位。候補とcooldownはキー数によらずbinding一件で共有する。
+			for (BYTE key : keys) if (seenKeys.insert(key).second) {
+				available = true;
+				triggered |= pressed[key];
+			}
+			if (!available) continue;
 			auto& state = UiBindingState(owner.id, i, *events);
 			state.cooldown = (std::max)(0.0f, state.cooldown - elapsed);
-			if (!pressed[key] || state.cooldown > 0 || (binding.triggerOnce && state.fired)) continue;
+			if (!triggered || state.cooldown > 0 || (binding.triggerOnce && state.fired)) continue;
 			const int candidatePriority = UiPriority(binding);
 			priority = (std::max)(priority, candidatePriority);
 			candidates.push_back({owner.id, i, events, candidatePriority});
@@ -688,6 +811,39 @@ SceneMenuMove SceneEventSystem::EvaluateMenuInput(const SceneDocument& document,
 	for (const auto& request : EvaluateUiInput(document, frame, deltaTime, allowed)) {
 		result.previous |= request.action.type == "SelectPreviousMenuItem";
 		result.next |= request.action.type == "SelectNextMenuItem";
+	}
+	return result;
+}
+
+std::vector<SceneDeathAction> SceneEventSystem::EvaluateDeaths(const SceneDocument& document,
+	const std::vector<SceneDeathStarted>& pulses) const {
+	std::vector<SceneDeathAction> result;
+	for (const auto& pulse : pulses) {
+		if (pulse.generation != document.GetContentGeneration()) continue;
+		for (const auto& owner : document.GetEntities()) {
+			if (!SceneEntityQuery::IsEntityActiveInHierarchy(document, owner)) continue;
+			const auto* events = SceneEntityQuery::FindEnabledComponent(owner, "EventTrigger");
+			if (!events) continue;
+			for (const auto& binding : events->eventBindings) {
+				if (binding.executionDomain != "Death" || binding.triggerType != "OnDeathStarted") continue;
+				const uint64_t target = binding.targetEntityId ? binding.targetEntityId : owner.id;
+				if (target != pulse.owner) continue;
+				for (const auto& action : binding.actions)
+					if (action.type == "PlayAudio" || action.type == "PlayTextMotion" || action.type == "PlayPresentationClip")
+						{
+						SceneEventAction resolved = action;
+						if (!resolved.targetEntityId && !resolved.targetEntityName.empty()) {
+							for (const auto& target : document.GetEntities()) if (target.name == resolved.targetEntityName) {
+								if (resolved.targetEntityId) { resolved.targetEntityId = 0; break; }
+								resolved.targetEntityId = target.id;
+							}
+						}
+						// 遅延適用時に同名の別Entityへ再解決しない。未解決は受付失敗へ渡す。
+						resolved.targetEntityName.clear();
+						result.push_back({pulse.owner, std::move(resolved)});
+					}
+			}
+		}
 	}
 	return result;
 }
