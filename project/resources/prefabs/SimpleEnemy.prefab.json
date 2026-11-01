@@ -78,6 +78,7 @@
         },
         {
           "enabled": true,
+          "flags": [],
           "localId": 4,
           "stats": [
             {
@@ -113,14 +114,123 @@
           "attackRange": 2.299999952316284,
           "attackRecovery": 0.44999998807907104,
           "attackWindup": 0.25,
-          "detectionRange": 12.0,
+          "charge": {
+            "aimOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "aimSeconds": 0.4000000059604645,
+            "aimVariation": 0.10000000149011612,
+            "axis": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "backAngle": 15.0,
+            "chargeOffset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "cooldownSeconds": 1.0,
+            "cooldownVariation": 0.30000001192092896,
+            "distance": 16.0,
+            "firstWaitSeconds": 0.5,
+            "firstWaitVariation": 0.30000001192092896,
+            "forwardAngle": 25.0,
+            "leanSeconds": 0.10000000149011612,
+            "lockedSeconds": 0.25,
+            "lockedVariation": 0.05000000074505806,
+            "movementEasing": "EaseOut",
+            "pivot": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "poseEnabled": false,
+            "poseEntityId": 0,
+            "recoverySeconds": 0.5,
+            "returnSeconds": 0.25,
+            "speed": 10.0
+          },
+          "detectionRange": 60.0,
           "enabled": true,
           "healthStatId": "hp",
+          "interruption": {
+            "common": {
+              "combine": "Any",
+              "conditions": [
+                {
+                  "threshold": 3.0,
+                  "type": "HitCount"
+                }
+              ]
+            },
+            "countWindows": false,
+            "enabled": false,
+            "idleResetSeconds": 0.0,
+            "overrides": [
+              {
+                "enabled": false,
+                "rule": {
+                  "combine": "Any",
+                  "conditions": [
+                    {
+                      "threshold": 3.0,
+                      "type": "HitCount"
+                    }
+                  ]
+                }
+              },
+              {
+                "enabled": false,
+                "rule": {
+                  "combine": "Any",
+                  "conditions": [
+                    {
+                      "threshold": 3.0,
+                      "type": "HitCount"
+                    }
+                  ]
+                }
+              },
+              {
+                "enabled": false,
+                "rule": {
+                  "combine": "Any",
+                  "conditions": [
+                    {
+                      "threshold": 3.0,
+                      "type": "HitCount"
+                    }
+                  ]
+                }
+              }
+            ],
+            "phases": 7
+          },
           "localId": 6,
-          "loseRange": 18.0,
-          "moveSpeed": 3.0,
+          "loseRange": 60.0,
+          "moveSpeed": 6.0,
+          "movementMode": "PositioningCharge",
+          "positioning": {
+            "acceleration": 8.0,
+            "distance": 4.0,
+            "distanceVariation": 1.0,
+            "orbitRatio": 0.5,
+            "randomizeOnPlay": true,
+            "retreatRatio": 0.6000000238418579,
+            "seed": 1,
+            "spacing": 5.0,
+            "spacingVariation": 0.25,
+            "speedVariation": 0.15000000596046448,
+            "tolerance": 1.0,
+            "variation": true
+          },
           "targetEntityId": 0,
-          "targetEntityName": "Player",
+          "targetEntityName": "",
+          "targetMode": "AutoPlayer",
           "turnSpeed": 8.0,
           "type": "EnemyBehavior"
         },
@@ -685,6 +795,13 @@
     "boxBlurEnabled": false,
     "boxBlurKernelSize": 3,
     "boxBlurStrength": 1.0,
+    "chromaticAberrationCenter": [
+      0.5,
+      0.5
+    ],
+    "chromaticAberrationEnabled": false,
+    "chromaticAberrationFalloff": 1.5,
+    "chromaticAberrationIntensity": 0.003000000026077032,
     "depthOfFieldBlurStrength": 1.0,
     "depthOfFieldEnabled": false,
     "depthOfFieldFarStrength": 1.0,
@@ -707,6 +824,10 @@
     "gaussianBlurSigma": 1.0,
     "gaussianBlurStrength": 1.0,
     "grayscaleEnabled": false,
+    "motionBlurEnabled": false,
+    "motionBlurMaxRadius": 24.0,
+    "motionBlurSamples": 8,
+    "motionBlurStrength": 0.5,
     "noiseAmount": 0.25,
     "noiseAnimate": true,
     "noiseEnabled": false,
@@ -727,6 +848,8 @@
     "outlineSoftness": 0.05000000074505806,
     "outlineThickness": 1.0,
     "outlineThreshold": 0.10000000149011612,
+    "pixelationBlockSize": 4,
+    "pixelationEnabled": false,
     "radialBlurCenter": [
       0.5,
       0.5
@@ -762,5 +885,5 @@
   },
   "sceneName": "SimpleEnemy",
   "teams": [],
-  "version": 27
+  "version": 36
 }

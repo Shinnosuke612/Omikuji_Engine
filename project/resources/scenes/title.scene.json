@@ -438,6 +438,14 @@
                         1.2000000476837158,
                         2.0
                       ]
+                    },
+                    {
+                      "time": 4.0,
+                      "value": [
+                        0.0,
+                        -3.0256409645080566,
+                        2.0
+                      ]
                     }
                   ],
                   "property": "LocalPosition",
@@ -734,6 +742,29 @@
           "layoutMode": "CanvasItems",
           "localId": 1,
           "navigationAxis": "Vertical",
+          "standardInput": {
+            "cancelKeys": [
+              "ESCAPE"
+            ],
+            "confirmKeys": [
+              "ENTER",
+              "SPACE"
+            ],
+            "downKeys": [
+              "DOWN",
+              "S"
+            ],
+            "leftKeys": [
+              "LEFT"
+            ],
+            "rightKeys": [
+              "RIGHT"
+            ],
+            "upKeys": [
+              "UP",
+              "W"
+            ]
+          },
           "type": "MenuPanel"
         },
         {
@@ -746,6 +777,12 @@
           "renderSpace": "ScreenOverlay",
           "sortingOrder": 0,
           "type": "UICanvas"
+        },
+        {
+          "bindings": [],
+          "enabled": true,
+          "localId": 3,
+          "type": "EventTrigger"
         }
       ],
       "folder": false,
@@ -910,6 +947,8 @@
               "actions": [
                 {
                   "active": true,
+                  "flagId": "",
+                  "flagValue": false,
                   "postProcessManagerEntityId": 0,
                   "postProcessManagerEntityName": "",
                   "postProcessProfileId": "",
@@ -929,8 +968,11 @@
                   "value": 0.0
                 }
               ],
+              "additionalTriggerKeys": [],
               "cooldown": 0.0,
               "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
               "presentationClipName": "",
               "radius": 1.0,
               "statComparison": "LessOrEqual",
@@ -1110,6 +1152,61 @@
             0.0
           ],
           "wrapMode": "NoWrap"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 0,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "ExitGame",
+                  "value": 0.0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0.0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1.0,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0.0,
+              "targetEntityId": 19,
+              "targetEntityName": "",
+              "targetPosition": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
         }
       ],
       "folder": false,
@@ -1264,5 +1361,5 @@
   },
   "sceneName": "TITLE",
   "teams": [],
-  "version": 27
+  "version": 32
 }
