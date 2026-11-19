@@ -83,6 +83,17 @@ namespace {
 		});
 		return result;
 	}
+	// PauseもvisiblePanelIdsを参照するため一覧は変えず、描画側だけ開始位置を絞る。
+	size_t MenuPaintStart(const SceneDocument& document, const SceneMenuFrame& frame) {
+		size_t start = 0;
+		for (size_t i = 0; i < frame.visiblePanelIds.size(); ++i) {
+			const auto* entity = document.FindEntity(frame.visiblePanelIds[i]);
+			if (!entity) continue;
+			const auto* panel = SceneEntityQuery::FindEnabledComponent(*entity, "MenuPanel");
+			if (panel && panel->menuHideLowerPanels) start = i;
+		}
+		return start;
+	}
 	// 資源所有/行列/Panel内の描画順を通常UIと共有し、別の文字cacheを作らない。
 	void DrawGroups(const SceneDocument& document, const SceneObjectSystem& objects,
 		const SceneTextRenderSystem& texts, const std::vector<CanvasItems>& groups, bool editorView = false) {
@@ -116,13 +127,17 @@ void SceneUIRenderSystem::Draw(const SceneDocument& document, const SceneObjectS
 bool SceneUIRenderSystem::HasMenu(const SceneDocument& document, const SceneMenuFrame& frame) const {
 	if (!frame.panelId || frame.generation != document.GetContentGeneration() || frame.revision != document.GetRevision()) return false;
 	if (frame.visiblePanelIds.empty()) return !Collect(document, "ScreenOverlay", 0, nullptr, frame.panelId, &frame).empty();
-	return std::any_of(frame.visiblePanelIds.begin(), frame.visiblePanelIds.end(), [&](uint64_t id) { return !Collect(document, "ScreenOverlay", 0, nullptr, id, &frame).empty(); });
+	for (size_t i = MenuPaintStart(document, frame); i < frame.visiblePanelIds.size(); ++i) {
+		if (!Collect(document, "ScreenOverlay", 0, nullptr, frame.visiblePanelIds[i], &frame).empty()) return true;
+	}
+	return false;
 }
 void SceneUIRenderSystem::DrawMenu(const SceneDocument& document, const SceneObjectSystem& objects,
 	const SceneTextRenderSystem& texts, const SceneMenuFrame& frame) const {
 	if (!HasMenu(document, frame)) return;
 	if (frame.visiblePanelIds.empty()) DrawGroups(document, objects, texts, Collect(document, "ScreenOverlay", 0, nullptr, frame.panelId, &frame));
-	else for (uint64_t id : frame.visiblePanelIds) DrawGroups(document, objects, texts, Collect(document, "ScreenOverlay", 0, nullptr, id, &frame));
+	else for (size_t i = MenuPaintStart(document, frame); i < frame.visiblePanelIds.size(); ++i)
+		DrawGroups(document, objects, texts, Collect(document, "ScreenOverlay", 0, nullptr, frame.visiblePanelIds[i], &frame));
 }
 
 bool SceneUIRenderSystem::HasScreenOverlay(const SceneDocument& document) const {

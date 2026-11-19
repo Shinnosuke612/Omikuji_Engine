@@ -769,6 +769,8 @@ struct SceneComponent {
 	std::vector<SceneEventBinding> eventBindings;
 	// Menuは設定だけを保存し、開閉・選択・Pause理由はRuntime側が所有する。
 	bool menuInitiallyOpen = false;
+	// 下層の描画だけを抑止。開閉・選択・Pause状態は保持し、旧Sceneでは無効。
+	bool menuHideLowerPanels = false;
 	// 欠落時は旧構成を保持。Editorの標準構成操作だけが新方式を選ぶ。
 	std::string menuLayoutMode = "Hierarchical";
 	std::string menuInputMode = "Events";

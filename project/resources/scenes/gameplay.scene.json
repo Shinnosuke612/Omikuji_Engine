@@ -8502,7 +8502,7 @@
                   "prefabPath": "",
                   "prefabUseTargetTransform": true,
                   "presentationClipName": "",
-                  "sceneId": "gameplay",
+                  "sceneId": "title",
                   "statId": "",
                   "statOperation": "Add",
                   "stateName": "",
@@ -8514,7 +8514,9 @@
                   "value": 0.0
                 }
               ],
-              "additionalTriggerKeys": [],
+              "additionalTriggerKeys": [
+                "SPACE"
+              ],
               "cooldown": 0.0,
               "executionDomain": "Gameplay",
               "flagId": "",

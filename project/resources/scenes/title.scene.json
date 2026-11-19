@@ -737,6 +737,7 @@
           "inputMode": "Standard",
           "itemEntityIds": [
             18,
+            20,
             19
           ],
           "layoutMode": "CanvasItems",
@@ -1082,7 +1083,7 @@
           ],
           "position": [
             640.0,
-            405.0
+            450.0
           ],
           "rotation": 0.0,
           "scale": [
@@ -1252,6 +1253,6077 @@
           0.0,
           0.0,
           0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 0,
+          "localId": 1,
+          "selectedTextColor": [
+            0.9661017060279846,
+            0.8922077417373657,
+            0.0941540002822876,
+            1
+          ],
+          "selectedTextColorEnabled": true,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0,
+            0
+          ],
+          "textPadding": [
+            0,
+            0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 2,
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            640,
+            405
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            170,
+            45
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 3,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "クレジット",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 21,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "OpenMenu",
+                  "value": 0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0,
+              "targetEntityId": 20,
+              "targetEntityName": "",
+              "targetPosition": [
+                0,
+                0,
+                0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 20,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット",
+      "parentId": 17,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cancelItemEntityId": 0,
+          "cancelMode": "Close",
+          "enabled": true,
+          "initialItemEntityId": 43,
+          "initiallyOpen": false,
+          "inputMode": "Standard",
+          "itemEntityIds": [
+            43,
+            44
+          ],
+          "layoutMode": "CanvasItems",
+          "localId": 1,
+          "navigationAxis": "Vertical",
+          "standardInput": {
+            "cancelKeys": [
+              "ESCAPE"
+            ],
+            "confirmKeys": [
+              "ENTER",
+              "SPACE"
+            ],
+            "downKeys": [
+              "DOWN",
+              "S"
+            ],
+            "leftKeys": [
+              "LEFT"
+            ],
+            "rightKeys": [
+              "RIGHT"
+            ],
+            "upKeys": [
+              "UP",
+              "W"
+            ]
+          },
+          "type": "MenuPanel",
+          "hideLowerPanels": true
+        },
+        {
+          "enabled": true,
+          "localId": 2,
+          "referenceSize": [
+            1280,
+            720
+          ],
+          "renderSpace": "ScreenOverlay",
+          "sortingOrder": 10,
+          "type": "UICanvas"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 21,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 1/2",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cancelItemEntityId": 0,
+          "cancelMode": "Close",
+          "enabled": true,
+          "initialItemEntityId": 45,
+          "initiallyOpen": false,
+          "inputMode": "Standard",
+          "itemEntityIds": [
+            45
+          ],
+          "layoutMode": "CanvasItems",
+          "localId": 1,
+          "navigationAxis": "Vertical",
+          "standardInput": {
+            "cancelKeys": [
+              "ESCAPE"
+            ],
+            "confirmKeys": [
+              "ENTER",
+              "SPACE"
+            ],
+            "downKeys": [
+              "DOWN",
+              "S"
+            ],
+            "leftKeys": [
+              "LEFT"
+            ],
+            "rightKeys": [
+              "RIGHT"
+            ],
+            "upKeys": [
+              "UP",
+              "W"
+            ]
+          },
+          "type": "MenuPanel",
+          "hideLowerPanels": true
+        },
+        {
+          "enabled": true,
+          "localId": 2,
+          "referenceSize": [
+            1280,
+            720
+          ],
+          "renderSpace": "ScreenOverlay",
+          "sortingOrder": 10,
+          "type": "UICanvas"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 22,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 2/2",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            640,
+            360
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1280,
+            720
+          ],
+          "sortingOrder": -1,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0,
+            0,
+            0,
+            0.4
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            1280,
+            720
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 23,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 1/2 背景",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0,
+          0,
+          0,
+          0.4
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          1280,
+          720
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            32
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            48
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "クレジット  1 / 2  —  建物",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 24,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 1/2 見出し",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            108
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "モダンビル",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 25,
+      "locked": false,
+      "modelPath": "",
+      "name": "Modern Building",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            150
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：Blender Studio™ (@Blend_GUY)",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 26,
+      "locked": false,
+      "modelPath": "",
+      "name": "Modern Building 表記",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            220
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "アトランタのオフィスビル",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 27,
+      "locked": false,
+      "modelPath": "",
+      "name": "[FREE] Atlanta, Corperate Office Building",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            262
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：99.Miles",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 28,
+      "locked": false,
+      "modelPath": "",
+      "name": "[FREE] Atlanta, Corperate Office Building 表記",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            332
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "オフィスビル",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 29,
+      "locked": false,
+      "modelPath": "",
+      "name": "Modern Office Building",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            374
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：Bl4ckGh0st",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 30,
+      "locked": false,
+      "modelPath": "",
+      "name": "Modern Office Building 表記",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            444
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "オフィスビル2",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 31,
+      "locked": false,
+      "modelPath": "",
+      "name": "Modern Office Building 2",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            486
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：Bl4ckGh0st",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 32,
+      "locked": false,
+      "modelPath": "",
+      "name": "Modern Office Building 2 表記",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "position": [
+            640,
+            360
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1280,
+            720
+          ],
+          "sortingOrder": -1,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0,
+            0,
+            0,
+            0.4
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            1280,
+            720
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 33,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 2/2 背景",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0,
+          0,
+          0,
+          0.4
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          1280,
+          720
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            32
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            48
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "クレジット  2 / 2  —  配置物",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 34,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 2/2 見出し",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            108
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "自動販売機",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 35,
+      "locked": false,
+      "modelPath": "",
+      "name": "JPN vending machine",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            150
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：adenotoxin",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 36,
+      "locked": false,
+      "modelPath": "",
+      "name": "JPN vending machine 表記",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            220
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "室外機",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 37,
+      "locked": false,
+      "modelPath": "",
+      "name": "Air Conditioner 11",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            262
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：Prince Obrymec / Console Art Cybernetic",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 38,
+      "locked": false,
+      "modelPath": "",
+      "name": "Air Conditioner 11 表記",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            332
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "リサイクル用ごみ箱",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 39,
+      "locked": false,
+      "modelPath": "",
+      "name": "Recycle-Bin",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            374
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：gzezel",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 40,
+      "locked": false,
+      "modelPath": "",
+      "name": "Recycle-Bin 表記",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            444
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            448,
+            44
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "カラーコーン",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 41,
+      "locked": false,
+      "modelPath": "",
+      "name": "Traffic Cone 3D Model – PBR Textured",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            486
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            36
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "作者：KenVeel / Poligonik",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 42,
+      "locked": false,
+      "modelPath": "",
+      "name": "Traffic Cone 3D Model – PBR Textured 表記",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 0,
+          "localId": 1,
+          "selectedTextColor": [
+            0.9661017060279846,
+            0.8922077417373657,
+            0.0941540002822876,
+            1
+          ],
+          "selectedTextColorEnabled": true,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0,
+            0
+          ],
+          "textPadding": [
+            0,
+            0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 2,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            618
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            600,
+            40
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 3,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "次へ  ›  配置物",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 22,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "OpenMenu",
+                  "value": 0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0,
+              "targetEntityId": 43,
+              "targetEntityName": "",
+              "targetPosition": [
+                0,
+                0,
+                0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 43,
+      "locked": false,
+      "modelPath": "",
+      "name": "次へ  ›  配置物",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 0,
+          "localId": 1,
+          "selectedTextColor": [
+            0.9661017060279846,
+            0.8922077417373657,
+            0.0941540002822876,
+            1
+          ],
+          "selectedTextColorEnabled": true,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0,
+            0
+          ],
+          "textPadding": [
+            0,
+            0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 2,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            662
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            600,
+            40
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 3,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "タイトルに戻る",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 21,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "CloseMenu",
+                  "value": 0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0,
+              "targetEntityId": 44,
+              "targetEntityName": "",
+              "targetPosition": [
+                0,
+                0,
+                0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 44,
+      "locked": false,
+      "modelPath": "",
+      "name": "タイトルに戻る",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 0,
+          "localId": 1,
+          "selectedTextColor": [
+            0.9661017060279846,
+            0.8922077417373657,
+            0.0941540002822876,
+            1
+          ],
+          "selectedTextColorEnabled": true,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0,
+            0
+          ],
+          "textPadding": [
+            0,
+            0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 2,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            618
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            600,
+            40
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 24,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 3,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "前のページに戻る",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 22,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "CloseMenu",
+                  "value": 0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0,
+              "targetEntityId": 45,
+              "targetEntityName": "",
+              "targetPosition": [
+                0,
+                0,
+                0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 45,
+      "locked": false,
+      "modelPath": "",
+      "name": "前のページに戻る",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            560
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            48
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "配置・縮尺・回転を調整。モデルファイルは未改変。\n出典・利用条件の詳細：同梱の resources/CREDITS.txt",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 46,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 1/2 操作案内",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            560
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            48
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "配置・縮尺・回転を調整。モデルファイルは未改変。\n出典・利用条件の詳細：同梱の resources/CREDITS.txt",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 47,
+      "locked": false,
+      "modelPath": "",
+      "name": "クレジット 2/2 操作案内",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            118
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Modern Building",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 49,
+      "locked": false,
+      "modelPath": "",
+      "name": "モダンビル 原題",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            186
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Sketchfab Free Standard",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 50,
+      "locked": false,
+      "modelPath": "",
+      "name": "モダンビル ライセンス",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            230
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "[FREE] Atlanta, Corperate Office Building",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 51,
+      "locked": false,
+      "modelPath": "",
+      "name": "アトランタのオフィスビル 原題",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            298
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "CC BY 4.0",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 52,
+      "locked": false,
+      "modelPath": "",
+      "name": "アトランタのオフィスビル ライセンス",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            342
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Modern Office Building",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 53,
+      "locked": false,
+      "modelPath": "",
+      "name": "オフィスビル 原題",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            410
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "CC BY 4.0",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 54,
+      "locked": false,
+      "modelPath": "",
+      "name": "オフィスビル ライセンス",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            454
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Modern Office Building 2",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 55,
+      "locked": false,
+      "modelPath": "",
+      "name": "オフィスビル2 原題",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            522
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "CC BY 4.0",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 56,
+      "locked": false,
+      "modelPath": "",
+      "name": "オフィスビル2 ライセンス",
+      "parentId": 21,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            118
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "JPN vending machine",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 57,
+      "locked": false,
+      "modelPath": "",
+      "name": "自動販売機 原題",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            186
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "CC BY 4.0",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 58,
+      "locked": false,
+      "modelPath": "",
+      "name": "自動販売機 ライセンス",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            230
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Air Conditioner 11",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 59,
+      "locked": false,
+      "modelPath": "",
+      "name": "室外機 原題",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            298
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Sketchfab Free Standard",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 60,
+      "locked": false,
+      "modelPath": "",
+      "name": "室外機 ライセンス",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            342
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Recycle-Bin",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 61,
+      "locked": false,
+      "modelPath": "",
+      "name": "リサイクル用ごみ箱 原題",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            410
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "CC BY 4.0",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 62,
+      "locked": false,
+      "modelPath": "",
+      "name": "リサイクル用ごみ箱 ライセンス",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            560,
+            454
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            624,
+            32
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 17,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "Traffic Cone 3D Model – PBR Textured",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 63,
+      "locked": false,
+      "modelPath": "",
+      "name": "カラーコーン 原題",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0,
+            0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0,
+            0
+          ],
+          "position": [
+            96,
+            522
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ],
+          "size": [
+            1088,
+            26
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0,
+          "clipEnabled": false,
+          "color": [
+            0.8,
+            0.8,
+            0.8,
+            1
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 16,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Left",
+          "layoutSize": [
+            0,
+            0
+          ],
+          "lineSpacing": 1,
+          "localId": 2,
+          "opacity": 1,
+          "outlineColor": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "outlineEnabled": true,
+          "outlineWidth": 1,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0,
+            0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0,
+            0,
+            0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2,
+            2
+          ],
+          "sortingOrder": 0,
+          "text": "CC BY 4.0",
+          "type": "TextRenderer",
+          "verticalAlignment": "Top",
+          "viewportAnchor": [
+            0,
+            0
+          ],
+          "wrapMode": "NoWrap"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 64,
+      "locked": false,
+      "modelPath": "",
+      "name": "カラーコーン ライセンス",
+      "parentId": 22,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
         ]
       }
     }

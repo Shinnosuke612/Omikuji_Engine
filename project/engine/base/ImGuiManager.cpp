@@ -13446,6 +13446,7 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 			}
 		} else drawPlacement(entity, SelectEditorText(editorLanguage_, "パネル全体の配置（旧方式）", "Panel Placement (Legacy)"));
 		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "開始時に開く", "Initially Open"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.menuInitiallyOpen); });
+		changed |= DrawMenuAdaptiveField(SelectEditorText(editorLanguage_, "下層メニューの描画を隠す", "Hide Lower Menu Rendering"), [&](const char* fieldLabel) { return ImGui::Checkbox(fieldLabel, &component.menuHideLowerPanels); });
         section.Begin(SelectEditorText(editorLanguage_,"表示を開始する条件","Open Conditions"));
         if (ImGui::TreeNode(SelectEditorText(editorLanguage_,"死亡リプレイから開く","Open After Death Replay"))) {
             auto* events=FindComponent(entity,"EventTrigger");
@@ -13627,6 +13628,10 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 		if (MenuInspectorButton(SelectEditorText(editorLanguage_, "操作のリファレンス", "Controls Reference"))) ImGui::OpenPopup("MenuControlsReference");
 		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_Appearing);
 		if (ImGui::BeginPopup("MenuControlsReference")) {
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+				"下層メニューの描画を隠す：既定はOFFです。ONにすると、このメニューより下で開いているメニューだけを描画しません。閉じると元の表示に戻ります。背景Scene・開閉状態・選択・一時停止状態は変えません。対象MenuPanelでONにし、暗幕は子SpriteRendererの全画面画像を半透明の黒に設定してください。UI編集Sceneは単一Panelの表示なので、下層の非表示と復帰はPlayで確認してください。",
+				"Hide Lower Menu Rendering defaults to OFF. When enabled, only menus opened below this panel stop rendering. Closing it restores their display. The background scene, open state, selection and pause state are unchanged. Enable the option on the target MenuPanel; use a full-screen child SpriteRenderer tinted translucent black for the dimming layer. The UI Editing Scene shows one panel, so verify hiding and restoration in Play."));
+			ImGui::Separator();
 			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "操作方式を選ぶと変換内容を確認できます。適用すると移動・決定・キャンセルの操作Eventと標準キー一覧をまとめて切り替えます。一回のUndoで戻せます。", "Select Input Mode to preview conversion. Apply switches navigation, confirm and cancel between control events and standard key lists. One Undo restores the change."));
 			ImGui::Separator();
 			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "複数キーはいずれか一つで同じ操作を行い、同時押下でも一回です。同じ操作内の重複と、使用中の別操作とのキー共有はできません。別方向の割当は保持します。軸を変更できない場合は「別方向のキー設定」を確認してください。", "Any listed key triggers an operation once, even when pressed simultaneously. Duplicate keys and sharing keys between active operations are rejected. Other-axis assignments are retained; review Other Axis Keys if changing the axis is rejected."));

@@ -1904,6 +1904,7 @@ namespace {
 			result["bindings"] = EventsToJson(component.eventBindings);
 		} else if (component.type == "MenuPanel") {
 			result["initiallyOpen"] = component.menuInitiallyOpen;
+			result["hideLowerPanels"] = component.menuHideLowerPanels;
 			result["layoutMode"] = component.menuLayoutMode;
 			result["inputMode"] = component.menuInputMode;
 			const auto groups = component.MenuStandardKeyGroups();
@@ -4086,6 +4087,7 @@ namespace {
 				}
 				if (component.type == "MenuPanel") {
 					component.menuInitiallyOpen = value.value("initiallyOpen", component.menuInitiallyOpen);
+					component.menuHideLowerPanels = value.value("hideLowerPanels", component.menuHideLowerPanels);
 					component.menuLayoutMode = value.value("layoutMode", component.menuLayoutMode);
 					component.menuInputMode = value.value("inputMode", component.menuInputMode);
 					// 欠落fieldだけ旧固定キーへ戻す。不正な型や未知キーは補正しない。
