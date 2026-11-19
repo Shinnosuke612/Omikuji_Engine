@@ -1576,6 +1576,55 @@
           "type": "HitReaction"
         },
         {
+          "enabled": true,
+          "entries": [
+            {
+              "description": "HPを20回復する。",
+              "effect": "Heal",
+              "id": "heal",
+              "name": "体力回復",
+              "value": 20.0
+            },
+            {
+              "description": "攻撃のダメージが10%増える。",
+              "effect": "Damage",
+              "id": "damage",
+              "name": "攻撃力アップ",
+              "value": 1.100000023841858
+            },
+            {
+              "description": "移動速度が10%上がる。",
+              "effect": "MoveSpeed",
+              "id": "move_speed",
+              "name": "移動速度アップ",
+              "value": 1.100000023841858
+            },
+            {
+              "description": "攻撃判定の大きさが10%広がる。",
+              "effect": "AttackRange",
+              "id": "attack_range",
+              "name": "攻撃範囲アップ",
+              "value": 1.100000023841858
+            },
+            {
+              "description": "水平ノックバックが10%強くなる。",
+              "effect": "Knockback",
+              "id": "knockback",
+              "name": "吹き飛ばし強化",
+              "value": 1.100000023841858
+            },
+            {
+              "description": "攻撃後の短縮可能な後隙が10%短くなる。",
+              "effect": "Recovery",
+              "id": "recovery",
+              "name": "攻撃後隙短縮",
+              "value": 0.8999999761581421
+            }
+          ],
+          "localId": 14,
+          "type": "RunUpgrade"
+        },
+        {
           "boundaryY": 0.029999999329447746,
           "center": [
             0.0,
@@ -7450,6 +7499,32 @@
             {
               "id": "phase1",
               "label": "PHASE 1",
+              "upgradePool": [
+                {
+                  "id": "heal",
+                  "weight": 1.0
+                },
+                {
+                  "id": "damage",
+                  "weight": 1.0
+                },
+                {
+                  "id": "move_speed",
+                  "weight": 1.0
+                },
+                {
+                  "id": "attack_range",
+                  "weight": 1.0
+                },
+                {
+                  "id": "knockback",
+                  "weight": 1.0
+                },
+                {
+                  "id": "recovery",
+                  "weight": 1.0
+                }
+              ],
               "waves": [
                 {
                   "count": 8,
@@ -7460,6 +7535,32 @@
             {
               "id": "phase2",
               "label": "PHASE 2",
+              "upgradePool": [
+                {
+                  "id": "heal",
+                  "weight": 1.0
+                },
+                {
+                  "id": "damage",
+                  "weight": 1.0
+                },
+                {
+                  "id": "move_speed",
+                  "weight": 1.0
+                },
+                {
+                  "id": "attack_range",
+                  "weight": 1.0
+                },
+                {
+                  "id": "knockback",
+                  "weight": 1.0
+                },
+                {
+                  "id": "recovery",
+                  "weight": 1.0
+                }
+              ],
               "waves": [
                 {
                   "count": 12,
@@ -7470,6 +7571,7 @@
             {
               "id": "phase3",
               "label": "PHASE 3",
+              "upgradePool": [],
               "waves": [
                 {
                   "count": 16,
@@ -7495,7 +7597,8 @@
           "timerDisplayStepSeconds": 0.10000000149011612,
           "timerPrefix": "TIME ",
           "timerTextEntityId": 41,
-          "type": "GameFlowDirector"
+          "type": "GameFlowDirector",
+          "upgradeSelectionPanelEntityId": 56
         },
         {
           "bindings": [
@@ -10216,6 +10319,2954 @@
       "modelPath": "",
       "name": "Player HP",
       "parentId": 54,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "enabled": true,
+          "localId": 1,
+          "referenceSize": [
+            1280,
+            720
+          ],
+          "renderSpace": "ScreenOverlay",
+          "sortingOrder": 0,
+          "type": "UICanvas"
+        },
+        {
+          "cancelItemEntityId": 0,
+          "cancelMode": "None",
+          "enabled": true,
+          "initialItemEntityId": 0,
+          "initiallyOpen": false,
+          "inputMode": "Pointer",
+          "itemEntityIds": [
+            59,
+            65,
+            71,
+            77
+          ],
+          "layoutMode": "CanvasItems",
+          "localId": 2,
+          "navigationAxis": "Vertical",
+          "standardInput": {
+            "cancelKeys": [
+              "ESCAPE"
+            ],
+            "confirmKeys": [
+              "ENTER"
+            ],
+            "downKeys": [
+              "DOWN"
+            ],
+            "leftKeys": [
+              "LEFT"
+            ],
+            "rightKeys": [
+              "RIGHT"
+            ],
+            "upKeys": [
+              "UP"
+            ]
+          },
+          "type": "MenuPanel"
+        },
+        {
+          "enabled": true,
+          "localId": 3,
+          "pauseBgm": false,
+          "pausePanelEntityId": 56,
+          "type": "GamePause"
+        },
+        {
+          "confirmItemEntityId": 77,
+          "enabled": true,
+          "localId": 4,
+          "playerEntityId": 13,
+          "slots": [
+            {
+              "descriptionTextEntityId": 63,
+              "detailRootEntityId": 61,
+              "itemEntityId": 59,
+              "selectedMarkerEntityId": 64,
+              "summaryTextEntityId": 60,
+              "titleTextEntityId": 62
+            },
+            {
+              "descriptionTextEntityId": 69,
+              "detailRootEntityId": 67,
+              "itemEntityId": 65,
+              "selectedMarkerEntityId": 70,
+              "summaryTextEntityId": 66,
+              "titleTextEntityId": 68
+            },
+            {
+              "descriptionTextEntityId": 75,
+              "detailRootEntityId": 73,
+              "itemEntityId": 71,
+              "selectedMarkerEntityId": 76,
+              "summaryTextEntityId": 72,
+              "titleTextEntityId": 74
+            }
+          ],
+          "type": "UpgradeSelection"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 56,
+      "locked": false,
+      "modelPath": "",
+      "name": "フェーズ強化選択",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            1280.0,
+            720.0
+          ],
+          "sortingOrder": -1,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.0,
+            0.0,
+            0.0,
+            0.75
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 57,
+      "locked": false,
+      "modelPath": "",
+      "name": "強化選択・背景",
+      "parentId": 56,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          0.75
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            240.0,
+            62.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            800.0,
+            56.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "フェーズ強化",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 58,
+      "locked": false,
+      "modelPath": "",
+      "name": "強化選択・見出し",
+      "parentId": 56,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            173.0,
+            144.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            216.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.11999999731779099,
+            0.17000000178813934,
+            0.23999999463558197,
+            0.9599999785423279
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        },
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 60,
+          "localId": 3,
+          "selectedTextColor": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "selectedTextColorEnabled": false,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0.0,
+            0.0
+          ],
+          "textPadding": [
+            0.0,
+            0.0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 56,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "SelectRunUpgrade",
+                  "value": 0.0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0.0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1.0,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0.0,
+              "targetEntityId": 59,
+              "targetEntityName": "",
+              "targetPosition": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 59,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 1",
+      "parentId": 56,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.11999999731779099,
+          0.17000000178813934,
+          0.23999999463558197,
+          0.9599999785423279
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            12.0,
+            8.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            258.0,
+            200.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 28.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 60,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 1・名前",
+      "parentId": 59,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            216.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 61,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 1・詳細",
+      "parentId": 59,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            12.0,
+            10.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            258.0,
+            64.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 62,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 1・詳細名",
+      "parentId": 61,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            15.0,
+            78.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            252.0,
+            120.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.8299999833106995,
+            0.8799999952316284,
+            0.9599999785423279,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 22.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 63,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 1・効果説明",
+      "parentId": 61,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            210.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            6.0
+          ],
+          "sortingOrder": 1,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.25,
+            0.8500000238418579,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 64,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 1・選択印",
+      "parentId": 59,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.25,
+          0.8500000238418579,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            499.0,
+            144.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            216.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.11999999731779099,
+            0.17000000178813934,
+            0.23999999463558197,
+            0.9599999785423279
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        },
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 66,
+          "localId": 3,
+          "selectedTextColor": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "selectedTextColorEnabled": false,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0.0,
+            0.0
+          ],
+          "textPadding": [
+            0.0,
+            0.0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 56,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "SelectRunUpgrade",
+                  "value": 0.0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0.0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1.0,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0.0,
+              "targetEntityId": 65,
+              "targetEntityName": "",
+              "targetPosition": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 65,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 2",
+      "parentId": 56,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.11999999731779099,
+          0.17000000178813934,
+          0.23999999463558197,
+          0.9599999785423279
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            12.0,
+            8.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            258.0,
+            200.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 28.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 66,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 2・名前",
+      "parentId": 65,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            216.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 67,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 2・詳細",
+      "parentId": 65,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            12.0,
+            10.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            258.0,
+            64.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 68,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 2・詳細名",
+      "parentId": 67,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            15.0,
+            78.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            252.0,
+            120.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.8299999833106995,
+            0.8799999952316284,
+            0.9599999785423279,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 22.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 69,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 2・効果説明",
+      "parentId": 67,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            210.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            6.0
+          ],
+          "sortingOrder": 1,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.25,
+            0.8500000238418579,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 70,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 2・選択印",
+      "parentId": 65,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.25,
+          0.8500000238418579,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            825.0,
+            144.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            216.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.11999999731779099,
+            0.17000000178813934,
+            0.23999999463558197,
+            0.9599999785423279
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        },
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 72,
+          "localId": 3,
+          "selectedTextColor": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "selectedTextColorEnabled": false,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0.0,
+            0.0
+          ],
+          "textPadding": [
+            0.0,
+            0.0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 56,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "SelectRunUpgrade",
+                  "value": 0.0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0.0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1.0,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0.0,
+              "targetEntityId": 71,
+              "targetEntityName": "",
+              "targetPosition": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 71,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 3",
+      "parentId": 56,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.11999999731779099,
+          0.17000000178813934,
+          0.23999999463558197,
+          0.9599999785423279
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            12.0,
+            8.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            258.0,
+            200.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 28.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 72,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 3・名前",
+      "parentId": 71,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            216.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 73,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 3・詳細",
+      "parentId": 71,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            12.0,
+            10.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            258.0,
+            64.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 32.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 74,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 3・詳細名",
+      "parentId": 73,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            15.0,
+            78.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            252.0,
+            120.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            0.8299999833106995,
+            0.8799999952316284,
+            0.9599999785423279,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 22.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 75,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 3・効果説明",
+      "parentId": 73,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            210.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            6.0
+          ],
+          "sortingOrder": 1,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.25,
+            0.8500000238418579,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 76,
+      "locked": false,
+      "modelPath": "",
+      "name": "候補 3・選択印",
+      "parentId": 71,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.25,
+          0.8500000238418579,
+          1.0,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            499.0,
+            504.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            86.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "anchor": [
+            0.5,
+            0.5
+          ],
+          "color": [
+            0.11999999731779099,
+            0.25999999046325684,
+            0.36000001430511475,
+            1.0
+          ],
+          "enabled": true,
+          "flipX": false,
+          "flipY": false,
+          "localId": 2,
+          "size": [
+            100.0,
+            100.0
+          ],
+          "texturePath": "resources/human/white.png",
+          "type": "SpriteRenderer"
+        },
+        {
+          "enabled": true,
+          "interactable": true,
+          "labelEntityId": 78,
+          "localId": 3,
+          "selectedTextColor": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "selectedTextColorEnabled": false,
+          "selectionMarkerEntityId": 0,
+          "textOffset": [
+            0.0,
+            0.0
+          ],
+          "textPadding": [
+            0.0,
+            0.0
+          ],
+          "type": "MenuItem"
+        },
+        {
+          "bindings": [
+            {
+              "actions": [
+                {
+                  "active": true,
+                  "flagId": "",
+                  "flagValue": false,
+                  "postProcessManagerEntityId": 0,
+                  "postProcessManagerEntityName": "",
+                  "postProcessProfileId": "",
+                  "prefabParentToTarget": false,
+                  "prefabPath": "",
+                  "prefabUseTargetTransform": true,
+                  "presentationClipName": "",
+                  "sceneId": "",
+                  "statId": "",
+                  "statOperation": "Add",
+                  "stateName": "",
+                  "targetEntityId": 56,
+                  "targetEntityName": "",
+                  "textMotionClipId": "",
+                  "transitionAssetPath": "",
+                  "type": "ConfirmRunUpgrade",
+                  "value": 0.0
+                }
+              ],
+              "additionalTriggerKeys": [],
+              "cooldown": 0.0,
+              "executionDomain": "UI",
+              "flagId": "",
+              "flagValue": true,
+              "presentationClipName": "",
+              "radius": 1.0,
+              "statComparison": "LessOrEqual",
+              "statId": "hp",
+              "statValue": 0.0,
+              "targetEntityId": 77,
+              "targetEntityName": "",
+              "targetPosition": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "textMotionClipId": "",
+              "triggerKey": "",
+              "triggerOnce": false,
+              "triggerType": "OnMenuItemConfirmed",
+              "uiInputScope": "WhenNoMenu"
+            }
+          ],
+          "enabled": true,
+          "localId": 4,
+          "type": "EventTrigger"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 77,
+      "locked": false,
+      "modelPath": "",
+      "name": "強化決定",
+      "parentId": 56,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          0.11999999731779099,
+          0.25999999046325684,
+          0.36000001430511475,
+          1.0
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100.0,
+          100.0
+        ],
+        "texturePath": "resources/human/white.png"
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translate": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "anchor": [
+            0.0,
+            0.0
+          ],
+          "enabled": true,
+          "localId": 1,
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "size": [
+            282.0,
+            86.0
+          ],
+          "sortingOrder": 0,
+          "type": "UITransform"
+        },
+        {
+          "characterSpacing": 0.0,
+          "clipEnabled": false,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "fontFamily": "Yu Gothic UI",
+          "fontSize": 30.0,
+          "fontStyle": "Normal",
+          "fontWeight": "Regular",
+          "horizontalAlignment": "Center",
+          "layoutSize": [
+            0.0,
+            0.0
+          ],
+          "lineSpacing": 1.0,
+          "localId": 2,
+          "opacity": 1.0,
+          "outlineColor": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outlineEnabled": false,
+          "outlineWidth": 2.0,
+          "overflowMode": "Overflow",
+          "pivot": [
+            0.0,
+            0.0
+          ],
+          "renderSpace": "ScreenOverlay",
+          "shadowColor": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "shadowEnabled": false,
+          "shadowOffset": [
+            2.0,
+            2.0
+          ],
+          "sortingOrder": 0,
+          "text": "決定",
+          "type": "TextRenderer",
+          "verticalAlignment": "Center",
+          "viewportAnchor": [
+            0.0,
+            0.0
+          ],
+          "wrapMode": "Word"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 78,
+      "locked": false,
+      "modelPath": "",
+      "name": "強化決定・ラベル",
+      "parentId": 77,
       "sprite": {
         "anchor": [
           0.5,

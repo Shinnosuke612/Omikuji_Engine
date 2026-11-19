@@ -21,6 +21,9 @@ struct PreparedSceneTextImage;
 struct ScenePostProcessSettings;
 struct SceneUIEditorView;
 struct SceneEnemyPositioningStatus;
+struct SceneRunUpgradeModifiers;
+struct SceneAttackDefinition;
+struct SceneAttackRecoveryTiming;
 
 // 既存値を維持して、記録後の3視点再生状態を末尾へ追加する。
 enum class SceneDeathReplayPhase { Waiting, LiveSlow, Frozen, Failed, Preparing, ReplayA, ReplayB, ReplayC, FinishedHold };
@@ -66,6 +69,8 @@ public:
 	// 診断は値のsnapshot。既定のSceneには準備失敗なし。
 	virtual ScenePreparationDiagnostic GetPreparationDiagnostic() const { return {}; }
 	// Active確定後・通常更新前のUI入力段階。非許可時も離し待ちと旧Instance破棄を処理する。
+	// 毎Frameの画像内マウスsnapshot。禁止時は保存していた押下も破棄する。
+	virtual void SetMenuPointerFrame(const SceneMenuPointerFrame&) {}
 	virtual void PrepareMenuInput(float deltaTime, bool allowed) { (void)deltaTime; (void)allowed; }
 	virtual SceneUiControlFrame GetUiControlFrame() const { return {}; }
 	// 入力だけを遮断する。Simulation/Editor Pauseの意味は変えない。
@@ -142,6 +147,9 @@ public:
 
 	// Editor用の任意の読取口。Runtimeを持たないSceneはfalse、保存値へ反映しない。
 	virtual bool TryGetRuntimeStat(uint64_t, const std::string&, float&, float* = nullptr) const { return false; }
+	// 強化は値コピーだけを公開。攻撃表示は現在倍率で次回開始した場合の見積りで、実行中の時計を変更しない。
+	virtual bool TryGetRunUpgradeModifiers(SceneRunUpgradeModifiers&) const { return false; }
+	virtual bool TryGetUpgradeRecoveryPreview(const SceneAttackDefinition&, SceneAttackRecoveryTiming&) const { return false; }
 	// -1は未対応。値は死亡演出の受付状態で、SceneやRuntimeへの可変参照を返さない。
 	virtual int GetDeathResponseStatus(uint64_t) const { return -1; }
 	// 値コピーのみ。未対応/対象不一致はfalseでout不変。

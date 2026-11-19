@@ -100,6 +100,7 @@ struct SceneUiActionRequest {
 	enum class Origin { EventBinding, PanelStandard, ReplayCompletion };
 	Origin origin = Origin::EventBinding;
 	SceneReplayPresentationToken replayCompletion{}; // Runtimeが自然完了の識別を再検証する。
+	uint64_t confirmedItemId = 0; // OnMenuItemConfirmed由来だけ。保存Actionのindex指定ではない。
 };
 
 struct SceneEventResult {

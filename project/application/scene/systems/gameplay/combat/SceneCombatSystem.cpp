@@ -8,6 +8,7 @@
 #include "../../../../../engine/scene/SceneTransformResolver.h"
 #include "../../../../../engine/math/Math.h"
 #include "../../../../../engine/math/Quaternion.h"
+#include "../../../../../engine/utility/Logger.h"
 
 #include <algorithm>
 #include <cmath>
@@ -56,6 +57,24 @@ namespace {
 		return faction.component ? faction.component->factionName : std::string{};
 	}
 
+	SceneEntity* ResolveHitOwner(SceneDocument& document, SceneEntity& entity, const SceneComponent& hit) {
+		if (auto* owner = ResolveEntity(document, hit.hitBoxOwnerEntityId, hit.hitBoxOwnerEntityName)) return owner;
+		const auto faction = FindInAncestors(document, entity, "Faction");
+		return faction.entity ? faction.entity : &entity;
+	}
+
+	// 元Colliderの中心/姿勢/寸法は変更しない。倍率1は従来の交差判定をそのまま使う。
+	ColliderSweepResult IntersectsWithRange(const Collider& hit, const Collider& hurt, float range) {
+		if (range == 1) return hit.Intersects(hurt) ? ColliderSweepResult::Hit : ColliderSweepResult::Miss;
+		if (!hit.CanCollideWith(hurt)) return ColliderSweepResult::Miss;
+		ColliderSweepShape a, b;
+		if (!CaptureColliderSweepShape(hit, a) || !CaptureColliderSweepShape(hurt, b)) return ColliderSweepResult::Invalid;
+		a.radius *= range;
+		a.halfSize = Math::Multiply(a.halfSize, range);
+		ColliderSweepHit contact;
+		return SweepColliderTranslation(a, {}, b, {}, contact);
+	}
+
 	uint64_t MakeContactKey(
 		uint64_t hitBoxId,
 		uint64_t hurtBoxId,
@@ -83,9 +102,11 @@ void SceneCombatSystem::Update(
 	const std::unordered_set<uint64_t>& blockedEntityIds,
 	const std::vector<SceneEnemyContactRequest>& contacts,
 	const std::unordered_set<uint64_t>& controlledHitBoxes,
-	const std::function<void(const SceneCombatHitEvent&)>& onAcceptedHit
+	const std::function<void(const SceneCombatHitEvent&)>& onAcceptedHit,
+	const SceneRunUpgradeModifiers& upgrades
 ) {
 	if (contentGeneration_ != document.GetContentGeneration()) {
+		invalidRangeHitBoxes_.clear();
 		activations_.clear(); controlledConsumed_.clear(); spawnGenerations_.clear();
 		contentGeneration_ = document.GetContentGeneration();
 	}
@@ -132,8 +153,15 @@ void SceneCombatSystem::Update(
 	std::erase_if(activations_, [&](const auto& entry) { return !currentActivations.contains(entry.first); });
 	struct Candidate { const CombatBinding* hit; const CombatBinding* hurt; const SceneEnemyContactRequest* swept; };
 	std::vector<Candidate> candidates;
-	for (const auto& hit : hitBoxes) for (const auto& hurt : hurtBoxes) {
-		if (!controlledHitBoxes.contains(hit.entity->id) && hit.collider->Intersects(*hurt.collider)) candidates.push_back({&hit, &hurt, nullptr});
+	for (const auto& hit : hitBoxes) {
+		if (controlledHitBoxes.contains(hit.entity->id)) continue;
+		const auto values = upgrades.ForOwner(ResolveHitOwner(document, *hit.entity, *hit.component)->id);
+		for (const auto& hurt : hurtBoxes) {
+			const auto overlap = IntersectsWithRange(*hit.collider, *hurt.collider, values.attackRange);
+			if (overlap == ColliderSweepResult::Hit) candidates.push_back({&hit, &hurt, nullptr});
+			else if (overlap == ColliderSweepResult::Invalid && invalidRangeHitBoxes_.insert(hit.entity->id).second)
+				Logger::Log("[RunUpgrade] Invalid expanded HitBox shape: " + std::to_string(hit.entity->id) + "\n");
+		}
 	}
 	for (const auto& contact : contacts) {
 		if (contact.contentGeneration != document.GetContentGeneration() || !std::isfinite(contact.fraction) || contact.fraction < 0 || contact.fraction > 1) continue;
@@ -150,17 +178,8 @@ void SceneCombatSystem::Update(
 			!SceneEntityQuery::IsEntityActiveInHierarchy(document, *hurt.entity)) return;
 		if (candidate.swept && (hit.component->hitBoxAttackExecutionId != candidate.swept->serial ||
 			controlledConsumed_[candidate.swept->ownerId] == candidate.swept->serial)) return;
-		SceneEntity* explicitOwner = ResolveEntity(
-			document,
-			hit.component->hitBoxOwnerEntityId,
-			hit.component->hitBoxOwnerEntityName
-		);
-		SceneEntity* hitOwner = explicitOwner;
-		if (!hitOwner) {
-			const ComponentOwner factionOwner =
-				FindInAncestors(document, *hit.entity, "Faction");
-			hitOwner = factionOwner.entity ? factionOwner.entity : hit.entity;
-		}
+		SceneEntity* hitOwner = ResolveHitOwner(document, *hit.entity, *hit.component);
+		const auto values = upgrades.ForOwner(hitOwner->id);
 		if (blockedEntityIds.contains(hitOwner->id) || deathSystem.IsBlocked(hitOwner->id) ||
 			(candidate.swept && hitOwner->id!=candidate.swept->ownerId)) return;
 		const std::string hitFaction = ResolveFaction(document, *hitOwner);
@@ -221,10 +240,14 @@ void SceneCombatSystem::Update(
 
 		}
 		const float damage = (std::max)(
-			hit.component->hitBoxDamage *
+			hit.component->hitBoxDamage * values.damage *
 				hurt.component->hurtBoxDamageMultiplier,
 			0.0f
 		);
+		const float knockback = hit.component->hitBoxKnockback * values.knockback;
+		// 合成結果がoverflowした強化接触をHP/反応へ渡さない。
+		if ((values.damage != 1 && !std::isfinite(damage)) ||
+			(values.knockback != 1 && !std::isfinite(knockback))) return;
 		Vector3 knockbackDirection = Math::Subtract(
 			SceneTransformResolver::ResolveScene3DTransform(
 				document, *statsEntity
@@ -291,7 +314,7 @@ void SceneCombatSystem::Update(
 			statsEntity->id,
 			damage,
 			hit.component->hitBoxPoiseDamage,
-			hit.component->hitBoxKnockback,
+			knockback,
 			hit.component->hitBoxVerticalKnockback,
 			knockbackDirection,
 			(std::max)(hit.component->hitBoxHitStopDuration, 0.0f),
@@ -373,6 +396,7 @@ std::vector<SceneCombatHitEvent> SceneCombatSystem::ConsumeHitEvents() {
 
 void SceneCombatSystem::FlushRemovals(SceneDocument& document) {
 	for (uint64_t entityId : pendingRemovals_) {
+		invalidRangeHitBoxes_.erase(entityId);
 		const SceneEntity* entity = document.FindEntity(entityId);
 		const bool runtimeOnly = entity && entity->runtimeOnly;
 		const bool wasDirty = document.IsDirty();
@@ -386,6 +410,7 @@ void SceneCombatSystem::FlushRemovals(SceneDocument& document) {
 }
 
 void SceneCombatSystem::ResetEntity(uint64_t entityId) {
+	invalidRangeHitBoxes_.erase(entityId);
 	++spawnGenerations_[entityId]; controlledConsumed_.erase(entityId);
 	std::unordered_set<uint64_t> windows;
 	for(const auto& [key,activation]:activations_) {
@@ -399,6 +424,7 @@ void SceneCombatSystem::ResetEntity(uint64_t entityId) {
 }
 
 void SceneCombatSystem::Clear() {
+	invalidRangeHitBoxes_.clear();
 	activations_.clear(); spawnGenerations_.clear(); controlledConsumed_.clear(); contentGeneration_ = 0;
 	acceptedSerial_ = activationSerial_ = 0;
 	consumedActivationContacts_.clear();

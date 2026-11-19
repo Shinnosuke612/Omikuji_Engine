@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "SceneInstance.h"
+#include "SceneMenuRuntime.h"
 #include "SceneUIEditorView.h"
 #include "SceneTransitionRequest.h"
 #include "ScenePreparationDiagnostic.h"
@@ -24,6 +25,9 @@ struct ScenePostProcessSettings;
 struct SceneViewEffectClock;
 struct SceneDeathReplayStatus;
 struct SceneEnemyPositioningStatus;
+struct SceneRunUpgradeModifiers;
+struct SceneAttackDefinition;
+struct SceneAttackRecoveryTiming;
 class SceneExecutionContext;
 struct ScenePrepareToken;
 struct ScenePrepareRequest;
@@ -58,6 +62,9 @@ public:
 	bool ShouldPauseBgm() const { return gamePaused_ && pauseBgm_; }
 	// Gameが毎Frame渡す入力許可。Scene側はInput/Editorに依存しない。
 	void SetMenuInputAllowed(bool allowed) { menuInputAllowed_ = allowed; }
+	// 非active Instanceには禁止snapshotを渡す。毎Frame、Updateの前に呼ぶ。
+	void SetMenuPointerFrame(const SceneMenuPointerFrame& pointer);
+	bool IsPointerMenuOpen() const { return pointerMenuOpen_; }
 	// 最初の一件を占有。Consume後もFinishまで追加要求を拒否し、Sceneは変更しない。
 	// 現在の実行Sceneからのみ受付。遷移予約と排他、Gameが次Frameで一回消費する。
 	bool RequestGameExit(SceneInstanceId sourceInstanceId, uint64_t generation);
@@ -186,6 +193,11 @@ public:
 		const std::string& statId, float& out, float* maxValue = nullptr) const;
 	// Active Document一致時だけ値コピー。Scene本体を公開せず、失敗時out不変。
 	bool TryGetEnemyPositioningStatus(const SceneDocument& document, uint64_t entityId, SceneEnemyPositioningStatus& out) const;
+	// Active Document一致時だけ強化値をコピー。Scene所有権を公開せず、失敗時はout不変。
+	bool TryGetRunUpgradeModifiers(const SceneDocument& document, SceneRunUpgradeModifiers& out) const;
+	// 現在倍率でPlayerが次回開始する場合の見積り。実行中の攻撃時計や保存値は変更しない。
+	bool TryGetUpgradeRecoveryPreview(const SceneDocument& document, const SceneAttackDefinition& definition,
+		SceneAttackRecoveryTiming& out) const;
 	// Active InstanceのDocument一致時だけ受付状態を返す。不一致/未対応は-1。
 	int GetDeathResponseStatus(const SceneDocument& document, uint64_t id) const;
 	// Active Document一致/成功時だけoutを更新する。
@@ -252,6 +264,8 @@ private:
 	void PrepareMenuInput(float deltaTime, bool allowed);
 	bool menuInputAllowed_ = false;
 	bool gameUpdatePrepared_ = false;
+	bool pointerMenuOpen_ = false;
+	SceneMenuPointerFrame menuPointer_;
 	bool gamePaused_ = false, pauseBgm_ = false;
 	SceneUIEditorView editorUIView_;
 	bool drawingEditorUIView_ = false;

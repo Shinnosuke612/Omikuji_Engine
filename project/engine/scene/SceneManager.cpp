@@ -2112,6 +2112,25 @@ bool SceneManager::TryGetRuntimeStat(const SceneDocument& document, uint64_t ent
 	return true;
 }
 
+bool SceneManager::TryGetRunUpgradeModifiers(const SceneDocument& document, SceneRunUpgradeModifiers& out) const {
+	const auto* instance = GetActiveSceneInstance();
+	if (!instance || instance->GetDocument() != &document || !instance->GetScene()) return false;
+	SceneRunUpgradeModifiers value;
+	if (!instance->GetScene()->TryGetRunUpgradeModifiers(value)) return false;
+	out = value;
+	return true;
+}
+
+bool SceneManager::TryGetUpgradeRecoveryPreview(const SceneDocument& document, const SceneAttackDefinition& definition,
+	SceneAttackRecoveryTiming& out) const {
+	const auto* instance = GetActiveSceneInstance();
+	if (!instance || instance->GetDocument() != &document || !instance->GetScene()) return false;
+	SceneAttackRecoveryTiming value;
+	if (!instance->GetScene()->TryGetUpgradeRecoveryPreview(definition, value)) return false;
+	out = value;
+	return true;
+}
+
 bool SceneManager::TryGetRuntimeFlag(const SceneDocument& document, uint64_t entityId,
 	const std::string& flagId, bool& out) const {
 	const SceneInstance* instance = GetActiveSceneInstance();
@@ -2266,11 +2285,25 @@ bool SceneManager::TryGetActiveViewEffectClock(SceneViewEffectClock& out, SceneI
 	return true;
 }
 
+void SceneManager::SetMenuPointerFrame(const SceneMenuPointerFrame& pointer) {
+	menuPointer_ = pointer;
+	for (const auto& instance : sceneInstances_) if (auto* scene = instance->GetScene()) {
+		auto delivered = pointer;
+		delivered.allowed = delivered.allowed && scene == GetActiveScene();
+		scene->SetMenuPointerFrame(delivered);
+	}
+}
+
 void SceneManager::PrepareMenuInput(float deltaTime, bool allowed) {
 	const bool running = !executionContext_ || executionContext_->IsPlaying();
 	for (const auto& instance : sceneInstances_) {
 		if (IsGameExitPending()) break;
-		if (auto* scene = instance->GetScene()) scene->PrepareMenuInput(deltaTime, allowed && running && scene == GetActiveScene());
+		if (auto* scene = instance->GetScene()) {
+			auto pointer = menuPointer_;
+			pointer.allowed = pointer.allowed && allowed && running && scene == GetActiveScene();
+			scene->SetMenuPointerFrame(pointer);
+			scene->PrepareMenuInput(deltaTime, allowed && running && scene == GetActiveScene());
+		}
 	}
 	const auto* active = GetActiveScene();
 	const auto control = active ? active->GetUiControlFrame() : SceneUiControlFrame{};
@@ -2281,6 +2314,7 @@ void SceneManager::PrepareMenuInput(float deltaTime, bool allowed) {
 	gamePaused_ = (!executionContext_ || !executionContext_->IsEditing()) && document &&
 		control.instanceId == activeSceneInstanceId_ && control.generation == document->GetContentGeneration() && control.gamePaused;
 	pauseBgm_ = gamePaused_ && control.pauseBgm;
+	pointerMenuOpen_ = blocked && control.pointerMenuOpen;
 	for (const auto& instance : sceneInstances_) if (auto* scene = instance->GetScene()) scene->SetUiGameplayInputBlocked(blocked);
 }
 

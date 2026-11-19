@@ -28,7 +28,7 @@ namespace {
 		EditorComponentTag::Prefab
 	}};
 
-	constexpr std::array<EditorComponentDefinition, 49> kDefinitions = {{
+	constexpr std::array<EditorComponentDefinition, 51> kDefinitions = {{
 		{
 			"GameFlowDirector", "ゲーム進行", "Game Flow Director",
 			"開始案内、敵出現待ち、カウントダウン、Phaseとクリア時間を設定します。初回戦闘開始をEventへ通知します。",
@@ -264,6 +264,20 @@ namespace {
 			EditorComponentTagBit(EditorComponentTag::UI)
 		},
 		{
+			"RunUpgrade", "プレイ中の強化定義", "Run Upgrade Definitions",
+			"Playerの強化候補を定義します。フェーズごとの三択から取得し、プレイ終了時に初期化します。",
+			"Defines Player upgrades acquired from phase choices and reset at run end.",
+			EditorComponentCategory::Gameplay, SceneAndPrefabContext, 49, 49, "",
+			EditorComponentTagBit(EditorComponentTag::Combat) | EditorComponentTagBit(EditorComponentTag::Player)
+		},
+		{
+			"UpgradeSelection", "強化の三択画面", "Upgrade Selection",
+			"対象Player、三つのカード、決定ボタンを接続します。MenuPanelとGamePauseを併用します。",
+			"Connects the Player, three cards and a confirm button using MenuPanel and GamePause.",
+			EditorComponentCategory::Gameplay, SceneAndPrefabContext, 50, 50, "",
+			EditorComponentTagBit(EditorComponentTag::UI)
+		},
+		{
 			"Health", "被弾・無敵", "Health",
 			"StatSetのHPへの被弾受付と、攻撃者共通の無敵時間を設定します。",
 			"Configures HP damage acceptance and invulnerability shared across attackers.",
@@ -299,8 +313,8 @@ namespace {
 		},
 		{
 			"MenuPanel", "メニュー画面", "Menu Panel",
-			"標準構成では制作サイズ・選択肢・標準キー操作を設定し、表示開始条件から死亡リプレイ完了にも接続できます。",
-			"Standard menus combine reference size, items and keyboard controls. Open Conditions can connect death replay completion.",
+			"制作サイズ・選択肢・標準キー/マウス操作を設定します。マウスは項目の枠内で押して離すと決定。表示開始条件から死亡リプレイ完了にも接続できます。",
+			"Configure reference size, items and keyboard/mouse controls. Mouse confirmation requires pressing and releasing inside an item's bounds. Open Conditions can connect death replay completion.",
 			EditorComponentCategory::EventAndFlow,
 			SceneAndPrefabContext, 38, 13, "",
 			EditorComponentTagBit(EditorComponentTag::UI) | EditorComponentTagBit(EditorComponentTag::Event)

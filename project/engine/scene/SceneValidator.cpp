@@ -22,6 +22,112 @@
 #include <unordered_set>
 #include <utility>
 
+std::string SceneValidator::UpgradeSelectionIssue(const SceneDocument& document, uint64_t panelId,
+	const std::vector<SceneUpgradePoolEntry>* pool) {
+	using namespace SceneEntityQuery;
+	auto component = [&](uint64_t id, const char* type) -> const SceneComponent* {
+		const auto* e = document.FindEntity(id);
+		if (!e || !IsEntityActiveInHierarchy(document, *e)) return nullptr;
+		if (std::count_if(e->components.begin(), e->components.end(), [type](const auto& c) { return c.type == type; }) != 1) return nullptr;
+		return FindEnabledComponent(*e, type);
+	};
+	const auto* selection = component(panelId, "UpgradeSelection");
+	const auto* menu = component(panelId, "MenuPanel");
+	const auto* pause = component(panelId, "GamePause");
+	if (!selection || !menu || !pause || menu->menuLayoutMode != "CanvasItems" || menu->menuInputMode != "Pointer" ||
+		menu->menuInitiallyOpen || menu->menuCancelMode != "None" || pause->gamePausePanelEntityId != panelId || pause->gamePauseBgm)
+		return "UpgradeSelection:Panel";
+	const auto* player = document.FindEntityByName("Player");
+	const auto* definitions = component(selection->upgradePlayerEntityId, "RunUpgrade");
+	if (!player || player->id != selection->upgradePlayerEntityId || !definitions ||
+		!component(player->id, "PlayerBehavior") || !component(player->id, "Health")) return "UpgradeSelection:Player";
+	std::unordered_set<std::string> definitionIds;
+	for (const auto& entry : definitions->runUpgradeEntries)
+		if (*entry.ValidationIssue() || entry.name.empty() || !definitionIds.insert(entry.id).second) return "UpgradeSelection:Definitions";
+	auto below = [&](uint64_t id, uint64_t root) { return id != root && document.IsDescendantOf(id, root); };
+	auto item = [&](uint64_t id) {
+		const auto* c = component(id, "MenuItem");
+		if (!c || !c->menuInteractable || !below(id, panelId) ||
+			std::count(menu->menuItemEntityIds.begin(), menu->menuItemEntityIds.end(), id) != 1) return false;
+		const auto* e = document.FindEntity(id);
+		for (size_t depth = 0; e && e->id != panelId && depth <= document.GetEntities().size(); ++depth) {
+			if (e->id != id && FindComponent(*e, "MenuPanel")) return false;
+			e = document.FindEntity(e->parentId);
+		}
+		return true;
+	};
+	if (!item(selection->upgradeConfirmItemEntityId) || menu->menuItemEntityIds.size() != 4) return "UpgradeSelection:Slots";
+	SceneUILayout::Layout confirmLayout;
+	if (!component(selection->upgradeConfirmItemEntityId, "UITransform") ||
+		!SceneUILayout::Resolve(document, selection->upgradeConfirmItemEntityId, confirmLayout) ||
+		!confirmLayout.visible || confirmLayout.renderSpace != "ScreenOverlay") return "UpgradeSelection:Slots";
+	std::unordered_set<uint64_t> refs{selection->upgradeConfirmItemEntityId}, textIds;
+	for (const auto& slot : selection->upgradeSlots) {
+		if (!item(slot.itemEntityId)) return "UpgradeSelection:Slots";
+		for (uint64_t id : {slot.itemEntityId, slot.summaryTextEntityId, slot.detailRootEntityId,
+			slot.titleTextEntityId, slot.descriptionTextEntityId, slot.selectedMarkerEntityId}) {
+			SceneUILayout::Layout layout;
+			if (!id || !refs.insert(id).second || !component(id, "UITransform") ||
+				!SceneUILayout::Resolve(document, id, layout) || !layout.visible || layout.renderSpace != "ScreenOverlay") return "UpgradeSelection:Slots";
+		}
+		if (!below(slot.summaryTextEntityId, slot.itemEntityId) || !below(slot.detailRootEntityId, slot.itemEntityId) ||
+			!below(slot.selectedMarkerEntityId, slot.itemEntityId) || !below(slot.titleTextEntityId, slot.detailRootEntityId) ||
+			!below(slot.descriptionTextEntityId, slot.detailRootEntityId) ||
+			below(slot.summaryTextEntityId, slot.detailRootEntityId) || below(slot.detailRootEntityId, slot.selectedMarkerEntityId) ||
+			below(slot.summaryTextEntityId, slot.selectedMarkerEntityId) || below(slot.selectedMarkerEntityId, slot.detailRootEntityId)) return "UpgradeSelection:Slots";
+		if (!component(slot.selectedMarkerEntityId, "SpriteRenderer")) return "UpgradeSelection:Slots";
+		for (uint64_t id : {slot.summaryTextEntityId, slot.titleTextEntityId, slot.descriptionTextEntityId}) {
+			if (!component(id, "TextRenderer")) return "UpgradeSelection:Slots";
+			textIds.insert(id);
+		}
+	}
+	// 文字の競合を事後の上書き順で隠さない。TextMotionは現在Poseのみでcontentを書かない。
+	for (const auto& slot : selection->upgradeSlots) {
+		for (uint64_t id : refs) {
+			if (below(id, slot.summaryTextEntityId) || below(id, slot.selectedMarkerEntityId)) return "UpgradeSelection:Slots";
+			if (below(id, slot.detailRootEntityId) && id != slot.titleTextEntityId && id != slot.descriptionTextEntityId) return "UpgradeSelection:Slots";
+		}
+	}
+	for (uint64_t a : menu->menuItemEntityIds) for (uint64_t b : menu->menuItemEntityIds)
+		if (a != b && below(a,b)) return "UpgradeSelection:Slots";
+	// 毎フェーズ再利用できるUI通知だけを受理。未配線を操作不能な停止画面として開かない。
+	for (uint64_t itemId : menu->menuItemEntityIds) {
+		bool wired = false;
+		const char* actionType = itemId == selection->upgradeConfirmItemEntityId ? "ConfirmRunUpgrade" : "SelectRunUpgrade";
+		for (const auto& e : document.GetEntities()) {
+			if (!IsEntityActiveInHierarchy(document,e)) continue;
+			const auto* events = FindEnabledComponent(e,"EventTrigger");
+			if (!events) continue;
+			for (const auto& binding : events->eventBindings) {
+				if (binding.executionDomain != "UI" || binding.triggerType != "OnMenuItemConfirmed" ||
+					binding.targetEntityId != itemId || binding.triggerOnce || binding.cooldown != 0) continue;
+				for (const auto& action : binding.actions) if (action.type == actionType && action.targetEntityId == panelId) wired = true;
+			}
+		}
+		if (!wired) return "UpgradeSelection:Event";
+	}
+	for (const auto& e : document.GetEntities()) for (const auto& c : e.components) {
+		if (!c.enabled) continue;
+		if (c.type == "StatTextDisplay" && textIds.contains(e.id)) return "UpgradeSelection:Writer";
+		if (c.type == "GameFlowDirector") for (uint64_t id : {c.gameFlowIntroTextEntityId, c.gameFlowCountdownTextEntityId,
+			c.gameFlowPhaseTextEntityId, c.gameFlowTimerTextEntityId, c.gameFlowRemainingTextEntityId, c.gameFlowResultTimeTextEntityId})
+			if (textIds.contains(id)) return "UpgradeSelection:Writer";
+		if (c.type == "PostProcessProfileManager") for (uint64_t id : textIds) {
+			if (c.postProcessStatusTextEntityId == id || (!c.postProcessStatusTextEntityId &&
+				!c.postProcessStatusTextEntityName.empty() && document.FindEntity(id)->name == c.postProcessStatusTextEntityName)) return "UpgradeSelection:Writer";
+		}
+	}
+	if (pool) {
+		std::unordered_set<std::string> ids; size_t eligible = 0;
+		for (const auto& entry : *pool) {
+			if (!definitionIds.contains(entry.id) || !ids.insert(entry.id).second || !std::isfinite(entry.weight) || entry.weight < 0) return "UpgradeSelection:Pool";
+			if (entry.weight > 0) ++eligible;
+		}
+		if (eligible < 3) return "UpgradeSelection:Pool";
+	}
+	return {};
+}
+
 namespace {
 bool AttackGeometryTarget(const SceneDocument& document, const SceneEntity* entity, const SceneAttackHitWindow& window) {
 	if (!entity) return false;
@@ -241,7 +347,7 @@ bool SceneValidator::ValidateDocument(
 	std::unordered_set<std::string> uiKeyBindings;
 	std::unordered_set<uint64_t> replayCompletionTargets;
 	size_t initiallyOpenMenus = 0;
-	size_t gamePauseCount = 0;
+	std::unordered_set<uint64_t> gamePausePanels;
 	for (const SceneEntity& owner : document.GetEntities()) {
 		for (const SceneComponent& setting : owner.components) {
 			if (setting.type == "PlayerMovementBounds") {
@@ -252,6 +358,34 @@ bool SceneValidator::ValidateDocument(
 					addIssue(SceneValidationSeverity::Error, owner.id, issue);
 				} else if (const char* issue = SceneMovementBounds::AuthoringIssue(document, owner, setting.movementBounds)) {
 					addIssue(setting.enabled ? SceneValidationSeverity::Error : SceneValidationSeverity::Warning, owner.id, issue);
+				}
+			}
+			if (setting.type == "UpgradeSelection") {
+				const auto issue = UpgradeSelectionIssue(document, owner.id);
+				if (!issue.empty()) addIssue(SceneValidationSeverity::Error, owner.id, issue);
+			}
+			if (setting.type == "GameFlowDirector" && setting.gameFlowUpgradeSelectionPanelEntityId) {
+				for (size_t i = 0; i < setting.gameFlowPhases.size(); ++i) {
+					const auto& pool = setting.gameFlowPhases[i].upgradePool;
+					if (pool.empty()) continue;
+					const auto issue = i + 1 == setting.gameFlowPhases.size() ? std::string("UpgradeSelection:FinalPhase") :
+						UpgradeSelectionIssue(document, setting.gameFlowUpgradeSelectionPanelEntityId, &pool);
+					if (!issue.empty()) addIssue(SceneValidationSeverity::Error, owner.id, issue);
+				}
+			}
+			if (setting.type == "RunUpgrade") {
+				if (std::count_if(owner.components.begin(), owner.components.end(), [](const auto& c) { return c.type == "RunUpgrade"; }) > 1)
+					addIssue(SceneValidationSeverity::Error, owner.id, "RunUpgrade:DuplicateComponent");
+				if (!SceneEntityQuery::FindEnabledComponent(owner, "PlayerBehavior"))
+					addIssue(SceneValidationSeverity::Warning, owner.id, "RunUpgrade:Player");
+				if (setting.runUpgradeEntries.empty()) addIssue(SceneValidationSeverity::Warning, owner.id, "RunUpgrade:Empty");
+				std::unordered_set<std::string> ids;
+				for (const auto& entry : setting.runUpgradeEntries) {
+					if (const char* issue = entry.ValidationIssue(); *issue) addIssue(SceneValidationSeverity::Error, owner.id, issue);
+					if (!ids.insert(entry.id).second) addIssue(SceneValidationSeverity::Error, owner.id, "RunUpgrade:DuplicateId");
+					if (entry.name.empty()) addIssue(SceneValidationSeverity::Warning, owner.id, "RunUpgrade:Name");
+					if (entry.effect == "Heal" && !SceneEntityQuery::FindEnabledComponent(owner, "Health"))
+						addIssue(SceneValidationSeverity::Warning, owner.id, "RunUpgrade:Health");
 				}
 			}
 			if (setting.type == "EventTrigger") {
@@ -429,7 +563,7 @@ bool SceneValidator::ValidateDocument(
 				// 非表示で保管するメニューも構造は検証するが、子の表示状態は要求しない。
 				const bool panelVisible = setting.enabled && isMenuEntityActive(owner);
 				if ((setting.menuLayoutMode != "Hierarchical" && setting.menuLayoutMode != "CanvasItems") ||
-					(setting.menuInputMode != "Events" && setting.menuInputMode != "Standard")) menuError("MenuRuntime:StandardMode");
+					(setting.menuInputMode != "Events" && setting.menuInputMode != "Standard" && setting.menuInputMode != "Pointer")) menuError("MenuRuntime:StandardMode");
 				std::vector<SceneMenuLayout::ItemPosition> positions;
 				std::string layoutError;
 				if (!SceneMenuLayout::EvaluatePositions(document, owner, setting, positions, layoutError)) {
@@ -458,6 +592,9 @@ bool SceneValidator::ValidateDocument(
 				bool hasSelectableItem = false;
 				for (uint64_t id : setting.menuItemEntityIds) {
 					const SceneComponent* item = requireMenuTarget(id, "MenuItem", "MenuPanel item");
+					const auto* pointerItem = document.FindEntity(id);
+					if (setting.menuInputMode == "Pointer" && pointerItem && !SceneEntityQuery::FindEnabledComponent(*pointerItem, "UITransform"))
+						menuError("MenuRuntime:PointerBounds");
 					if (!localItems.insert(id).second) menuError("MenuPanel contains a duplicate item Entity ID");
 					if (!assignedMenuItems.insert(id).second) menuError("MenuItem is listed more than once or shared between panels");
 					if (id == owner.id || !isWithinMenu(id, owner.id)) menuError("MenuPanel items must be descendants of their panel");
@@ -522,7 +659,7 @@ bool SceneValidator::ValidateDocument(
 				if (!std::isfinite(color.x) || !std::isfinite(color.y) || !std::isfinite(color.z) || !std::isfinite(color.w) ||
 					color.x < 0 || color.x > 1 || color.y < 0 || color.y > 1 || color.z < 0 || color.z > 1 || color.w < 0 || color.w > 1) menuError("MenuItem selectedTextColor must contain finite values in [0, 1]");
 			} else if (setting.type == "GamePause") {
-				if (setting.enabled && isMenuEntityActive(owner) && ++gamePauseCount > 1) menuError("Only one active GamePause is allowed per scene");
+				if (setting.enabled && isMenuEntityActive(owner) && !gamePausePanels.insert(setting.gamePausePanelEntityId).second) menuError("MenuRuntime:PauseAmbiguous");
 				const SceneComponent* panel = requireMenuTarget(setting.gamePausePanelEntityId, "MenuPanel", "GamePause panel");
 				if (setting.enabled && panel && panel->menuInitiallyOpen) menuError("GamePause panel must start closed");
 			} else if (setting.type == "EventTrigger") {
@@ -617,7 +754,12 @@ bool SceneValidator::ValidateDocument(
 							addIssue(SceneValidationSeverity::Warning, owner.id, "MenuRuntime:UnsupportedAction " + action.type);
 						const bool panelAction = action.type == "OpenMenu" || action.type == "CloseMenu" || action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" || action.type == "ConfirmMenuItem" || action.type == "CancelMenu";
 						const bool pauseAction = action.type == "PauseGame" || action.type == "ResumeGame";
-						const bool newAction = panelAction || pauseAction || action.type == "RequestApplicationExit";
+						const bool upgradeAction = action.type == "SelectRunUpgrade" || action.type == "ConfirmRunUpgrade";
+						const bool newAction = panelAction || pauseAction || upgradeAction || action.type == "RequestApplicationExit";
+						if (upgradeAction) {
+							requireMenuTarget(action.targetEntityId, "UpgradeSelection", action.type);
+							if (!ui || binding.triggerType != "OnMenuItemConfirmed") addIssue(SceneValidationSeverity::Error, owner.id, "UpgradeSelection:Event");
+						}
 						if (panelAction) requireMenuTarget(action.targetEntityId, "MenuPanel", action.type);
 						if (pauseAction) requireMenuTarget(action.targetEntityId, "GamePause", action.type);
 						if (!ui && newAction && action.type != "OpenMenu" && action.type != "PauseGame") menuError("This menu action requires the UI domain: " + action.type);

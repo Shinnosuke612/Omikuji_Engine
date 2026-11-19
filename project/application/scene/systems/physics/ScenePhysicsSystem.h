@@ -7,6 +7,7 @@
 #include "../../SceneRuntimeObjectBinding.h"
 #include "../../../../engine/physics/PhysicsWorld.h"
 #include "../../../../engine/collision/Collider.h"
+#include "../../../../engine/scene/SceneRunUpgradeRuntime.h"
 #include "../../../../engine/scene/SceneMovementBounds.h"
 #include <optional>
 
@@ -78,11 +79,13 @@ public:
 		Collider* collider,
 		bool resetVelocity
 	) const;
+	// upgradesは呼出中だけ借用し、Player基礎移動速度に適用。保存設定へ書き戻さない。
 	void SyncSceneSettings(
 		const SceneDocument& document,
 		Player* player,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
-		bool editing
+		bool editing,
+		const SceneRunUpgradeModifiers& upgrades = {}
 	);
 	// controlledは同Frameのworld XZ区間。既存の重力/通常移動後に連続接触を解き、結果だけを返す。
 	// 不正形状/非可逆parentは当該突進を停止。resultsは初めにclearし、DamageやEntity追加は行わない。
@@ -129,7 +132,8 @@ private:
 	const char* boundsIssue_ = nullptr;
 	void ApplyPlayerBehavior(
 		const SceneDocument& document,
-		Player* player
+		Player* player,
+		const SceneRunUpgradeModifiers& upgrades
 	) const;
 	void ApplyPlayerPhysics(
 		const SceneDocument& document,

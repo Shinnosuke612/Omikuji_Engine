@@ -25,6 +25,8 @@ public:
 	void Initialize(DirectXCommon* dxCommon, std::string runtimeKey);
 	void SetTextOverride(uint64_t entityId, std::string text);
 	void ClearTextOverrides();
+	// 三択専用の短命値。空mapで解除してもFlow/Statの表示を消さない。
+	void SetUpgradeTextOverrides(const std::unordered_map<uint64_t, std::string>& values) { upgradeTexts_ = values; }
 	// Menuの実効文字色だけを置換する。保存値/content/Pose overrideは変更しない。
 	void SetMenuColorOverrides(const std::unordered_map<uint64_t, Vector4>& colors) { menuColors_ = colors; }
 	void SetPresentationOverride(
@@ -82,6 +84,7 @@ private:
 	std::string runtimeKey_;
 	std::unordered_map<uint64_t, RuntimeText> texts_;
 	std::unordered_map<uint64_t, std::string> textOverrides_;
+	std::unordered_map<uint64_t, std::string> upgradeTexts_;
 	std::unordered_map<uint64_t, Vector4> menuColors_;
 	std::unordered_map<uint64_t, PresentationOverride> presentationOverrides_;
 };

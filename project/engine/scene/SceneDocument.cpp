@@ -1576,6 +1576,7 @@ namespace {
 			result["remainingTextEntityId"] = component.gameFlowRemainingTextEntityId;
 			result["remainingPrefix"] = component.gameFlowRemainingPrefix;
 			result["resultRootEntityId"] = component.gameFlowResultRootEntityId;
+			result["upgradeSelectionPanelEntityId"] = component.gameFlowUpgradeSelectionPanelEntityId;
 			result["resultTimeTextEntityId"] = component.gameFlowResultTimeTextEntityId;
 			result["resultMotionClipId"] = component.gameFlowResultMotionClipId;
 			json phases = json::array();
@@ -1584,7 +1585,9 @@ namespace {
 				for (const SceneGameFlowWave& wave : phase.waves) {
 					waves.push_back({ { "spawnerEntityId", wave.spawnerEntityId }, { "count", wave.count } });
 				}
-				phases.push_back({ { "id", phase.id }, { "label", phase.label }, { "waves", std::move(waves) } });
+				json pool = json::array();
+				for (const auto& entry : phase.upgradePool) pool.push_back({{"id", entry.id}, {"weight", entry.weight}});
+				phases.push_back({ { "id", phase.id }, { "label", phase.label }, { "waves", std::move(waves) }, {"upgradePool", std::move(pool)} });
 			}
 			result["phases"] = std::move(phases);
 		} else if (component.type == "Camera") {
@@ -1907,6 +1910,20 @@ namespace {
 		} else if (component.type == "DeathResponse") {
 			result["flagId"] = component.deathResponseFlagId;
 			result["scope"] = component.deathResponseScope;
+		} else if (component.type == "UpgradeSelection") {
+			result["playerEntityId"] = component.upgradePlayerEntityId;
+			result["confirmItemEntityId"] = component.upgradeConfirmItemEntityId;
+			result["slots"] = json::array();
+			for (const auto& slot : component.upgradeSlots) result["slots"].push_back({
+				{"itemEntityId", slot.itemEntityId}, {"summaryTextEntityId", slot.summaryTextEntityId},
+				{"detailRootEntityId", slot.detailRootEntityId}, {"titleTextEntityId", slot.titleTextEntityId},
+				{"descriptionTextEntityId", slot.descriptionTextEntityId}, {"selectedMarkerEntityId", slot.selectedMarkerEntityId}});
+		} else if (component.type == "RunUpgrade") {
+			result["entries"] = json::array();
+			for (const auto& entry : component.runUpgradeEntries) {
+				result["entries"].push_back({{"id", entry.id}, {"name", entry.name},
+					{"description", entry.description}, {"effect", entry.effect}, {"value", entry.value}});
+			}
 		} else if (component.type == "StatTextDisplay") {
 			result["statsEntityId"] = component.statTextStatsEntityId;
 			result["statsEntityName"] = component.statTextStatsEntityName;
@@ -2676,6 +2693,12 @@ namespace {
 		component.gameFlowTimerTextEntityId = RemapEntityId(component.gameFlowTimerTextEntityId, idMap, preserveUnmappedIds);
 		component.gameFlowRemainingTextEntityId = RemapEntityId(component.gameFlowRemainingTextEntityId, idMap, preserveUnmappedIds);
 		component.gameFlowResultRootEntityId = RemapEntityId(component.gameFlowResultRootEntityId, idMap, preserveUnmappedIds);
+		component.gameFlowUpgradeSelectionPanelEntityId = RemapEntityId(component.gameFlowUpgradeSelectionPanelEntityId, idMap, preserveUnmappedIds);
+		component.upgradePlayerEntityId = RemapEntityId(component.upgradePlayerEntityId, idMap, preserveUnmappedIds);
+		component.upgradeConfirmItemEntityId = RemapEntityId(component.upgradeConfirmItemEntityId, idMap, preserveUnmappedIds);
+		for (auto& slot : component.upgradeSlots) for (auto* id : {&slot.itemEntityId, &slot.summaryTextEntityId,
+			&slot.detailRootEntityId, &slot.titleTextEntityId, &slot.descriptionTextEntityId, &slot.selectedMarkerEntityId})
+			*id = RemapEntityId(*id, idMap, preserveUnmappedIds);
 		component.gameFlowResultTimeTextEntityId = RemapEntityId(component.gameFlowResultTimeTextEntityId, idMap, preserveUnmappedIds);
 		for (auto& phase : component.gameFlowPhases) for (auto& wave : phase.waves)
 			wave.spawnerEntityId = RemapEntityId(wave.spawnerEntityId, idMap, preserveUnmappedIds);
@@ -3119,6 +3142,7 @@ namespace {
 					component.gameFlowRemainingTextEntityId = value.value("remainingTextEntityId", uint64_t{});
 					component.gameFlowRemainingPrefix = value.value("remainingPrefix", component.gameFlowRemainingPrefix);
 					component.gameFlowResultRootEntityId = value.value("resultRootEntityId", uint64_t{});
+					component.gameFlowUpgradeSelectionPanelEntityId = value.value("upgradeSelectionPanelEntityId", uint64_t{});
 					component.gameFlowResultTimeTextEntityId = value.value("resultTimeTextEntityId", uint64_t{});
 					component.gameFlowResultMotionClipId = value.value("resultMotionClipId", std::string{});
 					component.gameFlowPhases.clear();
@@ -3128,6 +3152,11 @@ namespace {
 							SceneGameFlowPhase phase{};
 							phase.id = sourcePhase.value("id", std::string{});
 							phase.label = sourcePhase.value("label", std::string{});
+							if (sourcePhase.contains("upgradePool")) {
+								const auto& pool = sourcePhase.at("upgradePool");
+								if (!pool.is_array()) throw json::type_error::create(302, "Upgrade pool must be an array", &pool);
+								for (const auto& entry : pool) phase.upgradePool.push_back({entry.value("id", std::string{}), entry.value("weight", 1.0f)});
+							}
 							if (const auto waves = sourcePhase.find("waves"); waves != sourcePhase.end() && waves->is_array()) {
 								for (const json& sourceWave : *waves) {
 									if (!sourceWave.is_object()) continue;
@@ -4119,6 +4148,23 @@ namespace {
 					component.deathResponseFlagId = value.value("flagId", std::string{});
 					component.deathResponseScope = value.value("scope", std::string{"Target"});
 				}
+				if (component.type == "UpgradeSelection") {
+					component.upgradePlayerEntityId = value.value("playerEntityId", uint64_t{});
+					component.upgradeConfirmItemEntityId = value.value("confirmItemEntityId", uint64_t{});
+					if (value.contains("slots")) {
+						const auto& slots = value.at("slots");
+						if (!slots.is_array() || slots.size() != 3) throw json::type_error::create(302, "Upgrade slots must contain three objects", &slots);
+						for (size_t i = 0; i < 3; ++i) {
+							const auto& source = slots.at(i); auto& slot = component.upgradeSlots[i];
+							slot.itemEntityId = source.value("itemEntityId", uint64_t{});
+							slot.summaryTextEntityId = source.value("summaryTextEntityId", uint64_t{});
+							slot.detailRootEntityId = source.value("detailRootEntityId", uint64_t{});
+							slot.titleTextEntityId = source.value("titleTextEntityId", uint64_t{});
+							slot.descriptionTextEntityId = source.value("descriptionTextEntityId", uint64_t{});
+							slot.selectedMarkerEntityId = source.value("selectedMarkerEntityId", uint64_t{});
+						}
+					}
+				}
 				if (component.type == "PlayerMovementBounds") {
 					auto& bounds = component.movementBounds;
 					bounds.shape = value.value("shape", bounds.shape);
@@ -4138,6 +4184,20 @@ namespace {
 					bounds.boundaryY = value.value("boundaryY", bounds.boundaryY);
 					bounds.lineWidth = value.value("lineWidth", bounds.lineWidth);
 					if (value.contains("color")) bounds.color = JsonToVector(requireVector("color", 4), bounds.color);
+				}
+				if (component.type == "RunUpgrade" && value.contains("entries")) {
+					const auto& entries = value.at("entries");
+					if (!entries.is_array()) throw json::type_error::create(302, "RunUpgrade entries must be an array", &entries);
+					for (const auto& saved : entries) {
+						if (!saved.is_object()) throw json::type_error::create(302, "RunUpgrade entry must be an object", &saved);
+						SceneRunUpgradeDefinition entry;
+						entry.id = saved.value("id", std::string{});
+						entry.name = saved.value("name", std::string{});
+						entry.description = saved.value("description", std::string{});
+						entry.effect = saved.value("effect", std::string{});
+						entry.value = saved.value("value", 0.0f);
+						component.runUpgradeEntries.push_back(std::move(entry));
+					}
 				}
 				if (component.type == "StatTextDisplay") {
 					component.statTextStatsEntityId = value.value("statsEntityId", uint64_t{0});
@@ -5529,6 +5589,16 @@ bool SceneComponent::IsValidThirdPersonZoomRange(float minimum, float maximum) {
 	constexpr float kMaximumZoomDistance = 1000.0f;
 	return std::isfinite(minimum) && std::isfinite(maximum) &&
 		minimum > 0.0f && minimum <= maximum && maximum <= kMaximumZoomDistance;
+}
+
+const char* SceneRunUpgradeDefinition::ValidationIssue() const {
+	if (id.empty()) return "RunUpgrade:Id";
+	if (effect != "Heal" && effect != "Damage" && effect != "MoveSpeed" &&
+		effect != "AttackRange" && effect != "Knockback" && effect != "Recovery") return "RunUpgrade:Effect";
+	if (!std::isfinite(value)) return "RunUpgrade:Finite";
+	if (effect == "Heal") return value > 0 ? "" : "RunUpgrade:Heal";
+	if (effect == "Recovery") return value > 0 && value < 1 ? "" : "RunUpgrade:Recovery";
+	return value > 1 ? "" : "RunUpgrade:Multiplier";
 }
 
 SceneDocument::ContentGeneration::ContentGeneration() { Renew(); }

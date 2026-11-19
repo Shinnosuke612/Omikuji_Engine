@@ -1645,6 +1645,38 @@ void Game::Update() {
 	if (editorSession_) menuInputAllowed = menuInputAllowed && imguiManager_ && imguiManager_->IsGameInputOwned() && ImGuiManager::IsSceneViewInputActive() &&
 		!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive();
 #endif
+	SceneMenuPointerFrame menuPointer;
+	RECT client{};
+	const bool clientValid = winApp_ && GetClientRect(winApp_->GetHwnd(), &client);
+	Vector4 pointerRect{float(client.left), float(client.top), float(client.right), float(client.bottom)};
+	bool pointerViewValid = clientValid;
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+	if (editorSession_) {
+		POINT clientOrigin{};
+		pointerViewValid = imguiManager_ && imguiManager_->IsSceneViewRenderable() &&
+			winApp_ && ClientToScreen(winApp_->GetHwnd(), &clientOrigin);
+		if (pointerViewValid) pointerRect = {imguiManager_->GetSceneViewMinX() - clientOrigin.x,
+			imguiManager_->GetSceneViewMinY() - clientOrigin.y, imguiManager_->GetSceneViewMaxX() - clientOrigin.x,
+			imguiManager_->GetSceneViewMaxY() - clientOrigin.y};
+	}
+#endif
+	const float pointerWidth = pointerRect.z - pointerRect.x, pointerHeight = pointerRect.w - pointerRect.y;
+	menuPointer.allowed = menuInputAllowed && pointerViewValid && pointerWidth > 0 && pointerHeight > 0 &&
+		!paused && !sceneManager_->IsTransitionHeld();
+	if (pointerRect.x != menuPointerRect_.x || pointerRect.y != menuPointerRect_.y ||
+		pointerRect.z != menuPointerRect_.z || pointerRect.w != menuPointerRect_.w || menuPointerAllowed_ != menuPointer.allowed) {
+		++menuPointerViewportSerial_; menuPointerRect_ = pointerRect; menuPointerAllowed_ = menuPointer.allowed;
+	}
+	menuPointer.viewportSerial = menuPointerViewportSerial_;
+	if (auto* input = Input::GetInstance()) {
+		menuPointer.leftDown = input->PushMouse(Input::MouseButton::Left);
+		if (menuPointer.allowed) {
+			const auto position = input->GetMousePosition();
+			menuPointer.normalizedPosition = {(position.x - pointerRect.x) / pointerWidth, (position.y - pointerRect.y) / pointerHeight};
+			menuPointer.inside = position.x >= pointerRect.x && position.x < pointerRect.z && position.y >= pointerRect.y && position.y < pointerRect.w;
+		}
+	} else menuPointer.allowed = false;
+	sceneManager_->SetMenuPointerFrame(menuPointer);
 	sceneManager_->SetMenuInputAllowed(menuInputAllowed);
 	if (!paused) {
 		if (sceneManager_->IsTransitionHeld()) {
@@ -1674,7 +1706,7 @@ void Game::Update() {
 		const bool foreground = winApp_ && GetForegroundWindow() == winApp_->GetHwnd() &&
 			IsWindowVisible(winApp_->GetHwnd()) && !IsIconic(winApp_->GetHwnd());
 		bool captureGameInput = gameplayScene && executionContext_ && executionContext_->IsPlaying() &&
-			!sceneManager_->IsGamePaused() && foreground && !altHeld;
+			!sceneManager_->IsGamePaused() && !sceneManager_->IsPointerMenuOpen() && foreground && !altHeld;
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 		if (editorSession_) captureGameInput = captureGameInput && imguiManager_ && imguiManager_->IsGameInputOwned();
 #endif

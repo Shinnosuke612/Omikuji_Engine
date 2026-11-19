@@ -53,7 +53,8 @@ bool SceneAttackRunnerSystem::Start(
 	SceneDocument& document,
 	uint64_t ownerEntityId,
 	uint64_t attackSetEntityId,
-	const std::string& attackName
+	const std::string& attackName,
+	const SceneRunUpgradeModifiers& upgrades
 ) {
 	if (deathContinuation_ || ownerEntityId == 0 || attackSetEntityId == 0 || attackName.empty()) {
 		return false;
@@ -83,6 +84,7 @@ bool SceneAttackRunnerSystem::Start(
 	runtime.attackSetEntityId = attackSetEntityId;
 	// 実行中にAuthoring Documentが再配置・編集されても攻撃時系列を変えない。
 	runtime.definition = *definition;
+	runtime.recoveryTiming = RecoveryTiming(runtime.definition, upgrades.ForOwner(ownerEntityId).recovery);
 	SceneEntity* animationTarget = ResolveEntity(
 		document,
 		runtime.definition.animationTargetEntityId,
@@ -108,6 +110,27 @@ bool SceneAttackRunnerSystem::Start(
 
 float SceneAttackRunnerSystem::GetDuration(const SceneAttackDefinition& definition) {
 	return (std::max)(definition.windup + definition.activeTime + definition.recovery, 0.0f);
+}
+
+SceneAttackRecoveryTiming SceneAttackRunnerSystem::RecoveryTiming(const SceneAttackDefinition& definition, float multiplier) {
+	const float duration = GetDuration(definition);
+	SceneAttackRecoveryTiming timing{duration, duration, 1};
+	if (!std::isfinite(duration) || !std::isfinite(multiplier) || multiplier <= 0 || multiplier >= 1) return timing;
+	float protectedEnd = definition.windup + definition.activeTime;
+	if (!std::isfinite(protectedEnd)) return timing;
+	for (const auto& window : definition.hitWindows) {
+		if (!std::isfinite(window.startTime) || !std::isfinite(window.endTime)) return timing;
+		if (window.endTime > window.startTime && window.endTime > 0 && window.startTime < duration)
+			protectedEnd = (std::max)(protectedEnd, window.endTime);
+	}
+	for (const auto& effect : definition.effectEvents) {
+		if (!std::isfinite(effect.time)) return timing;
+		// 元の時計で発火しないイベントは、短縮可能な末尾を狭める根拠にしない。
+		if (effect.time > duration ||
+			(effect.particleEffectPath.empty() && effect.groundEffectType == "None" && effect.groundPrefabPath.empty())) continue;
+		protectedEnd = (std::max)(protectedEnd, effect.time);
+	}
+	return {duration, std::clamp(protectedEnd, 0.0f, duration), multiplier};
 }
 
 SceneEntity* SceneAttackRunnerSystem::ResolveEntity(
@@ -393,7 +416,7 @@ void SceneAttackRunnerSystem::Advance(
 		runtime.elapsedTime += safeDeltaTime;
 		runtime.time = (std::min)(
 			runtime.time + safeDeltaTime,
-			GetDuration(runtime.definition)
+			runtime.recoveryTiming.Duration()
 		);
 		for (const SceneAttackEffectEvent& effect : runtime.definition.effectEvents) {
 			const bool crossedEffectTime = effect.time <= 0.0f
@@ -427,7 +450,7 @@ void SceneAttackRunnerSystem::Advance(
 			});
 		}
 		UpdateHitWindows(document, runtime);
-		if (runtime.time >= GetDuration(runtime.definition)) {
+		if (runtime.time >= runtime.recoveryTiming.Duration()) {
 			DeactivateActiveWindows(document, runtime);
 			const bool loopLimitReached = runtime.definition.loopMaxCount > 0 &&
 				runtime.loopCount >= runtime.definition.loopMaxCount;
@@ -584,7 +607,12 @@ float SceneAttackRunnerSystem::GetTime(uint64_t ownerEntityId) const {
 
 float SceneAttackRunnerSystem::GetDuration(uint64_t ownerEntityId) const {
 	const auto found = runtimes_.find(ownerEntityId);
-	return found == runtimes_.end() ? 0.0f : GetDuration(found->second.definition);
+	return found == runtimes_.end() ? 0.0f : found->second.recoveryTiming.Duration();
+}
+
+float SceneAttackRunnerSystem::MapRecoveryTime(uint64_t ownerEntityId, float authoredTime) const {
+	const auto found = runtimes_.find(ownerEntityId);
+	return found == runtimes_.end() ? authoredTime : found->second.recoveryTiming.MapTime(authoredTime);
 }
 
 void SceneAttackRunnerSystem::SetLoopRequested(
@@ -677,7 +705,7 @@ void SceneAttackRunnerSystem::AdvanceDeathContinuation(SceneDocument& document, 
 			runtime.deathContinuing = false; continue;
 		}
 		runtime.previousTime = runtime.time;
-		runtime.time = (std::min)(runtime.time + worldDelta, GetDuration(runtime.definition));
+		runtime.time = (std::min)(runtime.time + worldDelta, runtime.recoveryTiming.Duration());
 		for (const SceneAttackEffectEvent& effect : runtime.definition.effectEvents) {
 			const bool crossedEffectTime = effect.time <= 0.0f
 				? runtime.previousTime <= 0.0f && runtime.time > 0.0f
@@ -709,7 +737,7 @@ void SceneAttackRunnerSystem::AdvanceDeathContinuation(SceneDocument& document, 
 				effect.groundCrackSurfaceOffset
 			});
 		}
-		runtime.deathEndPending = runtime.time >= GetDuration(runtime.definition);
+		runtime.deathEndPending = runtime.time >= runtime.recoveryTiming.Duration();
 	}
 }
 

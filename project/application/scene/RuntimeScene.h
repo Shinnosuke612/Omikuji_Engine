@@ -20,6 +20,7 @@
 #include "systems/gameplay/combat/SceneHitReactionSystem.h"
 #include "systems/gameplay/combat/SceneHitStopSystem.h"
 #include "systems/gameplay/flow/SceneGameFlowSystem.h"
+#include "systems/gameplay/upgrade/SceneRunUpgradeSystem.h"
 #include "systems/effects/SceneEffectRenderSystem.h"
 #include "systems/rendering/SceneEnvironmentSystem.h"
 #include "systems/rendering/SceneLightingSystem.h"
@@ -65,6 +66,10 @@ public:
 	ScenePreparationDiagnostic GetPreparationDiagnostic() const override { return preparationDiagnostic_; }
 	// 通常更新前にUI Eventを評価。非Active/Editでは状態を破棄し、入力非許可では時計を凍結する。
 	void PrepareMenuInput(float deltaTime, bool allowed) override;
+	void SetMenuPointerFrame(const SceneMenuPointerFrame& pointer) override {
+		menuPointer_ = pointer;
+		if (!pointer.allowed) menuSystem_.ResetPointer();
+	}
 	SceneUiControlFrame GetUiControlFrame() const override { return uiControl_; }
 	void SetUiGameplayInputBlocked(bool blocked) override { uiGameplayInputBlocked_ = blocked; }
 	void UpdatePaused() override;
@@ -118,6 +123,14 @@ public:
 		effectRenderSystem_.SetDeferForegroundEffects(defer);
 	}
 	bool TryGetRuntimeStat(uint64_t id, const std::string& key, float& value, float* maxValue = nullptr) const override { return statSystem_.TryGet(id, key, value, nullptr, maxValue); }
+	bool TryGetRunUpgradeModifiers(SceneRunUpgradeModifiers& out) const override {
+		if (!runUpgradeSystem_.GetModifiers().playerEntityId) return false;
+		out = runUpgradeSystem_.GetModifiers(); return true;
+	}
+	bool TryGetUpgradeRecoveryPreview(const SceneAttackDefinition& definition, SceneAttackRecoveryTiming& out) const override {
+		if (!runUpgradeSystem_.GetModifiers().playerEntityId) return false;
+		out = SceneAttackRunnerSystem::RecoveryTiming(definition, runUpgradeSystem_.GetModifiers().values.recovery); return true;
+	}
 	int GetDeathResponseStatus(uint64_t id) const override { return deathSystem_.Status(id); }
 	bool TryGetRuntimeFlag(uint64_t id, const std::string& key, bool& value) const override { return statSystem_.TryGetFlag(id, key, value); }
 	bool TryGetEnemyPositioningStatus(uint64_t id, SceneEnemyPositioningStatus& out) const override {
@@ -142,6 +155,9 @@ private:
 	const SceneUIEditorView* GetEditorUIView() const;
 	void SyncMenuPresentation();
 	void SyncMenuPresentationForOwnDocument();
+	// finalizeで開始し、次prepassでcommit済み待ちを再開。通常Update中には再開しない。
+	void SyncUpgradeSelection(const SceneDocument&, bool allowBegin, bool allowResume);
+	void FailUpgradeSelection(const std::string& issue);
 	void ClearUiRuntime();
 	void ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests);
 	void ProcessMenuPulses(const SceneDocument& document, const std::vector<SceneMenuPulse>& pulses);
@@ -192,6 +208,7 @@ private:
 	uint64_t gameFlowTextDocumentGeneration_ = 0;
 	SceneInstanceId pendingRestartSceneInstanceId_ = kInvalidSceneInstanceId;
 	SceneUiControlFrame uiControl_;
+	SceneMenuPointerFrame menuPointer_;
 	bool uiGameplayInputBlocked_ = false;
 	std::vector<SceneUiActionRequest> pendingMenuRequests_;
 	std::vector<SceneAudioRequest> pendingUiAudioRequests_;
@@ -199,6 +216,7 @@ private:
 	SceneMenuSource uiTransitionSource_;
 	// 拒否された終端要求も、そのprepassでは再試行やCancelの既定Closeへ進めない。
 	bool uiTerminalAttempted_ = false;
+	uint64_t upgradeFaultPanel_ = 0;
 	uint64_t nextUiTransitionSerial_ = 1;
 	SceneInstanceId uiLoadReservation_ = kInvalidSceneInstanceId;
 
@@ -240,6 +258,7 @@ private:
 	SceneEnemySystem enemySystem_;
 	SceneEnemySpawnerSystem enemySpawnerSystem_;
 	SceneGameFlowSystem gameFlowSystem_;
+	SceneRunUpgradeSystem runUpgradeSystem_;
 	SceneEventSystem eventSystem_;
 	SceneMenuSystem menuSystem_;
 	SceneGamePauseSystem gamePauseSystem_;

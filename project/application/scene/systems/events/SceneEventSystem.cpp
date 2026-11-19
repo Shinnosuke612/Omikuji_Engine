@@ -799,7 +799,12 @@ std::vector<SceneUiActionRequest> SceneEventSystem::EvaluateUiNotifications(cons
 				auto& state = UiBindingState(owner.id, i, *events);
 				if (state.cooldown > 0 || (binding.triggerOnce && state.fired)) continue;
 				state.fired = true; state.cooldown = binding.cooldown;
-				for (const auto& action : binding.actions) result.push_back({pulse.source, owner.id, action});
+				for (const auto& action : binding.actions) {
+					SceneUiActionRequest request{pulse.source, owner.id, action};
+					if (pulse.type == SceneMenuPulseType::ItemConfirmed) request.confirmedItemId = pulse.itemId;
+					if ((action.type == "SelectRunUpgrade" || action.type == "ConfirmRunUpgrade") && !request.confirmedItemId) continue;
+					result.push_back(std::move(request));
+				}
 			}
 		}
 	}

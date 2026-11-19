@@ -253,6 +253,7 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneReplayPresentation.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRuntimeDocumentState.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRuntimePreparation.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRunUpgradeRuntime.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneSettings.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.h" />

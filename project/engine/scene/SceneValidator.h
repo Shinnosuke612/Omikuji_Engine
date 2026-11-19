@@ -8,6 +8,7 @@
 
 class SceneCatalog;
 class SceneDocument;
+struct SceneUpgradePoolEntry;
 
 enum class SceneValidationSeverity {
 	Warning,
@@ -24,6 +25,9 @@ struct SceneValidationIssue {
 
 class SceneValidator final {
 public:
+	// Editorと選択Runtimeが同じ参照/Writer/候補pool制約を使用。空文字は正常。
+	static std::string UpgradeSelectionIssue(const SceneDocument& document, uint64_t panelId,
+		const std::vector<SceneUpgradePoolEntry>* pool = nullptr);
 	static bool ValidateDocument(
 		const SceneDocument& document,
 		const SceneCatalog* catalog,

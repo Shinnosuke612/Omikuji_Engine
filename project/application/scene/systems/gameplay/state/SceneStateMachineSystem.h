@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../../../SceneRuntimeObjectBinding.h"
+#include "../../../../../engine/scene/SceneRunUpgradeRuntime.h"
 
 class Object3d;
 class Player;
@@ -60,6 +61,12 @@ public:
 	bool IsAttackFinished() const;
 	float GetAttackTime() const;
 	float GetAttackDuration() const;
+	// legacy StateはEnterで取得し、当該攻撃中の倍率を固定する。
+	float GetRecoveryMultiplier() const;
+	// 明示parameterだけを変換。fallbackは既に実効時刻であり、二重変換しない。
+	// legacyTimingはそのStateのEnter時snapshotを呼出中だけ借りる。
+	float GetAttackTimeParameter(const std::string& name, float fallback,
+		const SceneAttackRecoveryTiming* legacyTiming = nullptr) const;
 	void SetAttackLoopRequested(bool requested);
 	void RequestState(const std::string& stateName);
 
@@ -75,7 +82,8 @@ private:
 		const SceneStateDefinition& state,
 		float stateTime,
 		std::string& requestedState,
-		bool acceptGameplayInput
+		bool acceptGameplayInput,
+		const SceneRunUpgradeModifiers& upgrades
 	);
 
 	SceneDocument& document_;
@@ -88,6 +96,7 @@ private:
 	float stateTime_ = 0.0f;
 	std::string& requestedState_;
 	bool acceptGameplayInput_ = true;
+	SceneRunUpgradeModifiers upgrades_{};
 };
 
 class IEntityStateAction {
@@ -130,7 +139,8 @@ public:
 		ScenePrefabAnimationSystem& prefabAnimationSystem,
 		float deltaTime,
 		const std::unordered_set<uint64_t>& blockedEntityIds = {},
-		bool acceptGameplayInput = true
+		bool acceptGameplayInput = true,
+		const SceneRunUpgradeModifiers& upgrades = {}
 	);
 	bool RequestState(uint64_t entityId, const std::string& stateName);
 	const std::string* GetCurrentState(uint64_t entityId) const;

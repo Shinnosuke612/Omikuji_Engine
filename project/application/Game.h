@@ -51,6 +51,10 @@ public:
 	void Draw() override;
 
 private:
+	// client画像矩形/入力所有が変わった押下を次Frameへ持ち越さない。
+	Vector4 menuPointerRect_{};
+	uint64_t menuPointerViewportSerial_ = 0;
+	bool menuPointerAllowed_ = false;
 	uint64_t replayDrawSerial_ = 0; // Game Drawごとの採取通知。Viewごとには発行しない。
 	struct PresentedTransitionState;
 	std::unique_ptr<PresentedTransitionState> presentedTransition_;

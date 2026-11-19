@@ -513,7 +513,8 @@ void SceneDebugSystem::AddDebugDraw(
 	Camera* runtimeCamera,
 	bool runtimeActive,
 	bool playing,
-	bool paused
+	bool paused,
+	const SceneRunUpgradeModifiers& upgrades
 ) const {
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	// Debug表示はRuntime状態を変更せず、確定済みTransformから描画命令だけを作る。
@@ -574,7 +575,7 @@ void SceneDebugSystem::AddDebugDraw(
 		runtimeCamera
 	);
 	if (showColliders_) {
-		AddColliderDebugDraw(*document, objectSystem);
+		AddColliderDebugDraw(*document, objectSystem, upgrades);
 	}
 	if (showSkeleton_) {
 		AddSkeletonDebugDraw(*document, objectSystem);
@@ -688,7 +689,8 @@ void SceneDebugSystem::AddCameraPathDebugDraw(
 
 void SceneDebugSystem::AddColliderDebugDraw(
 	const SceneDocument& document,
-	const SceneObjectSystem& objectSystem
+	const SceneObjectSystem& objectSystem,
+	const SceneRunUpgradeModifiers& upgrades
 ) const {
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	DebugRenderer* renderer = DebugRenderer::GetInstance();
@@ -696,7 +698,8 @@ void SceneDebugSystem::AddColliderDebugDraw(
 		const Collider* collider,
 		const Vector4& color,
 		const std::string& mode,
-		uint32_t segments
+		uint32_t segments,
+		float range
 	) {
 		if (!collider) {
 			return;
@@ -705,6 +708,20 @@ void SceneDebugSystem::AddColliderDebugDraw(
 		const bool drawSolid = mode != "Wireframe";
 		Vector4 solidColor = color;
 		solidColor.w = (std::min)(solidColor.w, 0.25f);
+		// Combatと同じworld形状コピーを拡大し、保存Colliderや中心を変更しない。
+		if (range != 1) {
+			ColliderSweepShape shape;
+			if (!CaptureColliderSweepShape(*collider, shape)) return;
+			if (shape.type == Collider::Type::Sphere) {
+				if (drawSolid) renderer->AddSolidSphere(shape.center, shape.radius * range, solidColor, segments);
+				if (drawWire) renderer->AddSphere(shape.center, shape.radius * range, color, segments);
+			} else {
+				const auto size = Math::Multiply(shape.halfSize, range);
+				if (drawSolid) renderer->AddSolidOBB(shape.center, shape.axis, size, solidColor);
+				if (drawWire) renderer->AddOBB(shape.center, shape.axis, size, color);
+			}
+			return;
+		}
 		if (collider->GetType() == Collider::Type::Sphere) {
 			const auto& sphere = static_cast<const SphereCollider&>(*collider);
 			if (drawSolid) {
@@ -750,11 +767,26 @@ void SceneDebugSystem::AddColliderDebugDraw(
 			IsEntityActiveInHierarchy(document, entity) &&
 			runtime->colliderDebugVisible
 		) {
+			float range = 1;
+			if (const auto* hit = FindEnabledComponent(entity, "HitBox")) {
+				// Combatのowner規則: 明示ID、名前、最寄りFaction、HitBox自身の順。
+				const auto* owner = document.FindEntity(hit->hitBoxOwnerEntityId);
+				if (!owner && !hit->hitBoxOwnerEntityName.empty()) owner = document.FindEntityByName(hit->hitBoxOwnerEntityName);
+				if (!owner) {
+					const auto* parent = &entity;
+					for (size_t depth = 0; parent && depth <= document.GetEntities().size(); ++depth) {
+						if (FindEnabledComponent(*parent, "Faction")) { owner = parent; break; }
+						parent = document.FindEntity(parent->parentId);
+					}
+				}
+				range = upgrades.ForOwner(owner ? owner->id : entity.id).attackRange;
+			}
 			drawCollider(
 				runtime->collider,
 				runtime->colliderDebugColor,
 				runtime->colliderDebugDrawMode,
-				runtime->colliderDebugSegments
+				runtime->colliderDebugSegments,
+				range
 			);
 		}
 	}

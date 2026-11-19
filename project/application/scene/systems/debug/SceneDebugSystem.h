@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include "../../../../engine/scene/SceneRunUpgradeRuntime.h"
 
 class Camera;
 class SceneCameraSystem;
@@ -25,7 +26,8 @@ public:
 		Camera* runtimeCamera,
 		bool runtimeActive,
 		bool playing,
-		bool paused
+		bool paused,
+		const SceneRunUpgradeModifiers& upgrades = {}
 	) const;
 
 private:
@@ -42,7 +44,8 @@ private:
 	) const;
 	void AddColliderDebugDraw(
 		const SceneDocument& document,
-		const SceneObjectSystem& objectSystem
+		const SceneObjectSystem& objectSystem,
+		const SceneRunUpgradeModifiers& upgrades
 	) const;
 	void AddSkeletonDebugDraw(
 		const SceneDocument& document,

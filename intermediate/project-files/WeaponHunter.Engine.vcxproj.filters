@@ -215,6 +215,7 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneReplayPresentation.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRuntimeDocumentState.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRuntimePreparation.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRunUpgradeRuntime.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneSettings.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.h"><Filter>Engine</Filter></ClInclude>

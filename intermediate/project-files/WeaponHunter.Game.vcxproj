@@ -44,18 +44,19 @@
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneStatSystem.cpp"><ObjectFileName>$(IntDir)src_28_9FA0330AE010E5BA.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\flow\SceneGameFlowSystem.cpp"><ObjectFileName>$(IntDir)src_29_472276AD25718A96.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\state\SceneStateMachineSystem.cpp"><ObjectFileName>$(IntDir)src_30_18AE26CF7C48EA15.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\menu\SceneMenuSystem.cpp"><ObjectFileName>$(IntDir)src_31_AFC8499375ECBC45.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.cpp"><ObjectFileName>$(IntDir)src_32_03E324915BA774A9.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneEnvironmentSystem.cpp"><ObjectFileName>$(IntDir)src_33_1A6353DDAB53F70A.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneLightingSystem.cpp"><ObjectFileName>$(IntDir)src_34_11211FB5924C93D1.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneMonitorSystem.cpp"><ObjectFileName>$(IntDir)src_35_55BF63D9C06F41F9.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.cpp"><ObjectFileName>$(IntDir)src_36_AA0B73901ED0F5CE.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneUIRenderSystem.cpp"><ObjectFileName>$(IntDir)src_37_9AB29B97D7CE00A7.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayHistorySystem.cpp"><ObjectFileName>$(IntDir)src_38_36E5B92B575260BF.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayRenderSystem.cpp"><ObjectFileName>$(IntDir)src_39_6266ED10F2169479.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.cpp"><ObjectFileName>$(IntDir)src_40_6FED70B151E4A733.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><ObjectFileName>$(IntDir)src_41_63A4F7AAB91E5249.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)application\transition\SceneTransitionController.cpp"><ObjectFileName>$(IntDir)src_42_BC8BD0746BB0C56A.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\upgrade\SceneRunUpgradeSystem.cpp"><ObjectFileName>$(IntDir)src_31_3354C08C448D8839.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\menu\SceneMenuSystem.cpp"><ObjectFileName>$(IntDir)src_32_AFC8499375ECBC45.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.cpp"><ObjectFileName>$(IntDir)src_33_03E324915BA774A9.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneEnvironmentSystem.cpp"><ObjectFileName>$(IntDir)src_34_1A6353DDAB53F70A.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneLightingSystem.cpp"><ObjectFileName>$(IntDir)src_35_11211FB5924C93D1.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneMonitorSystem.cpp"><ObjectFileName>$(IntDir)src_36_55BF63D9C06F41F9.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneObjectSystem.cpp"><ObjectFileName>$(IntDir)src_37_AA0B73901ED0F5CE.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneUIRenderSystem.cpp"><ObjectFileName>$(IntDir)src_38_9AB29B97D7CE00A7.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayHistorySystem.cpp"><ObjectFileName>$(IntDir)src_39_36E5B92B575260BF.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\replay\SceneReplayRenderSystem.cpp"><ObjectFileName>$(IntDir)src_40_6266ED10F2169479.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextMotionSystem.cpp"><ObjectFileName>$(IntDir)src_41_6FED70B151E4A733.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\scene\systems\text\SceneTextRenderSystem.cpp"><ObjectFileName>$(IntDir)src_42_63A4F7AAB91E5249.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)application\transition\SceneTransitionController.cpp"><ObjectFileName>$(IntDir)src_43_BC8BD0746BB0C56A.obj</ObjectFileName></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(CGProjectSourceRoot)application\camera\ThirdPersonCameraController.h" />
@@ -91,6 +92,7 @@
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\combat\SceneStatSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\flow\SceneGameFlowSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\state\SceneStateMachineSystem.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\gameplay\upgrade\SceneRunUpgradeSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\menu\SceneMenuSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\physics\ScenePhysicsSystem.h" />
     <ClInclude Include="$(CGProjectSourceRoot)application\scene\systems\rendering\SceneEnvironmentSystem.h" />

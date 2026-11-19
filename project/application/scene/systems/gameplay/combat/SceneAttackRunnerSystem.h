@@ -9,6 +9,7 @@
 
 #include "../../../../../engine/math/Vector3.h"
 #include "../../../../../engine/scene/SceneDocument.h"
+#include "../../../../../engine/scene/SceneRunUpgradeRuntime.h"
 
 class ScenePrefabAnimationSystem;
 class Player;
@@ -34,11 +35,13 @@ struct SceneAttackEffectRequest {
 
 class SceneAttackRunnerSystem {
 public:
+	// 後隙補正は開始時にコピーする。以後の倍率変更/プレイ終了で実行中の時計を再計算しない。
 	bool Start(
 		SceneDocument& document,
 		uint64_t ownerEntityId,
 		uint64_t attackSetEntityId,
-		const std::string& attackName
+		const std::string& attackName,
+		const SceneRunUpgradeModifiers& upgrades = {}
 	);
 	// 出現中ownerの時刻/HitWindow/演出開始を保留する。状態は破棄しない。
 	void Advance(
@@ -71,6 +74,10 @@ public:
 	bool IsFinished(uint64_t ownerEntityId) const;
 	float GetTime(uint64_t ownerEntityId) const;
 	float GetDuration(uint64_t ownerEntityId) const;
+	// 開始時snapshotで明示指定のコンボ時刻だけを変換する。未実行なら入力値を返す。
+	float MapRecoveryTime(uint64_t ownerEntityId, float authoredTime) const;
+	// legacy Stateも同じHit/Effect保護終端を使う。保存値は変更しない。
+	static SceneAttackRecoveryTiming RecoveryTiming(const SceneAttackDefinition& definition, float multiplier);
 	void SetLoopRequested(uint64_t ownerEntityId, bool requested);
 	std::vector<SceneAttackEffectRequest> ConsumeEffectRequests();
 	void Stop(SceneDocument& document, uint64_t ownerEntityId);
@@ -118,6 +125,7 @@ private:
 		uint64_t animationTargetEntityId = 0;
 		uint64_t facingTargetEntityId = 0;
 		SceneAttackDefinition definition{};
+		SceneAttackRecoveryTiming recoveryTiming{};
 		float time = 0.0f;
 		float previousTime = 0.0f;
 		float appliedMotionProgress = 0.0f;

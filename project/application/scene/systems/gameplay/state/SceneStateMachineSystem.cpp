@@ -237,9 +237,18 @@ namespace {
 		}
 	};
 
+	SceneAttackRecoveryTiming LegacyRecoveryTiming(StateContext& context) {
+		SceneAttackDefinition definition;
+		definition.windup = (std::max)(context.GetFloat("Windup", 0.15f), 0.0f);
+		definition.activeTime = (std::max)(context.GetFloat("ActiveTime", 0.2f), 0.0f);
+		definition.recovery = (std::max)(context.GetFloat("Recovery", 0.35f), 0.0f);
+		return SceneAttackRunnerSystem::RecoveryTiming(definition, context.GetRecoveryMultiplier());
+	}
+
 	class BuiltinMeleeAttackState final : public IEntityStateAction {
 	public:
 		void Enter(StateContext& context) override {
+			recoveryTiming_ = LegacyRecoveryTiming(context);
 			context.SetEntityActive(context.GetEntityParameter("HitBox"), false);
 			const std::string animation = context.GetString("Animation");
 			if (!animation.empty()) {
@@ -267,15 +276,12 @@ namespace {
 			const float activeTime = (std::max)(
 				context.GetFloat("ActiveTime", 0.2f), 0.0f
 			);
-			const float recovery = (std::max)(
-				context.GetFloat("Recovery", 0.35f), 0.0f
-			);
 			const float time = context.GetStateTime();
 			context.SetEntityActive(
 				context.GetEntityParameter("HitBox"),
 				time >= windup && time < windup + activeTime
 			);
-			if (time >= windup + activeTime + recovery) {
+			if (time >= recoveryTiming_.Duration()) {
 				PlayReturnPrefabAnimation(context);
 				context.RequestState(context.GetString("ReturnState", "Idle"));
 			}
@@ -284,6 +290,8 @@ namespace {
 		void Exit(StateContext& context) override {
 			context.SetEntityActive(context.GetEntityParameter("HitBox"), false);
 		}
+	private:
+		SceneAttackRecoveryTiming recoveryTiming_{};
 	};
 
 	class BuiltinMeleeComboAttackState final : public IEntityStateAction {
@@ -308,6 +316,13 @@ namespace {
 				runnerAttack_ = true;
 				return;
 			}
+			recoveryTiming_ = hasAttackDefinition_
+				? SceneAttackRunnerSystem::RecoveryTiming(attackDefinition_, context.GetRecoveryMultiplier())
+				: LegacyRecoveryTiming(context);
+			// 旧Clipが直接HitBoxを操作する場合、AttackSetなしでは終端を証明できない。
+			// 判定を途中で切らないため、その経路だけ全区間を保護する。
+			if (!hasAttackDefinition_ && context.GetBool("AnimateHitBox", false))
+				recoveryTiming_.protectedEnd = recoveryTiming_.authoredDuration;
 			// 攻撃中のCamera操作で突進軌道が曲がらないよう、開始時の向きを固定する。
 			ResolvePlanarAttackAxes(context, forward_, right_);
 			context.SetEntityActive(context.GetEntityParameter("HitBox"), false);
@@ -339,16 +354,16 @@ namespace {
 			if (runnerAttack_) {
 				const float time = context.GetAttackTime();
 				const float transitionTime = (std::max)(
-					context.GetFloat("ComboTransitionTime", context.GetAttackDuration()),
+					context.GetAttackTimeParameter("ComboTransitionTime", context.GetAttackDuration()),
 					0.0f
 				);
 				const float windowStart = std::clamp(
-					context.GetFloat("ComboWindowStart", 0.0f),
+					context.GetAttackTimeParameter("ComboWindowStart", 0.0f),
 					0.0f,
 					transitionTime
 				);
 				const float windowEnd = std::clamp(
-					context.GetFloat("ComboWindowEnd", transitionTime),
+					context.GetAttackTimeParameter("ComboWindowEnd", transitionTime),
 					windowStart,
 					transitionTime
 				);
@@ -459,16 +474,16 @@ namespace {
 			}
 
 			const float transitionTime = (std::max)(
-				context.GetFloat("ComboTransitionTime", stateDuration),
+				context.GetAttackTimeParameter("ComboTransitionTime", recoveryTiming_.Duration(), &recoveryTiming_),
 				0.0f
 			);
 			const float windowStart = std::clamp(
-				context.GetFloat("ComboWindowStart", windup),
+				context.GetAttackTimeParameter("ComboWindowStart", windup, &recoveryTiming_),
 				0.0f,
 				transitionTime
 			);
 			const float windowEnd = std::clamp(
-				context.GetFloat("ComboWindowEnd", transitionTime),
+				context.GetAttackTimeParameter("ComboWindowEnd", transitionTime, &recoveryTiming_),
 				windowStart,
 				transitionTime
 			);
@@ -519,6 +534,7 @@ namespace {
 		bool runnerAttack_ = false;
 		bool hasAttackDefinition_ = false;
 		SceneAttackDefinition attackDefinition_{};
+		SceneAttackRecoveryTiming recoveryTiming_{};
 		int activeHitWindowIndex_ = -1;
 		SceneEntity* activeHitBox_ = nullptr;
 		float lastMotionAmount_ = 0.0f;
@@ -695,7 +711,8 @@ StateContext::StateContext(
 	const SceneStateDefinition& state,
 	float stateTime,
 	std::string& requestedState,
-	bool acceptGameplayInput
+	bool acceptGameplayInput,
+	const SceneRunUpgradeModifiers& upgrades
 ) :
 	document_(document),
 	entity_(entity),
@@ -706,7 +723,8 @@ StateContext::StateContext(
 	state_(state),
 	stateTime_(stateTime),
 	requestedState_(requestedState),
-	acceptGameplayInput_(acceptGameplayInput) {}
+	acceptGameplayInput_(acceptGameplayInput),
+	upgrades_(upgrades) {}
 
 SceneEntity& StateContext::GetEntity() const { return entity_; }
 
@@ -852,7 +870,7 @@ bool StateContext::StartAttack(
 	const std::string& attackName
 ) {
 	return attackSetEntity && attackRunnerSystem_.Start(
-		document_, entity_.id, attackSetEntity->id, attackName
+		document_, entity_.id, attackSetEntity->id, attackName, upgrades_
 	);
 }
 
@@ -870,6 +888,18 @@ float StateContext::GetAttackTime() const {
 
 float StateContext::GetAttackDuration() const {
 	return attackRunnerSystem_.GetDuration(entity_.id);
+}
+
+float StateContext::GetRecoveryMultiplier() const {
+	return upgrades_.ForOwner(entity_.id).recovery;
+}
+
+float StateContext::GetAttackTimeParameter(const std::string& name, float fallback,
+	const SceneAttackRecoveryTiming* legacyTiming) const {
+	const auto* parameter = FindParameter(state_, name);
+	if (!parameter) return fallback;
+	return legacyTiming ? legacyTiming->MapTime(parameter->floatValue)
+		: attackRunnerSystem_.MapRecoveryTime(entity_.id, parameter->floatValue);
 }
 
 void StateContext::SetAttackLoopRequested(bool requested) {
@@ -916,7 +946,8 @@ void SceneStateMachineSystem::Update(
 	ScenePrefabAnimationSystem& prefabAnimationSystem,
 	float deltaTime,
 	const std::unordered_set<uint64_t>& blockedEntityIds,
-	bool acceptGameplayInput
+	bool acceptGameplayInput,
+	const SceneRunUpgradeModifiers& upgrades
 ) {
 	auto findBinding = [&](uint64_t entityId) -> const SceneRuntimeObjectBinding* {
 		const auto found = std::find_if(
@@ -941,7 +972,7 @@ void SceneStateMachineSystem::Update(
 		}
 		return StateContext(
 			document, entity, object, body, attackRunnerSystem, prefabAnimationSystem,
-			state, stateTime, requestedState, acceptGameplayInput
+			state, stateTime, requestedState, acceptGameplayInput, upgrades
 		);
 	};
 	auto transition = [&] (

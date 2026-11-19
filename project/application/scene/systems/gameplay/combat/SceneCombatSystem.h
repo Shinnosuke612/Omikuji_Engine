@@ -13,6 +13,7 @@
 #include "../../../SceneRuntimeObjectBinding.h"
 #include "../../../../../engine/math/Vector3.h"
 #include "../../../../../engine/scene/BaseScene.h"
+#include "../../../../../engine/scene/SceneRunUpgradeRuntime.h"
 
 class SceneDocument;
 class SceneStatSystem;
@@ -179,6 +180,7 @@ public:
 	// bindings外のowner/Stats参照もblockedならDamage/命中通知を生成しない。
 	// observerは受付後に同期呼出しし、保持しない。Entity/Component配列変更・再帰Combat・HP変更は禁止。
 	// swept候補は時刻順、従来候補は時刻1の安定順。引数省略時は従来の受付経路を使用する。
+	// upgradesは呼出中だけ借用し、対象ownerのDamage/水平Knockback/判定寸法に一回適用する。
 	void Update(
 		SceneDocument& document,
 		const std::vector<SceneRuntimeObjectBinding>& bindings,
@@ -189,7 +191,8 @@ public:
 		const std::unordered_set<uint64_t>& blockedEntityIds = {},
 		const std::vector<SceneEnemyContactRequest>& contacts = {},
 		const std::unordered_set<uint64_t>& controlledHitBoxes = {},
-		const std::function<void(const SceneCombatHitEvent&)>& onAcceptedHit = {}
+		const std::function<void(const SceneCombatHitEvent&)>& onAcceptedHit = {},
+		const SceneRunUpgradeModifiers& upgrades = {}
 	);
 	// Poolで復元したEntityの受付/有効化世代を破棄する。旧攻撃を新しい出現へ持ち越さない。
 	void ResetEntity(uint64_t entityId);
@@ -212,5 +215,7 @@ private:
 	std::map<std::pair<uint64_t, uint64_t>, uint64_t> activations_;
 	std::unordered_map<uint64_t, uint64_t> controlledConsumed_;
 	std::unordered_map<uint64_t, uint64_t> spawnGenerations_;
+	// 不正な拡大形状のログを同じHitBoxで毎Frame繰り返さない。
+	std::unordered_set<uint64_t> invalidRangeHitBoxes_;
 
 };

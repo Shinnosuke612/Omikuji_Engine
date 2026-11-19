@@ -36,6 +36,8 @@ namespace {
 	}
 }
 void SceneMenuSystem::Clear() {
+	hiddenVisualRoots_.clear(); disabledItemIds_.clear();
+	ResetPointer();
 	frame_ = {}; order_.clear(); eligible_.clear(); initialRejected_ = false;
 	stack_.clear(); pulses_.clear(); diagnostic_.clear(); initialized_ = false;
 }
@@ -67,7 +69,10 @@ bool SceneMenuSystem::RefreshPanel(const SceneDocument& doc, uint64_t instanceId
 		if (item->enabled && item->menuInteractable && Visible(doc, id)) eligible_.push_back(id);
 	}
 	auto eligible = [&](uint64_t id) { return std::find(eligible_.begin(), eligible_.end(), id) != eligible_.end(); };
-	if (newPanel) {
+	if (panel.menuInputMode == "Pointer") {
+		initialRejected_ = false;
+		frame_.selectedItemId = eligible(hoveredItemId_) ? hoveredItemId_ : 0;
+	} else if (newPanel) {
 		initialRejected_ = panel.menuInitialItemEntityId && !eligible(panel.menuInitialItemEntityId);
 		frame_.selectedItemId = initialRejected_ ? 0 : panel.menuInitialItemEntityId ? panel.menuInitialItemEntityId : eligible_.empty() ? 0 : eligible_.front();
 	} else if (!eligible(oldSelected)) {
@@ -136,6 +141,7 @@ bool SceneMenuSystem::IsSourceValid(const SceneDocument& doc, const SceneMenuSou
 	return std::any_of(stack_.begin(), stack_.end(), [&](const auto& panel) { return panel.id == source.panelId && panel.serial == source.openSerial; });
 }
 bool SceneMenuSystem::Selectable(const SceneDocument& doc, uint64_t panelId, uint64_t itemId) const {
+	if (std::find(disabledItemIds_.begin(), disabledItemIds_.end(), itemId) != disabledItemIds_.end()) return false;
 	const auto* e = doc.FindEntity(itemId);
 	const auto* item = e ? FindEnabledComponent(*e, "MenuItem") : nullptr;
 	const auto* owner = doc.FindEntity(panelId);
@@ -145,6 +151,16 @@ bool SceneMenuSystem::Selectable(const SceneDocument& doc, uint64_t panelId, uin
 }
 bool SceneMenuSystem::Open(const SceneDocument& doc, uint64_t panelId) {
 	if (std::any_of(stack_.begin(), stack_.end(), [&](const auto& p) { return p.id == panelId; })) return true;
+	// 設定は複数配置可能だが、同時に開くPause rootは一つ。stack変更前に拒否する。
+	std::string pauseError;
+	const auto* pause = SceneGamePauseSystem::FindSettings(doc, panelId, pauseError);
+	if (!pauseError.empty()) { diagnostic_ = pauseError; return false; }
+	if (pause) for (const auto& open : stack_) {
+		if (SceneGamePauseSystem::FindSettings(doc, open.id, pauseError)) {
+			diagnostic_ = "MenuRuntime:PauseMultiple"; return false;
+		}
+		if (!pauseError.empty()) { diagnostic_ = pauseError; return false; }
+	}
 	order_.clear(); frame_.selectedItemId = 0; initialRejected_ = false;
 	if (!RefreshPanel(doc, frame_.instanceId, panelId, true)) {
 		diagnostic_ = "MenuRuntime:InvalidPanel"; Rebuild(doc); return false;
@@ -173,7 +189,21 @@ void SceneMenuSystem::Rebuild(const SceneDocument& doc) {
 		order_ = stack_.back().order; frame_.selectedItemId = stack_.back().selected; initialRejected_ = false;
 		RefreshPanel(doc, combined.instanceId, stack_.back().id, false);
 	} else { order_.clear(); eligible_.clear(); initialRejected_ = false; }
+	combined.hoveredItemId = combined.selectedItemId == hoveredItemId_ ? hoveredItemId_ : 0;
+	combined.hiddenVisualRoots = hiddenVisualRoots_; combined.disabledItemIds = disabledItemIds_;
+	for (uint64_t id : disabledItemIds_) {
+		const auto* entity = doc.FindEntity(id);
+		const auto* item = entity ? FindEnabledComponent(*entity, "MenuItem") : nullptr;
+		const auto* label = item ? doc.FindEntity(item->menuLabelEntityId ? item->menuLabelEntityId : id) : nullptr;
+		if (const auto* text = label ? FindEnabledComponent(*label, "TextRenderer") : nullptr) {
+			auto color = text->textColor; color.w *= 0.35f; combined.textColors[label->id] = color;
+		}
+	}
 	frame_ = std::move(combined);
+}
+void SceneMenuSystem::SetPresentation(const SceneDocument& document, const std::vector<uint64_t>& hiddenRoots,
+	const std::vector<uint64_t>& disabledItems) {
+	hiddenVisualRoots_ = hiddenRoots; disabledItemIds_ = disabledItems; Rebuild(document);
 }
 void SceneMenuSystem::Sync(const SceneDocument& doc, uint64_t instanceId) {
 	if (frame_.instanceId != instanceId || frame_.generation != doc.GetContentGeneration()) Clear();
@@ -217,6 +247,60 @@ bool SceneMenuSystem::Apply(const SceneDocument& doc, const SceneMenuCommand& co
 	stack_.back().selected = eligible_[(pos + (command.type == SceneMenuCommandType::Next ? 1 : eligible_.size() - 1)) % eligible_.size()];
 	Rebuild(doc); return true;
 }
+void SceneMenuSystem::ResetPointer() {
+	pointerSource_ = {}; pointerViewportSerial_ = 0;
+	hoveredItemId_ = pressedItemId_ = 0;
+	pointerArmed_ = pointerWasDown_ = false;
+	frame_.hoveredItemId = 0;
+}
+void SceneMenuSystem::ApplyPointer(const SceneDocument& doc, const SceneMenuPointerFrame& pointer) {
+	const auto* owner = doc.FindEntity(frame_.panelId);
+	const auto* panel = owner ? FindEnabledComponent(*owner, "MenuPanel") : nullptr;
+	if (!pointer.allowed || !panel || panel->menuInputMode != "Pointer" || !Matches(doc, frame_.instanceId)) {
+		const bool hadHover = hoveredItemId_ != 0;
+		ResetPointer();
+		if (hadHover) Rebuild(doc);
+		return;
+	}
+	const auto source = GetSource();
+	if (pointerSource_.instanceId != source.instanceId || pointerSource_.generation != source.generation ||
+		pointerSource_.revision != source.revision || pointerSource_.panelId != source.panelId ||
+		pointerSource_.openSerial != source.openSerial || pointerViewportSerial_ != pointer.viewportSerial) {
+		ResetPointer();
+		pointerSource_ = source; pointerViewportSerial_ = pointer.viewportSerial;
+	}
+	hoveredItemId_ = 0;
+	if (pointer.inside) {
+		const auto groups = SceneUILayout::CollectPaintOrder(doc, "ScreenOverlay", 0, nullptr, source.panelId, &frame_, true);
+		for (auto group = groups.rbegin(); group != groups.rend() && !hoveredItemId_; ++group) {
+			for (auto node = group->items.rbegin(); node != group->items.rend(); ++node) {
+				const uint64_t itemId = Nearest(doc, node->entityId, "MenuItem");
+				if (std::find(eligible_.begin(), eligible_.end(), itemId) == eligible_.end() || !Selectable(doc, source.panelId, itemId)) continue;
+				const auto* item = doc.FindEntity(itemId);
+				if (!item || !FindEnabledComponent(*item, "UITransform")) continue;
+				SceneUILayout::Layout bounds;
+				// 文字/Markerの絵が大きくても、クリック範囲はMenuItem自身の枠に限定する。
+				if (SceneUILayout::Resolve(doc, itemId, bounds) && SceneUILayout::ContainsNormalizedPoint(bounds, pointer.normalizedPosition)) {
+					hoveredItemId_ = itemId; break;
+				}
+			}
+		}
+	}
+	Rebuild(doc);
+	if (!pointerArmed_) {
+		// 開いた時/復帰時に押されていたボタンは、解放後の新しい押下だけを受け付ける。
+		pointerArmed_ = !pointer.leftDown;
+	} else if (pointer.leftDown && !pointerWasDown_) {
+		pressedItemId_ = hoveredItemId_;
+	} else if (!pointer.leftDown && pointerWasDown_) {
+		const uint64_t pressed = std::exchange(pressedItemId_, 0);
+		if (pressed && pressed == hoveredItemId_ && Selectable(doc, source.panelId, pressed))
+			Apply(doc, SceneMenuCommand{source, SceneMenuCommandType::Confirm, source.panelId});
+	}
+	// 枠外へのdragは、戻ってから離しても新たな押し直しが必要。
+	if (pointer.leftDown && pressedItemId_ != hoveredItemId_) pressedItemId_ = 0;
+	pointerWasDown_ = pointer.leftDown;
+}
 std::vector<SceneMenuPulse> SceneMenuSystem::ConsumePulses() { return std::exchange(pulses_, {}); }
 void SceneMenuSystem::CompleteCancel(const SceneDocument& doc, const SceneMenuPulse& pulse) {
 	if (pulse.closeAfterNotification && IsSourceValid(doc, pulse.source) && frame_.panelId == pulse.source.panelId && frame_.openSerial == pulse.source.openSerial)
@@ -227,12 +311,10 @@ std::string SceneMenuSystem::ConsumeDiagnostic() { return std::exchange(diagnost
 const SceneComponent* SceneGamePauseSystem::FindSettings(const SceneDocument& doc, uint64_t panelId, std::string& error) {
 	error.clear();
 	const SceneComponent* found = nullptr;
-	size_t enabledCount = 0;
 	for (const auto& entity : doc.GetEntities()) {
 		if (!IsEntityActiveInHierarchy(doc, entity)) continue;
 		for (const auto& setting : entity.components) {
 			if (setting.type != "GamePause" || !setting.enabled) continue;
-			++enabledCount;
 			if (setting.gamePausePanelEntityId == panelId) {
 				if (found) { error = "MenuRuntime:PauseAmbiguous"; return nullptr; }
 				found = &setting;
@@ -242,8 +324,7 @@ const SceneComponent* SceneGamePauseSystem::FindSettings(const SceneDocument& do
 	if (!found) return nullptr;
 	const auto* entity = doc.FindEntity(panelId);
 	const auto* panel = entity ? FindEnabledComponent(*entity, "MenuPanel") : nullptr;
-	if (enabledCount > 1) error = "MenuRuntime:PauseMultiple";
-	else if (!panel || !IsEntityActiveInHierarchy(doc, *entity)) error = "MenuRuntime:PauseInvalidPanel";
+	if (!panel || !IsEntityActiveInHierarchy(doc, *entity)) error = "MenuRuntime:PauseInvalidPanel";
 	else if (panel->menuInitiallyOpen) error = "MenuRuntime:PauseInitiallyOpen";
 	return error.empty() ? found : nullptr;
 }
@@ -254,6 +335,7 @@ uint64_t SceneGamePauseSystem::Sync(const SceneDocument& doc, const SceneMenuSys
 		if (!error.empty()) return id;
 		if (!setting) continue;
 		if (!supported) { error = "MenuRuntime:PauseUnsupportedScene"; return id; }
+		if (root_.panelId) { error = "MenuRuntime:PauseMultiple"; return id; }
 		root_ = menus.GetOpenSource(id); pauseBgm_ = setting->gamePauseBgm;
 	}
 	return 0;

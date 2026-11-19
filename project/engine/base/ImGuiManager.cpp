@@ -380,6 +380,164 @@ namespace {
 		}
 	}
 
+	const char* RunUpgradeIssueText(EditorLanguage language, const std::string& issue) {
+		auto text = [&](const char* ja, const char* en) { return SelectEditorText(language, ja, en); };
+		if (issue == "RunUpgrade:Id") return text("識別IDが空です。このPlayer内で重複しないIDを入力してください。", "The ID is empty. Enter an ID unique to this Player.");
+		if (issue == "RunUpgrade:DuplicateId") return text("識別IDが重複しています。別のIDに変更してください。", "The ID is already used. Enter a different ID.");
+		if (issue == "RunUpgrade:Effect") return text("未対応の効果です。六種類の効果から選び直してください。", "Unsupported effect. Select one of the six supported effects.");
+		if (issue == "RunUpgrade:Finite") return text("効果量が有限値ではありません。通常の数値を入力してください。", "The value is not finite. Enter a finite number.");
+		if (issue == "RunUpgrade:Heal") return text("回復HP量は0より大きい値を入力してください。", "Enter a healing amount greater than zero.");
+		if (issue == "RunUpgrade:Recovery") return text("後隙の倍率は0より大きく1より小さい値を入力してください。小さいほど後隙が短くなります。", "Enter a recovery multiplier greater than zero and less than one. Smaller values shorten recovery more.");
+		if (issue == "RunUpgrade:Multiplier") return text("強化倍率は1より大きい値を入力してください。1.1は10%増加を意味します。", "Enter a multiplier greater than one. 1.1 means a 10% increase.");
+		if (issue == "RunUpgrade:Player") return text("同じEntityに有効なPlayerBehaviorがありません。プレイヤー本体に定義を置いてください。", "No enabled PlayerBehavior exists on this Entity. Place the definitions on the Player itself.");
+		if (issue == "RunUpgrade:Health") return text("回復候補には同じEntityの有効なHealthが必要です。HPの参照も設定してください。", "Healing requires an enabled Health on this Entity. Configure its HP reference too.");
+		if (issue == "RunUpgrade:Name") return text("画面表示用の名前が空です。分かりやすい名前を入力してください。", "The display name is empty. Enter an understandable name.");
+		if (issue == "RunUpgrade:Empty") return text("強化候補は未登録です。「候補を追加」から定義してください。", "No upgrade definitions exist. Use Add Candidate to create one.");
+		if (issue == "RunUpgrade:DuplicateComponent") return text("RunUpgradeが重複しています。同じEntityには一つだけ残してください。", "Duplicate RunUpgrade components exist. Keep only one on this Entity.");
+		return text("編集対象が変わったか、編集できない状態です。閉じて編集状態を確認し、操作をやり直してください。", "The target changed or cannot be edited. Close this dialog, check edit mode, and start again.");
+	}
+
+	// 操作拒否の原因と対処は、Scene/PrefabとRuntime診断で同じ言語経路を使う。
+	const char* UpgradeSelectionIssueText(EditorLanguage language, const std::string& issue) {
+		struct Message { const char* code; const char* ja; const char* en; };
+		static const Message messages[] = {
+			{"Panel", "三択画面の構成が不正です。MenuPanel・GamePauseを同じEntityに設定し、CanvasItems・Pointer・開始時は閉じる・キャンセルなし・BGM停止なしにしてください。", "Invalid panel. Use MenuPanel and GamePause on the same entity: CanvasItems, Pointer, initially closed, no cancel, keep BGM."},
+			{"Player", "対象Playerが無効です。Player本体のPlayerBehavior・Health・RunUpgradeを有効にし、参照を設定してください。", "Invalid Player. Enable PlayerBehavior, Health and RunUpgrade on the Player and assign its reference."},
+			{"Definitions", "強化定義が不正です。一意のID、名前、有限で有効な効果量をRunUpgradeへ設定してください。", "Invalid definitions. Set unique IDs, names and valid finite values in RunUpgrade."},
+			{"Event", "強化の操作を実行できません。各カードと決定項目のUI「項目決定」通知を、対象Panelの強化選択／強化決定へ接続してください。一度だけをOFF、待ち時間を0にします。", "Upgrade actions are unavailable. Connect each card and confirm item's UI Item Confirmed event to Select Upgrade / Confirm Upgrade on this panel. Disable Once and set cooldown to zero."},
+			{"Slots", "三択の参照が不正です。カード・通常名・詳細親・詳細名・説明・選択印と決定項目を別々に指定し、詳細名と説明を詳細親の子にしてください。", "Invalid slots. Use distinct cards, summary, detail root, title, description, marker and confirm item. Place title and description under the detail root."},
+			{"Writer", "三択の文字を別の機能も更新しています。StatTextDisplay・GameFlow・PostEffectの表示先と分けてください。", "Another feature writes this text. Use separate text entities from StatTextDisplay, GameFlow and PostEffect."},
+			{"Pool", "三択を抽選できません。有効な候補IDを重複なく3個以上、正の重みで指定してください。重みは有限の0以上で、0は抽選対象外です。", "Cannot draw three choices. Assign at least three distinct valid IDs with positive weights. Weights must be finite and nonnegative; zero is excluded."},
+			{"FinalPhase", "最終フェーズには三択を設定できません。候補を空にして結果画面へ進めてください。", "The final phase cannot offer upgrades. Clear its pool and proceed to results."},
+			{"Close", "強化を決める前に再開できません。一つ選んで決定するか、タイトルへ戻ってください。", "Cannot resume before confirmation. Select and confirm an upgrade, or return to title."},
+			{"Apply", "強化を決定できませんでした。未選択・死亡・設定変更・効果量の上限を確認してください。効果を適用せず停止しています。設定を直して新規Playからやり直してください。", "Upgrade not applied. Check selection, life state, changed settings and value limits. The run is stopped. Correct the settings and start a new Play session."},
+			{"Open", "強化画面を開けません。別の停止画面を閉じ、PanelとGamePauseの設定を確認して新規プレイから再開してください。", "Cannot open the panel. Close other pause roots, check Panel/GamePause settings, and start a new run."},
+			{"Template", "ひな形を作成できません。Transformを初期値へ戻した編集可能な空のEntity、対象Playerと有効な強化定義、画面内で重ならない配置を用意してください。既存の子やUIは置換しません。", "Cannot create the template. Use an editable empty entity with identity Transform, a Player with valid definitions, and non-overlapping bounds inside the canvas. Existing children and UI are not replaced."}
+		};
+		for (const auto& message : messages) if (issue == std::string("UpgradeSelection:") + message.code) return SelectEditorText(language, message.ja, message.en);
+		return SelectEditorText(language, "選択中の設定または参照が変わったため停止しました。設定を確認し、新規プレイからやり直してください。", "Selection stopped because settings or references changed. Review them and start a new run.");
+	}
+
+	bool DrawRunUpgradeFields(EditorLanguage language, const SceneDocument& document,
+		const SceneEntity& owner, SceneComponent& component, bool editable) {
+		auto text = [&](const char* ja, const char* en) { return SelectEditorText(language, ja, en); };
+		const char* effects[] = {"Heal", "Damage", "MoveSpeed", "AttackRange", "Knockback", "Recovery"};
+		const char* labels[] = {text("HP回復", "Heal HP"), text("攻撃力", "Attack Damage"), text("移動速度", "Movement Speed"),
+			text("攻撃範囲", "Attack Range"), text("ノックバック", "Knockback"), text("攻撃後の後隙短縮", "Post-attack Recovery")};
+		auto effectLabel = [&](const std::string& effect) {
+			for (size_t i = 0; i < 6; ++i) if (effect == effects[i]) return labels[i];
+			return text("未対応の効果", "Unsupported Effect");
+		};
+		struct Draft {
+			uint64_t generation = 0, revision = 0, owner = 0, component = 0;
+			int index = -1;
+			bool remove = false;
+			SceneRunUpgradeDefinition entry;
+			std::string issue;
+		};
+		// 同時に一つのModalだけを編集。別Inspectorの描画だけではdraftを書き換えない。
+		static Draft draft;
+		const char* dialog = text("強化候補の編集###RunUpgradeEdit", "Edit Upgrade Candidate###RunUpgradeEdit");
+		const char* rejectedDialog = text("強化候補の警告###RunUpgradeRejected", "Upgrade Candidate Warning###RunUpgradeRejected");
+		auto beginEdit = [&](int index, bool remove) {
+			draft = {document.GetContentGeneration(), document.GetRevision(), owner.id, component.localId, index, remove, {}, {}};
+			if (index >= 0) draft.entry = component.runUpgradeEntries[static_cast<size_t>(index)];
+			ImGui::OpenPopup(dialog);
+		};
+		ImGui::TextWrapped("%s", text("定義した候補をGameFlowDirectorの各Phaseに登録し、UpgradeSelectionで選択します。取得結果はプレイ終了まで有効です。", "Register these definitions in GameFlowDirector phases and select through UpgradeSelection. Acquired effects last until the run ends."));
+		if (!SceneEntityQuery::FindEnabledComponent(owner, "PlayerBehavior")) ImGui::TextWrapped("%s", RunUpgradeIssueText(language, "RunUpgrade:Player"));
+		if (component.runUpgradeEntries.empty()) ImGui::TextWrapped("%s", RunUpgradeIssueText(language, "RunUpgrade:Empty"));
+		ImGui::BeginDisabled(!editable);
+		if (ImGui::Button(text("候補を追加###AddRunUpgrade", "Add Candidate###AddRunUpgrade"))) beginEdit(-1, false);
+		for (size_t i = 0; i < component.runUpgradeEntries.size(); ++i) {
+			ImGui::PushID(static_cast<int>(i));
+			const auto& entry = component.runUpgradeEntries[i];
+			ImGui::Separator();
+			ImGui::TextWrapped("%s [%s]", entry.name.c_str(), entry.id.c_str());
+			ImGui::Text("%s: %.6g", effectLabel(entry.effect), entry.value);
+			if (const char* issue = entry.ValidationIssue(); *issue) ImGui::TextWrapped("%s", RunUpgradeIssueText(language, issue));
+			if (std::count_if(component.runUpgradeEntries.begin(), component.runUpgradeEntries.end(), [&](const auto& other) { return other.id == entry.id; }) > 1)
+				ImGui::TextWrapped("%s", RunUpgradeIssueText(language, "RunUpgrade:DuplicateId"));
+			// ModalのIDを一覧行に依存させず、追加/編集/削除で同じ出所検証を共有する。
+			const bool edit = ImGui::Button(text("編集", "Edit")); ImGui::SameLine();
+			const bool remove = ImGui::Button(text("削除", "Remove"));
+			ImGui::PopID();
+			if (edit || remove) beginEdit(static_cast<int>(i), remove);
+		}
+		ImGui::EndDisabled();
+		bool changed = false;
+		ImGui::SetNextWindowSize(ImVec2(540, 500), ImGuiCond_Appearing);
+		if (ImGui::BeginPopupModal(dialog, nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+			const bool same = draft.generation == document.GetContentGeneration() && draft.revision == document.GetRevision() &&
+				draft.owner == owner.id && draft.component == component.localId &&
+				(draft.index < 0 || static_cast<size_t>(draft.index) < component.runUpgradeEntries.size());
+			if (!same || !editable) ImGui::TextWrapped("%s", RunUpgradeIssueText(language, "RunUpgrade:Stale"));
+			ImGui::BeginDisabled(!same || !editable);
+			if (draft.remove) {
+				ImGui::TextWrapped("%s [%s]", draft.entry.name.c_str(), draft.entry.id.c_str());
+				ImGui::TextWrapped("%s", text("この定義を削除します。後でフェーズ候補に参照を設定した場合は、その参照も確認してください。", "Remove this definition. If phase pools reference this ID later, review those references too."));
+			} else {
+				// 長い説明を固定長bufferで切り捨てない。入力中の再確保もImGuiへ通知する。
+				auto field = [&](const char* label, std::string& value, bool multiline = false) {
+					ImGui::TextUnformatted(label); ImGui::SetNextItemWidth(-1);
+					ImGui::PushID(label);
+					std::vector<char> buffer(value.begin(), value.end()); buffer.resize(value.size() + 256, '\0');
+					auto resize = [](ImGuiInputTextCallbackData* data) -> int {
+						auto& storage = *static_cast<std::vector<char>*>(data->UserData);
+						storage.resize((std::max)(storage.size(), static_cast<size_t>(data->BufSize)));
+						data->Buf = storage.data(); return 0;
+					};
+					const bool edited = multiline ? ImGui::InputTextMultiline("##Value", buffer.data(), buffer.size(), ImVec2(-1, 90), ImGuiInputTextFlags_CallbackResize, resize, &buffer) :
+						ImGui::InputText("##Value", buffer.data(), buffer.size(), ImGuiInputTextFlags_CallbackResize, resize, &buffer);
+					if (edited) value = buffer.data();
+					ImGui::PopID();
+				};
+				field(text("識別ID", "Stable ID"), draft.entry.id);
+				field(text("表示名", "Display Name"), draft.entry.name);
+				field(text("詳細説明", "Description"), draft.entry.description, true);
+				ImGui::TextUnformatted(text("効果", "Effect")); ImGui::SetNextItemWidth(-1);
+				if (ImGui::BeginCombo("##Effect", effectLabel(draft.entry.effect))) {
+					for (size_t i = 0; i < 6; ++i) if (ImGui::Selectable(labels[i], draft.entry.effect == effects[i])) draft.entry.effect = effects[i];
+					ImGui::EndCombo();
+				}
+				ImGui::TextUnformatted(draft.entry.effect == "Heal" ? text("回復するHP量", "HP to Restore") : text("倍率", "Multiplier"));
+				ImGui::SetNextItemWidth(-1); ImGui::InputFloat("##Amount", &draft.entry.value, 0, 0, "%.6g");
+				ImGui::TextWrapped("%s", text("回復: 0より大。後隙: 0より大きく1未満。他の倍率: 1より大。具体的な量はここで設定してください。", "Heal: greater than 0. Recovery: between 0 and 1. Other multipliers: greater than 1. Choose the actual amount here."));
+			}
+			if (ImGui::Button(draft.remove ? text("削除を確定", "Confirm Removal") : text("適用", "Apply"))) {
+				draft.issue = draft.remove ? "" : draft.entry.ValidationIssue();
+				if (!draft.remove) for (size_t i = 0; i < component.runUpgradeEntries.size(); ++i)
+					if (static_cast<int>(i) != draft.index && component.runUpgradeEntries[i].id == draft.entry.id) draft.issue = "RunUpgrade:DuplicateId";
+				if (!draft.issue.empty()) ImGui::OpenPopup(rejectedDialog);
+				else {
+					if (draft.remove) component.runUpgradeEntries.erase(component.runUpgradeEntries.begin() + draft.index);
+					else if (draft.index < 0) component.runUpgradeEntries.push_back(draft.entry);
+					else component.runUpgradeEntries[static_cast<size_t>(draft.index)] = draft.entry;
+					changed = true; ImGui::CloseCurrentPopup();
+				}
+			}
+			ImGui::EndDisabled(); ImGui::SameLine();
+			if (ImGui::Button(text("取消", "Cancel"))) ImGui::CloseCurrentPopup();
+			if (ImGui::BeginPopupModal(rejectedDialog, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+				ImGui::TextUnformatted(text("強化候補を適用できませんでした。", "The upgrade candidate could not be applied."));
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420);
+				ImGui::TextWrapped("%s", RunUpgradeIssueText(language, draft.issue)); ImGui::PopTextWrapPos();
+				if (ImGui::Button(text("戻る", "Back"))) ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+			}
+			ImGui::EndPopup();
+		}
+		if (ImGui::Button(text("強化定義のリファレンス", "Upgrade Definitions Reference"))) ImGui::OpenPopup("RunUpgradeReference");
+		if (ImGui::BeginPopup("RunUpgradeReference")) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480);
+			ImGui::TextWrapped("%s", text(
+				"PlayerBehaviorと同じEntityにRunUpgradeを追加します。「候補を追加」でID・名前・詳細・効果・量を設定し、適用してください。編集と削除も適用まで原本を変えず、通常のUndoで戻せます。追加直後は候補が空です。Scene/Prefabに保存でき、候補IDは同じComponent内で一意にします。参照後のID変更はフェーズ側も確認してください。\n回復は取得時にHPへ一回加算する量。最大HPは変えません。その他は取得ごとに乗算する倍率です。攻撃範囲は中心を変えず判定サイズを拡大し、ノックバックは水平成分、後隙短縮は攻撃後だけを対象にします。後隙中に判定や演出が残る区間は保護します。\n取得結果はプレイ終了・リトライ・新規Playで初期化し、ここに保存しません。GameFlowDirectorで各非最終フェーズの候補IDと重みを設定し、UpgradeSelectionを参照します。重み1は均等、0は除外です。選択画面の設定手順はUpgradeSelectionのリファレンスを参照してください。RunUpgrade単独の入力やEvent Actionはありません。画面例は未作成・実画面は未確認です。",
+				"Add RunUpgrade to the Entity with PlayerBehavior. Use Add Candidate to enter ID, name, description, effect and amount, then Apply. Editing and removal leave the original unchanged until confirmation and use normal Undo. New components start with an empty list. Definitions save with Scene/Prefab; IDs must be unique within this component. Review phase references when renaming IDs later.\nHeal adds HP once when acquired and does not change maximum HP. Other values multiply on repeated acquisition. Attack Range enlarges collision dimensions without moving their center; Knockback affects the horizontal component; Recovery only shortens the post-attack tail while preserving hit/effect timings.\nAcquired upgrades reset at run end, retry and new Play; they are not saved here. Configure candidate IDs and weights on non-final GameFlowDirector phases and assign UpgradeSelection. Weight 1 is uniform; 0 excludes a candidate. See the UpgradeSelection reference for screen setup. RunUpgrade has no standalone input or Event Action. Screen examples are not yet available and the live UI has not been verified."));
+			ImGui::PopTextWrapPos(); ImGui::EndPopup();
+		}
+		return changed;
+	}
+
 	bool DrawStatSetFields(EditorLanguage language, SceneComponent& component,
 		const SceneManager* runtime, const SceneDocument* runtimeDocument, uint64_t entityId, bool editable) {
 		bool changed = false, reject = false;
@@ -10115,6 +10273,7 @@ namespace {
 			{ "SelectPreviousMenuItem", "前の項目を選ぶ", "Select Previous Item" },
 			{ "SelectNextMenuItem", "次の項目を選ぶ", "Select Next Item" },
 			{ "ConfirmMenuItem", "選択項目を決定", "Confirm Selected Item" }, { "CancelMenu", "キャンセル", "Cancel Menu" },
+			{ "SelectRunUpgrade", "強化候補を選択", "Select Upgrade" }, { "ConfirmRunUpgrade", "強化を決定", "Confirm Upgrade" },
 			{ "PauseGame", "ゲームをポーズ", "Pause Game" }, { "ResumeGame", "ゲームを再開", "Resume Game" },
 			{ "RequestApplicationExit", "ゲーム終了を要求", "Request Application Exit" },
 			{ "SceneTransition", "Sceneを切り替える", "Change Scene" },
@@ -10240,13 +10399,14 @@ bool ImGuiManager::DrawUiEventActions(SceneDocument& document, SceneEventBinding
 		changed |= DrawMenuChoice(editorLanguage_, SelectEditorText(editorLanguage_, "処理", "Action"), action.type,
 			{ "OpenMenu", "CloseMenu", "SelectPreviousMenuItem", "SelectNextMenuItem", "ConfirmMenuItem", "CancelMenu",
 			  "SceneTransition", "ExitGame", "PlayAudio", "StopAudio", "PauseAudio", "ResumeAudio",
-			  "PlayTextMotion", "StopTextMotion", "ResetTextMotion", "PauseGame", "ResumeGame" });
+			  "PlayTextMotion", "StopTextMotion", "ResetTextMotion", "PauseGame", "ResumeGame", "SelectRunUpgrade", "ConfirmRunUpgrade" });
 		if (action.type == "ExitGame") DrawExitGameReference(editorLanguage_);
 		if (action.type == "RequestApplicationExit")
 			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "旧終了要求は実行しません。処理から「ゲームを終了」を選び直してください。", "The legacy exit request is not executed. Select Exit game from Action instead."));
 		const char* targetType = nullptr;
 		if (action.type == "OpenMenu" || action.type == "CloseMenu" || action.type == "SelectPreviousMenuItem" || action.type == "SelectNextMenuItem" || action.type == "ConfirmMenuItem" || action.type == "CancelMenu") targetType = "MenuPanel";
 		else if (action.type == "PauseGame" || action.type == "ResumeGame") targetType = "GamePause";
+		else if (action.type == "SelectRunUpgrade" || action.type == "ConfirmRunUpgrade") targetType = "UpgradeSelection";
 		else if (action.type == "PlayAudio" || action.type == "StopAudio" || action.type == "PauseAudio" || action.type == "ResumeAudio") targetType = "AudioSource";
 		else if (action.type == "PlayTextMotion" || action.type == "StopTextMotion" || action.type == "ResetTextMotion") targetType = "TextMotion";
 		if (targetType) {
@@ -10400,7 +10560,22 @@ void ImGuiManager::PrepareMenuInputConversion(SceneDocument& document, uint64_t 
 	};
 	auto* panelOwner = menuInputCandidate_->FindEntity(panelId);
 	auto* panel = panelOwner ? FindComponent(*panelOwner, "MenuPanel") : nullptr;
-	if (!panel || (mode != "Standard" && mode != "Events")) { block(text("対象Panelを確認できません。操作をやり直してください。", "Panel unavailable. Start the operation again.")); return; }
+	if (!panel || (mode != "Standard" && mode != "Events" && mode != "Pointer")) { block(text("対象Panelを確認できません。操作をやり直してください。", "Panel unavailable. Start the operation again.")); return; }
+	// Pointerの出入りは明示Previewで方式だけ変更する。既存Eventを削除/生成しない。
+	if (mode == "Pointer" || panel->menuInputMode == "Pointer") {
+		menuInputPreview_.push_back(panelOwner->name + " : " + text("操作方式を変更", "Change Input Mode") + " → " + mode);
+		menuInputPreview_.push_back(text("既存のEventと標準キー一覧は保持します。Pointerでは左ボタンを同じ項目内で押して離すと決定します。保存済みのキーEventも有効なので、マウス専用にする場合は接続を確認してください。", "Existing events and standard key lists are preserved. Pointer confirms when the left button is pressed and released on the same item. Authored key events remain active; review them for mouse-only menus."));
+		if (!editable(*panelOwner)) block(text("PanelがロックまたはPrefab管理下です。編集可能にしてからやり直してください。", "Panel is locked or prefab-managed. Make it editable and try again."));
+		if (mode == "Pointer") for (const auto id : panel->menuItemEntityIds) {
+			const auto* item = document.FindEntity(id);
+			if (!item || !FindEnabledComponent(*item, "UITransform")) block(LocalizeMenuRuntimeIssue("MenuRuntime:PointerBounds"));
+		}
+		if (mode == "Standard") {
+			if (const char* error = ValidateMenuStandardKeys(panel->MenuStandardKeyGroups(), panel->menuNavigationAxis); *error) block(LocalizeMenuRuntimeIssue(error));
+		}
+		panel->menuInputMode = mode;
+		return;
+	}
 	menuInputPreview_.push_back(panelOwner->name + " : " + text(mode == "Standard" ? "標準操作へ変換" : "Event方式へ変換", mode == "Standard" ? "Convert to Standard Controls" : "Convert to Event Controls"));
 	if (!editable(*panelOwner)) block(text("PanelがロックまたはPrefab管理下です。編集可能にしてからやり直してください。", "Panel is locked or prefab-managed. Make it editable and try again."));
 	const auto groups = panel->MenuStandardKeyGroups();
@@ -11893,6 +12068,7 @@ void ImGuiManager::DrawSceneUIEditorControls(SceneDocument& document) {
 }
 
 std::string ImGuiManager::LocalizeMenuIssue(const std::string& error) const {
+	if (error.starts_with("UpgradeSelection:")) return UpgradeSelectionIssueText(editorLanguage_, error);
 	if (error.find("Only one active GamePause") != std::string::npos) return LocalizeMenuRuntimeIssue("MenuRuntime:PauseMultiple");
 	if (error.find("GamePause panel must start closed") != std::string::npos) return LocalizeMenuRuntimeIssue("MenuRuntime:PauseInitiallyOpen");
 	if (error.starts_with("MenuRuntime:")) return LocalizeMenuRuntimeIssue(error);
@@ -11961,6 +12137,7 @@ std::string ImGuiManager::LocalizeMenuIssue(const std::string& error) const {
 }
 
 std::string ImGuiManager::LocalizeMenuRuntimeIssue(const std::string& issue) const {
+	if (issue.starts_with("UpgradeSelection:")) return UpgradeSelectionIssueText(editorLanguage_, issue);
 	if (issue.starts_with("MenuRuntime:ExitRejected")) return SelectEditorText(editorLanguage_,
 		"ゲームを終了できません。Sceneの切替中、または現在の実行Sceneからの要求ではありません。切替が完了してから、現在の画面でもう一度操作してください。",
 		"Cannot exit: a scene change is in progress or the request is not from the current running scene. Wait for the change to finish, then try again on the current screen.");
@@ -11978,7 +12155,7 @@ std::string ImGuiManager::LocalizeMenuRuntimeIssue(const std::string& issue) con
 	if (issue.starts_with("MenuRuntime:StandardKeysDuplicate")) return SelectEditorText(editorLanguage_, "同じ操作のキーが重複しています。キー一覧から重複行を削除してください。", "An operation contains duplicate keys. Remove the duplicate rows.");
 	if (issue.starts_with("MenuRuntime:StandardKeysConflict")) return SelectEditorText(editorLanguage_, "使用中の別操作と同じキーは設定できません。キーを変えてください。並び方向を変える場合は「別方向のキー設定」も確認してください。", "This key belongs to another active operation. Choose another key. For an axis change, also review Other Axis Keys.");
 	if (issue.starts_with("MenuRuntime:PauseInitiallyOpen")) return SelectEditorText(editorLanguage_, "停止するメニューは開始時に閉じてください。MenuPanelの「開始時に開く」を外してから設定してください。", "A pause menu must start closed. Disable Initially Open on the MenuPanel, then try again.");
-	if (issue.starts_with("MenuRuntime:PauseMultiple")) return SelectEditorText(editorLanguage_, "有効なGamePauseはScene内で一つだけです。他のPanelの停止設定を無効にしてから設定してください。", "Only one GamePause may be enabled in the scene. Disable the other panel's pause setting first.");
+	if (issue.starts_with("MenuRuntime:PauseMultiple")) return SelectEditorText(editorLanguage_, "停止画面を同時に二つ開けません。現在の画面を終了してから開いてください。強化選択中は決定するかタイトルへ戻ってください。", "Two pause roots cannot open together. Finish the current screen first. During upgrade selection, confirm a choice or return to title.");
 	if (issue.starts_with("MenuRuntime:PauseAmbiguous")) return SelectEditorText(editorLanguage_, "停止設定の参照が重複しているか、同じEntityのGamePauseが別Panelを参照しています。GamePauseの参照を確認してから再操作してください。", "Pause bindings are duplicated or the GamePause on this entity targets another panel. Review the GamePause references, then try again.");
 	if (issue.starts_with("MenuRuntime:PauseUnsupportedScene")) return SelectEditorText(editorLanguage_, "読み込まれているSceneにゲーム内停止へ未対応のものがあります。対応するScene構成にしてから開いてください。メニューとゲームを部分的には停止しません。", "A loaded scene does not support in-game pause. Use compatible scenes before opening this menu. Partial pause is not applied.");
 	if (issue.starts_with("MenuRuntime:PauseLocked")) return SelectEditorText(editorLanguage_, "停止設定の接続元がロックまたはPrefab管理下にあります。接続元を編集可能にしてから再操作してください。", "The pause binding is locked or prefab-managed. Make its owner editable, then try again.");
@@ -11987,6 +12164,8 @@ std::string ImGuiManager::LocalizeMenuRuntimeIssue(const std::string& issue) con
 	if (issue.starts_with("MenuRuntime:Pause")) return SelectEditorText(editorLanguage_, "停止するメニューを解決できません。GamePauseの参照先とMenuPanelの有効状態を確認してください。", "The pause menu could not be resolved. Check the GamePause target and the MenuPanel's enabled state.");
 	if (issue.starts_with("MenuRuntime:StandardMode"))
 		return SelectEditorText(editorLanguage_, "メニューの配置方式または操作方式が不正です。対応する方式を指定したデータへ戻してください。", "The menu layout or input mode is invalid. Restore a supported mode in the document.");
+	if (issue.starts_with("MenuRuntime:PointerBounds"))
+		return SelectEditorText(editorLanguage_, "マウス操作を設定できません。登録した各MenuItemにUITransformを追加して有効にし、クリック範囲の枠を設定してからやり直してください。", "Cannot configure mouse controls. Add and enable UITransform on each registered MenuItem, set its hit bounds, and try again.");
 	if (issue.starts_with("MenuRuntime:CanvasSize"))
 		return SelectEditorText(editorLanguage_, "制作サイズを変更できません。幅・高さをそれぞれ1以上の整数にしてください。", "Cannot change reference size. Set width and height to positive integers.");
 	if (issue.starts_with("MenuRuntime:StandardCanvasRequired"))
@@ -12013,6 +12192,7 @@ std::string ImGuiManager::LocalizeSceneRestartIssue(const std::string& issue) co
 }
 
 std::string ImGuiManager::LocalizeGameFlowIssue(const std::string& issue) const {
+	if (issue.starts_with("UpgradeSelection:")) return UpgradeSelectionIssueText(editorLanguage_, issue);
 	struct Message { const char* code; const char* ja; const char* en; };
 	static const Message messages[] = {
 		{"InvalidSettings", "開始方法または時間の設定が不正です。開始数は1〜9、案内・カウントダウン間隔・計測表示間隔は0より大きく、他の待ち時間は0以上に設定してください。", "Invalid sequence or timing. Use a countdown of 1–9, positive briefing/countdown/timer intervals, and nonnegative other delays."},
@@ -12983,6 +13163,7 @@ bool ImGuiManager::DrawGameFlowFields(SceneDocument& document, uint64_t entityId
 		entityField(text("計測の文字###TimerTarget", "Timer Text###TimerTarget"), component.gameFlowTimerTextEntityId, "TextRenderer", false);
 		entityField(text("残敵数の文字（任意）###RemainingTarget", "Remaining Text (Optional)###RemainingTarget"), component.gameFlowRemainingTextEntityId, "TextRenderer", false);
 		entityField(text("結果をまとめる親###ResultRoot", "Result Root###ResultRoot"), component.gameFlowResultRootEntityId, "", false);
+		entityField(text("強化選択Panel（任意）###UpgradePanel", "Upgrade Panel (Optional)###UpgradePanel"), component.gameFlowUpgradeSelectionPanelEntityId, "UpgradeSelection", false);
 		entityField(text("結果時間の文字###ResultTarget", "Result Time Text###ResultTarget"), component.gameFlowResultTimeTextEntityId, "TextRenderer", false);
 		clipField(text("結果の文字演出###ResultClip", "Result Motion###ResultClip"), component.gameFlowResultTimeTextEntityId, component.gameFlowResultMotionClipId, false);
 		number(text("Phase間の待ち時間（秒）###PhaseDelay", "Inter-phase Delay (s)###PhaseDelay"), component.gameFlowInterPhaseDelaySeconds, false);
@@ -13002,6 +13183,22 @@ bool ImGuiManager::DrawGameFlowFields(SceneDocument& document, uint64_t entityId
 			if (ImGui::TreeNodeEx("Phase", ImGuiTreeNodeFlags_DefaultOpen, "%s %zu", text("Phase", "Phase"), i + 1)) {
 				changed |= InputTextString(text("Phase ID###PhaseId", "Phase ID###PhaseId"), phase.id);
 				changed |= InputTextString(text("表示名###PhaseLabel", "Display Label###PhaseLabel"), phase.label);
+				if (ImGui::TreeNode(text("終了後の強化候補###UpgradePool", "Upgrade Pool###UpgradePool"))) {
+					ImGui::TextWrapped("%s", text("最終Phaseは候補なし。重み1で均等、0で除外。使用するPhaseは正の重みの候補を3個以上指定します。", "Leave the final phase empty. Weight 1 is uniform; 0 excludes an entry. Enabled phases need at least three positive candidates."));
+					int remove = -1;
+					for (size_t p = 0; p < phase.upgradePool.size(); ++p) {
+						ImGui::PushID(static_cast<int>(p));
+						changed |= InputTextString(text("候補ID", "Candidate ID"), phase.upgradePool[p].id);
+						number(text("重み", "Weight"), phase.upgradePool[p].weight, false);
+						if (ImGui::SmallButton(text("候補を除外", "Remove Candidate"))) remove = static_cast<int>(p);
+						ImGui::PopID();
+					}
+					if (remove >= 0) { phase.upgradePool.erase(phase.upgradePool.begin() + remove); changed = true; }
+					ImGui::BeginDisabled(i + 1 == component.gameFlowPhases.size());
+					if (ImGui::SmallButton(text("候補を追加", "Add Candidate"))) { phase.upgradePool.push_back({}); changed = true; }
+					ImGui::EndDisabled();
+					ImGui::TreePop();
+				}
 				for (size_t j = 0; j < phase.waves.size(); ++j) {
 					auto& wave = phase.waves[j];
 					ImGui::PushID(static_cast<int>(j));
@@ -13041,7 +13238,7 @@ bool ImGuiManager::DrawGameFlowFields(SceneDocument& document, uint64_t entityId
 		SceneValidator::ValidateDocument(document, nullptr, {}, {}, issues);
 		gameFlowValidationIssues_.clear();
 		for (const auto& issue : issues) {
-			if (issue.entityId == entityId && issue.message.starts_with("FlowPreparation:")) gameFlowValidationIssues_.push_back(issue.message);
+			if (issue.entityId == entityId && (issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("UpgradeSelection:"))) gameFlowValidationIssues_.push_back(issue.message);
 			if (issue.message.starts_with("SpawnPreparation:") && std::any_of(component.gameFlowPhases.begin(), component.gameFlowPhases.end(), [&](const auto& phase) {
 				return std::any_of(phase.waves.begin(), phase.waves.end(), [&](const auto& wave) { return wave.spawnerEntityId == issue.entityId; });
 			})) gameFlowValidationIssues_.push_back("FlowPreparation:SpawnFailed " + issue.message);
@@ -13229,12 +13426,12 @@ void ImGuiManager::DrawSpawnPreparationWarning() {
 		case ScenePreparationDiagnosticCode::WaveMismatch: spawnWarningIssue_ = "WaveMismatch"; break;
 		default: spawnWarningIssue_.clear(); break;
 		}
-		if (diagnostic.detail.starts_with("MovementBounds:") || diagnostic.detail.starts_with("DeathResponse:") || diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
+		if (diagnostic.detail.starts_with("MovementBounds:") || diagnostic.detail.starts_with("UpgradeSelection:") || diagnostic.detail.starts_with("DeathResponse:") || diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
 	}
 	const bool death = spawnWarningIssue_.starts_with("DeathResponse:");
 	const bool flow = spawnWarningIssue_.starts_with("FlowPreparation:");
 	const bool restart = spawnWarningIssue_.starts_with("SceneRestart:");
-	const bool menu = spawnWarningIssue_.starts_with("MenuRuntime:");
+	const bool menu = spawnWarningIssue_.starts_with("MenuRuntime:") || spawnWarningIssue_.starts_with("UpgradeSelection:");
 	const bool transition = spawnWarningIssue_.starts_with("SceneTransition:");
 	const bool movementBounds = spawnWarningIssue_.starts_with("MovementBounds:");
 	const char* title = movementBounds ? SelectEditorText(editorLanguage_, "移動範囲の設定に問題があります###SpawnPreparationWarning", "Movement Bounds Problem###SpawnPreparationWarning") : death ? SelectEditorText(editorLanguage_, "死亡処理の操作を完了できません###SpawnPreparationWarning", "Death Operation Failed###SpawnPreparationWarning") : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました###SpawnPreparationWarning", "Scene Transition Problem###SpawnPreparationWarning") :
@@ -13271,6 +13468,7 @@ void ImGuiManager::DrawMenuAuthoringWarning() {
 		: menuWarningOperation_ == "StandardInput" ? SelectEditorText(editorLanguage_, "標準操作のキー・並び方向の変更", "Edit Standard Keys or Navigation Axis")
 		: menuWarningOperation_ == "PauseSettings" ? SelectEditorText(editorLanguage_, "メニューの停止設定", "Configure Menu Pause")
 		: menuWarningOperation_ == "EventKeys" ? SelectEditorText(editorLanguage_, "Eventのキー編集", "Edit Event Keys")
+		: menuWarningOperation_ == "UpgradeTemplate" ? SelectEditorText(editorLanguage_, "強化選択画面の作成", "Create Upgrade Selection Screen")
 		: menuWarningOperation_ == "CreateBackground"
 		? SelectEditorText(editorLanguage_, "背景の追加", "Add Background")
 		: menuWarningOperation_ == "AddMenuText" ? SelectEditorText(editorLanguage_, "文字の追加", "Add Text")
@@ -13288,6 +13486,139 @@ void ImGuiManager::DrawMenuAuthoringWarning() {
 	ImGui::PopTextWrapPos();
 	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
 	ImGui::EndPopup();
+}
+
+bool ImGuiManager::DrawUpgradeSelectionFields(SceneDocument& document, SceneEntity& entity,
+	SceneComponent& settings, bool prefab, MenuAuthoringRequest& request) {
+	(void)prefab;
+	auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	bool changed = DrawMenuEntityField(text("対象Player", "Player"), document, settings.upgradePlayerEntityId, "RunUpgrade");
+	changed |= DrawMenuEntityField(text("決定項目", "Confirm Item"), document, settings.upgradeConfirmItemEntityId, "MenuItem", entity.id, false);
+	for (size_t i = 0; i < settings.upgradeSlots.size(); ++i) {
+		auto& slot = settings.upgradeSlots[i]; ImGui::PushID(static_cast<int>(i));
+		if (ImGui::TreeNode("Slot", "%s %zu", text("選択肢", "Choice"), i + 1)) {
+			changed |= DrawMenuEntityField(text("カード", "Card"), document, slot.itemEntityId, "MenuItem", entity.id, false);
+			changed |= DrawMenuEntityField(text("通常名", "Summary"), document, slot.summaryTextEntityId, "TextRenderer", slot.itemEntityId, false);
+			changed |= DrawMenuEntityField(text("詳細の親", "Detail Root"), document, slot.detailRootEntityId, "UITransform", slot.itemEntityId, false);
+			changed |= DrawMenuEntityField(text("大きい名前", "Title"), document, slot.titleTextEntityId, "TextRenderer", slot.detailRootEntityId, false);
+			changed |= DrawMenuEntityField(text("詳細文", "Description"), document, slot.descriptionTextEntityId, "TextRenderer", slot.detailRootEntityId, false);
+			changed |= DrawMenuEntityField(text("選択印", "Selected Marker"), document, slot.selectedMarkerEntityId, "SpriteRenderer", slot.itemEntityId, false);
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+	const auto issue = SceneValidator::UpgradeSelectionIssue(document, entity.id);
+	if (!issue.empty()) ImGui::TextWrapped("%s", UpgradeSelectionIssueText(editorLanguage_, issue));
+	if (ImGui::TreeNode(text("画面のひな形", "Screen Template"))) {
+		ImGui::TextWrapped("%s", text("位置と大きさは画面比（0〜1）です。空のEntityにだけ作成します。作成後は通常のUITransformと文字設定で修正できます。", "Positions and sizes are canvas ratios (0..1). Creates only on an empty entity. Edit UITransform and text normally afterward."));
+		ImGui::DragFloat2(text("三択の中央・高さ", "Row Center"), &upgradeRowCenter_.x, 0.005f);
+		ImGui::DragFloat2(text("カードの幅・高さ", "Card Size"), &upgradeCardSize_.x, 0.005f);
+		ImGui::DragFloat(text("カード間隔", "Card Gap"), &upgradeCardGap_, 0.005f);
+		ImGui::DragFloat2(text("決定の位置", "Confirm Position"), &upgradeConfirmCenter_.x, 0.005f);
+		ImGui::DragFloat2(text("決定の幅・高さ", "Confirm Size"), &upgradeConfirmSize_.x, 0.005f);
+		// 画面比の概略Preview。実画面の検証済み画像ではない。
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		const ImVec2 preview{(std::min)(ImGui::GetContentRegionAvail().x, 360.0f), 160.0f};
+		auto* draw = ImGui::GetWindowDrawList();
+		draw->AddRect(origin, {origin.x + preview.x, origin.y + preview.y}, IM_COL32(180,180,180,255));
+		auto box = [&](Vector2 center, Vector2 size) {
+			if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(size.x) || !std::isfinite(size.y)) return;
+			const bool valid = size.x > 0 && size.y > 0 && center.x - size.x/2 >= 0 && center.x + size.x/2 <= 1 && center.y - size.y/2 >= 0 && center.y + size.y/2 <= 1;
+			draw->AddRect({origin.x+(center.x-size.x/2)*preview.x,origin.y+(center.y-size.y/2)*preview.y},
+				{origin.x+(center.x+size.x/2)*preview.x,origin.y+(center.y+size.y/2)*preview.y},
+				valid ? IM_COL32(100,180,255,255) : IM_COL32(255,80,80,255));
+		};
+		for (int i = -1; i <= 1; ++i) box({upgradeRowCenter_.x+i*(upgradeCardSize_.x+upgradeCardGap_),upgradeRowCenter_.y},upgradeCardSize_);
+		box(upgradeConfirmCenter_,upgradeConfirmSize_); ImGui::Dummy(preview);
+		if (ImGui::Button(text("強化選択画面を作成", "Create Upgrade Selection Screen"))) request = {entity.id, "UpgradeTemplate"};
+		ImGui::TreePop();
+	}
+	if (ImGui::Button(text("強化選択のリファレンス", "Upgrade Selection Reference"))) ImGui::OpenPopup("UpgradeSelectionReference");
+	if (ImGui::BeginPopup("UpgradeSelectionReference")) {
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+480);
+		ImGui::TextUnformatted(text(
+			"1. PlayerにPlayerBehavior・Health・RunUpgradeを用意し、名前・説明・効果量を定義します。\n2. 空のEntityへUpgradeSelectionを追加し、対象Playerを設定してひな形を作成します。一回Undoで戻せます。既存UIは置換しません。\n3. GameFlowDirectorでこのPanelを指定し、各非最終フェーズに候補IDと重みを設定します。正の候補が3個以上必要で、初期重み1は均等、0は除外です。\n通常は名前、ホバー中は大きい名前と詳細を表示します。クリックは選択だけ、下の決定で一回適用します。未選択では決定できません。待機中は世界とクリアタイムが停止し、BGM/UIは継続します。決定の次フレームからフェーズ間の待ち時間を再開します。\n強化はプレイ終了・リトライで初期化。回復は満タンでも取得できます。選択中に設定を変えた場合は新規プレイからやり直します。停止画面は複数設定できますが同時に開くPause rootは一つです。\nScene/Prefabの共通Inspectorで参照を編集できます。ゲーム用の効果量は自動設定しません。実画面例は未作成、動作と配置はEditor Playで確認してください。",
+			"1. Configure PlayerBehavior, Health and RunUpgrade on the Player, including names, descriptions and values.\n2. Add UpgradeSelection to an empty entity, assign the Player, then create the template. One Undo removes it. Existing UI is never replaced.\n3. Assign this panel in GameFlowDirector and configure IDs/weights on non-final phases. At least three positive candidates are required. Default weight 1 is uniform; zero excludes a candidate.\nNormal cards show names; hover shows a larger title and details. Click selects; the lower confirm button applies once. Confirmation is disabled until selected. The world and clear timer stop while BGM/UI continue. The next frame resumes the inter-phase delay.\nUpgrades reset at run end/retry. Full HP can still receive Heal. Changed settings require a new run. Multiple pause roots may be configured, but only one can be open.\nScene/Prefab share reference editing. Gameplay values are not auto-filled. Live screenshots are not available; verify operation/layout in Editor Play."));
+		ImGui::PopTextWrapPos(); ImGui::EndPopup();
+	}
+	return changed;
+}
+
+bool ImGuiManager::PrepareUpgradeTemplate(SceneDocument& candidate, uint64_t ownerId) {
+	// candidateだけを構築し、参照検証後にcallerが一回のEditFrameで原本へ適用する。
+	const auto* owner = candidate.FindEntity(ownerId);
+	if (!owner || owner->locked || owner->folder || candidate.IsPrefabVariant() || owner->prefabInstanceRootId ||
+		!owner->prefabSourcePath.empty() || !owner->prefabLinks.empty()) return false;
+	const auto& transform = owner->transform;
+	if (transform.translate.x || transform.translate.y || transform.translate.z || transform.scale.x != 1 || transform.scale.y != 1 || transform.scale.z != 1 ||
+		transform.rotate.x || transform.rotate.y || transform.rotate.z || std::abs(transform.rotate.w) != 1) return false;
+	for (const auto& c : owner->components) if (c.type != "UpgradeSelection") return false;
+	for (const auto& e : candidate.GetEntities()) if (e.parentId == ownerId) return false;
+	auto bounds = [](Vector2 center, Vector2 size) {
+		return std::isfinite(center.x) && std::isfinite(center.y) && std::isfinite(size.x) && std::isfinite(size.y) &&
+			size.x > 0 && size.y > 0 && center.x-size.x/2 >= 0 && center.x+size.x/2 <= 1 && center.y-size.y/2 >= 0 && center.y+size.y/2 <= 1;
+	};
+	if (!std::isfinite(upgradeCardGap_) || upgradeCardGap_ < 0 || !bounds(upgradeConfirmCenter_,upgradeConfirmSize_)) return false;
+	for (int i = -1; i <= 1; ++i) {
+		const Vector2 center{upgradeRowCenter_.x+i*(upgradeCardSize_.x+upgradeCardGap_),upgradeRowCenter_.y};
+		if (!bounds(center,upgradeCardSize_) || (std::abs(center.x-upgradeConfirmCenter_.x) < (upgradeCardSize_.x+upgradeConfirmSize_.x)/2 &&
+			std::abs(center.y-upgradeConfirmCenter_.y) < (upgradeCardSize_.y+upgradeConfirmSize_.y)/2)) return false;
+	}
+	for (const char* type : {"UICanvas","MenuPanel","GamePause"}) if (!candidate.AddComponent(ownerId,type)) return false;
+	const auto size = FindComponent(*candidate.FindEntity(ownerId),"UICanvas")->uiReferenceSize;
+	const float width = static_cast<float>(size[0]), height = static_cast<float>(size[1]);
+	auto create = [&](const char* name, uint64_t parent, Vector2 position, Vector2 dimensions, const char* visual) {
+		const uint64_t id = candidate.CreateEntity(name,parent).id;
+		candidate.AddComponent(id,"UITransform");
+		if (visual) candidate.AddComponent(id,visual);
+		auto* placement = FindComponent(*candidate.FindEntity(id),"UITransform");
+		placement->uiPosition = position; placement->uiSize = dimensions;
+		if (visual && std::string(visual) == "SpriteRenderer") {
+			auto* sprite = FindComponent(*candidate.FindEntity(id),"SpriteRenderer");
+			sprite->spriteColor = {0.12f,0.17f,0.24f,0.96f};
+			sprite->texturePath = "resources/human/white.png";
+		}
+		return id;
+	};
+	auto addText = [&](const char* name,uint64_t parent,Vector2 position,Vector2 dimensions,float font,const char* value) {
+		const uint64_t id = create(name,parent,position,dimensions,"TextRenderer");
+		auto* text = FindComponent(*candidate.FindEntity(id),"TextRenderer");
+		text->textValue=value; text->textFontSize=font; text->textWrapMode="Wrap";
+		text->textHorizontalAlignment="Center"; text->textVerticalAlignment="Center"; return id;
+	};
+	auto connect = [&](uint64_t itemId,const char* actionType,uint64_t labelId) {
+		candidate.AddComponent(itemId,"MenuItem"); candidate.AddComponent(itemId,"EventTrigger");
+		FindComponent(*candidate.FindEntity(itemId),"MenuItem")->menuLabelEntityId=labelId;
+		auto* events=FindComponent(*candidate.FindEntity(itemId),"EventTrigger"); events->eventBindings.clear();
+		SceneEventBinding binding; binding.executionDomain="UI"; binding.triggerType="OnMenuItemConfirmed"; binding.triggerOnce=false; binding.targetEntityId=itemId;
+		SceneEventAction action; action.type=actionType; action.targetEntityId=ownerId; binding.actions.push_back(action); events->eventBindings.push_back(binding);
+	};
+	const uint64_t background = create("Background", ownerId, {}, {width,height}, "SpriteRenderer");
+	FindComponent(*candidate.FindEntity(background), "SpriteRenderer")->spriteColor = {0,0,0,0.75f};
+	const Vector2 card{upgradeCardSize_.x*width,upgradeCardSize_.y*height};
+	std::array<SceneUpgradeSlot,3> slots;
+	for (int i=0;i<3;++i) {
+		auto& slot=slots[i];
+		const Vector2 position{(upgradeRowCenter_.x+(i-1)*(upgradeCardSize_.x+upgradeCardGap_))*width-card.x/2,upgradeRowCenter_.y*height-card.y/2};
+		slot.itemEntityId=create(("Choice"+std::to_string(i+1)).c_str(),ownerId,position,card,"SpriteRenderer");
+		slot.summaryTextEntityId=addText("Summary",slot.itemEntityId,{},card,28,"");
+		slot.detailRootEntityId=create("Details",slot.itemEntityId,{},card,nullptr);
+		slot.titleTextEntityId=addText("Title",slot.detailRootEntityId,{}, {card.x,card.y*0.32f},36,"");
+		slot.descriptionTextEntityId=addText("Description",slot.detailRootEntityId,{0,card.y*0.34f},{card.x,card.y*0.66f},22,"");
+		slot.selectedMarkerEntityId=create("Selected",slot.itemEntityId,{0,card.y-6},{card.x,6},"SpriteRenderer");
+		FindComponent(*candidate.FindEntity(slot.selectedMarkerEntityId),"SpriteRenderer")->spriteColor={0.25f,0.85f,1,1};
+		connect(slot.itemEntityId,"SelectRunUpgrade",slot.summaryTextEntityId);
+	}
+	const Vector2 confirmSize{upgradeConfirmSize_.x*width,upgradeConfirmSize_.y*height};
+	const uint64_t confirm=create("Confirm",ownerId,{upgradeConfirmCenter_.x*width-confirmSize.x/2,upgradeConfirmCenter_.y*height-confirmSize.y/2},confirmSize,"SpriteRenderer");
+	const uint64_t label=addText("Label",confirm,{},confirmSize,30,SelectEditorText(editorLanguage_,"決定","Confirm"));
+	connect(confirm,"ConfirmRunUpgrade",label);
+	auto* selection=FindComponent(*candidate.FindEntity(ownerId),"UpgradeSelection"); selection->upgradeSlots=slots; selection->upgradeConfirmItemEntityId=confirm;
+	auto* menu=FindComponent(*candidate.FindEntity(ownerId),"MenuPanel");
+	menu->menuLayoutMode="CanvasItems"; menu->menuInputMode="Pointer"; menu->menuInitiallyOpen=false; menu->menuCancelMode="None";
+	menu->menuItemEntityIds={slots[0].itemEntityId,slots[1].itemEntityId,slots[2].itemEntityId,confirm};
+	auto* pause=FindComponent(*candidate.FindEntity(ownerId),"GamePause"); pause->gamePausePanelEntityId=ownerId; pause->gamePauseBgm=false;
+	return true;
 }
 
 bool ImGuiManager::PrepareStandardMenuPanel(SceneDocument& candidate, uint64_t ownerId, std::string& error) {
@@ -13482,6 +13813,7 @@ namespace {
 }
 bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEntity& entity,
 	SceneComponent& component, bool prefab, MenuAuthoringRequest& request) {
+	if (component.type == "UpgradeSelection") return DrawUpgradeSelectionFields(document, entity, component, prefab, request);
 	bool changed = false;
 	// 共通UI配置の代理編集。構造を変える要求は外側のComponent走査が終わるまで遅延する。
 	auto drawPlacement = [&](SceneEntity& target, const char* label) {
@@ -13682,9 +14014,13 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 		}
 		section.Begin(SelectEditorText(editorLanguage_, "操作", "Controls"));
 		DrawMenuInspectorField(SelectEditorText(editorLanguage_, "操作方式", "Input Mode"), [&]() {
-			if (ImGui::BeginCombo("##InputMode", SelectEditorText(editorLanguage_, component.menuInputMode == "Standard" ? "標準操作" : "Event方式", component.menuInputMode == "Standard" ? "Standard Controls" : "Event Controls"))) {
-				for (const char* mode : {"Standard", "Events"}) {
-					if (ImGui::Selectable(SelectEditorText(editorLanguage_, std::strcmp(mode, "Standard") == 0 ? "標準操作" : "Event方式", std::strcmp(mode, "Standard") == 0 ? "Standard Controls" : "Event Controls"), component.menuInputMode == mode) && component.menuInputMode != mode)
+			auto modeLabel = [&](const std::string& mode) {
+				return SelectEditorText(editorLanguage_, mode == "Pointer" ? "マウス操作" : mode == "Standard" ? "標準操作" : "Event方式",
+					mode == "Pointer" ? "Mouse Controls" : mode == "Standard" ? "Standard Controls" : "Event Controls");
+			};
+			if (ImGui::BeginCombo("##InputMode", modeLabel(component.menuInputMode))) {
+				for (const char* mode : {"Standard", "Events", "Pointer"}) {
+					if (ImGui::Selectable(modeLabel(mode), component.menuInputMode == mode) && component.menuInputMode != mode)
 						request = {entity.id, "ConvertInputPreview", 0, mode};
 				}
 				ImGui::EndCombo();
@@ -13692,7 +14028,8 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 			return false; // preview要求だけなので原本をDirtyにしない。
 		});
 		const bool standard = component.menuInputMode == "Standard";
-		if (!standard) ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "操作はEventの設定を使用します。", "Input uses Event bindings."));
+		if (component.menuInputMode == "Pointer") ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "項目内で左ボタンを押して離すと決定します。既存キーEventも有効です。", "Press and release the left button on an item to confirm. Authored key events also remain active."));
+		else if (!standard) ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "操作はEventの設定を使用します。", "Input uses Event bindings."));
 		auto drawKeyGroup = [&](size_t index, bool activeGroup) {
 			const char* labels[] = {SelectEditorText(editorLanguage_, "上へ", "Up"), SelectEditorText(editorLanguage_, "下へ", "Down"), SelectEditorText(editorLanguage_, "左へ", "Left"), SelectEditorText(editorLanguage_, "右へ", "Right"), SelectEditorText(editorLanguage_, "決定", "Confirm"), SelectEditorText(editorLanguage_, "キャンセル", "Cancel")};
 			ImGui::PushID(static_cast<int>(index));
@@ -13728,6 +14065,10 @@ bool ImGuiManager::DrawMenuAuthoringComponent(SceneDocument& document, SceneEnti
 			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
 				"下層メニューの描画を隠す：既定はOFFです。ONにすると、このメニューより下で開いているメニューだけを描画しません。閉じると元の表示に戻ります。背景Scene・開閉状態・選択・一時停止状態は変えません。対象MenuPanelでONにし、暗幕は子SpriteRendererの全画面画像を半透明の黒に設定してください。UI編集Sceneは単一Panelの表示なので、下層の非表示と復帰はPlayで確認してください。",
 				"Hide Lower Menu Rendering defaults to OFF. When enabled, only menus opened below this panel stop rendering. Closing it restores their display. The background scene, open state, selection and pause state are unchanged. Enable the option on the target MenuPanel; use a full-screen child SpriteRenderer tinted translucent black for the dimming layer. The UI Editing Scene shows one panel, so verify hiding and restoration in Play."));
+			ImGui::Separator();
+			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+				"マウス操作: 操作方式を「マウス操作」に切り替えて適用します。MenuItemのUITransform枠がクリック範囲です。親の回転・拡縮を反映し、重なった枠では描画順の手前を操作します。文字やMarkerだけを大きくしても範囲は広がりません。カーソルを合わせると選択文字色/Markerが移り、左ボタンを同じ項目内で押して離すと既存の決定Eventが一度発火します。枠外へのドラッグ・Alt・フォーカス喪失・画面移動/サイズ変更・Editor Pauseでは押下を破棄します。新しく開いた画面では一度離してから押してください。\nPointerへの切替とPointerからの切替は方式だけを変更し、既存Eventを保持します。マウス専用にする場合は関連するキーEventを確認してください。ゲームを止める画面には別途GamePauseを設定します。通常のScene/Prefab保存・Undoが利用できます。",
+				"Mouse controls: select Mouse Controls and Apply. Each MenuItem's UITransform bounds define its hit area, including parent rotation and scale; overlapping items follow paint order. Larger text or markers do not enlarge the hit area. Hover moves selection color/markers. Press and release the left button on the same item to emit its existing confirmation event once. Dragging outside, Alt, focus loss, view movement/resizing and Editor Pause cancel a press. Release held buttons before clicking a newly opened panel.\nSwitching to or from Pointer changes only the mode and preserves events. Review authored key events for mouse-only menus. Add GamePause separately to stop the world. Normal Scene/Prefab saving and Undo remain available."));
 			ImGui::Separator();
 			ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "操作方式を選ぶと変換内容を確認できます。適用すると移動・決定・キャンセルの操作Eventと標準キー一覧をまとめて切り替えます。一回のUndoで戻せます。", "Select Input Mode to preview conversion. Apply switches navigation, confirm and cancel between control events and standard key lists. One Undo restores the change."));
 			ImGui::Separator();
@@ -13969,6 +14310,13 @@ void ImGuiManager::ApplyMenuAuthoringRequest(SceneDocument& document, const Menu
 	if (request.operation == "ConvertInputPreview") {
 		PrepareMenuInputConversion(document, request.entityId, prefab, request.uiOperation); return;
 	}
+	if (request.operation == "UpgradeTemplate") {
+		SceneDocument candidate = document;
+		if (!PrepareUpgradeTemplate(candidate, request.entityId)) { warn("UpgradeSelection:Template"); return; }
+		const auto issue = SceneValidator::UpgradeSelectionIssue(candidate, request.entityId);
+		if (!issue.empty()) { warn(issue); return; }
+		candidate.MarkDirty(); document = std::move(candidate); return;
+	}
     if (request.operation=="AddReplayOpen" || request.operation=="RemoveReplayOpen") {
         if (!FindComponent(*owner,"MenuPanel")) { warn("MenuRuntime:ReplayPanel"); return; }
         if (request.operation=="AddReplayOpen" && !FindComponent(*owner,"EventTrigger") &&
@@ -14026,7 +14374,8 @@ void ImGuiManager::ApplyMenuAuthoringRequest(SceneDocument& document, const Menu
 			if (panel->menuInitiallyOpen) { warn("MenuRuntime:PauseInitiallyOpen"); return; }
 			for (const auto& other : document.GetEntities()) {
 				if (other.id == bindingOwner->id || !IsEntityActiveInHierarchy(document, other)) continue;
-				if (FindEnabledComponent(other, "GamePause")) { warn("MenuRuntime:PauseMultiple"); return; }
+				const auto* otherPause = FindEnabledComponent(other, "GamePause");
+				if (otherPause && otherPause->gamePausePanelEntityId == request.entityId) { warn("MenuRuntime:PauseAmbiguous"); return; }
 			}
 		}
 		// Component走査後に候補全体を確定する。自己参照追加と有効化は一回のUndoになる。
@@ -16301,7 +16650,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
 				if (DrawUIVisualFields(document, *entity, component)) document.MarkDirty();
 				ImGui::EndDisabled();
-			} else if (component.type == "MenuPanel" || component.type == "MenuItem" || component.type == "GamePause") {
+			} else if (component.type == "MenuPanel" || component.type == "MenuItem" || component.type == "GamePause" || component.type == "UpgradeSelection") {
 				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
 				if (DrawMenuAuthoringComponent(document, *entity, component, false, menuAuthoringRequest)) document.MarkDirty();
 				ImGui::EndDisabled();
@@ -16309,6 +16658,16 @@ void ImGuiManager::DrawInspectorWindow() {
 				ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
 				if (DrawGameFlowFields(document, entity->id, component)) document.MarkDirty();
 				ImGui::EndDisabled();
+			} else if (component.type == "RunUpgrade") {
+				if (DrawRunUpgradeFields(editorLanguage_, document, *entity, component, !entityLocked && editorSession_->IsEditing())) document.MarkDirty();
+				SceneRunUpgradeModifiers modifiers;
+				if (!editorSession_->IsEditing() && sceneManager_ && sceneManager_->TryGetRunUpgradeModifiers(document, modifiers) && modifiers.playerEntityId == entity->id) {
+					const auto& v = modifiers.values;
+					ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "プレイ中の倍率（読取専用・保存しません）", "Run Multipliers (read only, not saved)"));
+					ImGui::Text("%s: %.3f / %s: %.3f", SelectEditorText(editorLanguage_, "攻撃力", "Damage"), v.damage, SelectEditorText(editorLanguage_, "移動速度", "Move Speed"), v.moveSpeed);
+					ImGui::Text("%s: %.3f / %s: %.3f", SelectEditorText(editorLanguage_, "攻撃範囲", "Attack Range"), v.attackRange, SelectEditorText(editorLanguage_, "ノックバック", "Knockback"), v.knockback);
+					ImGui::Text("%s: %.3f", SelectEditorText(editorLanguage_, "後隙", "Recovery"), v.recovery);
+				}
 			} else if (component.type == "MeshRenderer") {
 				const bool modelEditingDisabled =
 					!editorSession_->IsEditing() || entityLocked;
@@ -19661,6 +20020,12 @@ void ImGuiManager::DrawInspectorWindow() {
 					ImGui::PushID(attack.name.c_str());
 					if (ImGui::TreeNodeEx("AttackFields", ImGuiTreeNodeFlags_DefaultOpen, "%s", attack.name.c_str())) {
 						DrawPlayerCombatFields(document, entity->id, component, false, &attack.name);
+						SceneAttackRecoveryTiming timing;
+						if (!editorSession_->IsEditing() && sceneManager_ && sceneManager_->TryGetUpgradeRecoveryPreview(document, attack, timing)) {
+							ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "Playerが次回この攻撃を開始する場合の見積り（実行中の時計は変更しません）", "Preview if the Player starts this attack next (does not change an active attack)"));
+							ImGui::Text("%s: %.3f s / %s: %.3f s", SelectEditorText(editorLanguage_, "短縮可能な後隙", "Shortenable Tail"), timing.authoredDuration - timing.protectedEnd, SelectEditorText(editorLanguage_, "補正後の攻撃時間", "Adjusted Duration"), timing.Duration());
+							ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "判定や演出が続く区間は保護され、後隙の末尾だけを短縮します。", "Hit and effect timings are protected; only the remaining recovery tail is shortened."));
+						}
 						ImGui::TreePop();
 					}
 					ImGui::PopID();
@@ -22655,7 +23020,7 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 		}
 		ImGui::PushID(static_cast<int>(issueIndex));
 		if (issue.entityId != 0 && document.FindEntity(issue.entityId)) {
-			if (ImGui::SmallButton((issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("StatText:") || issue.message.starts_with("DeathResponse:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
+			if (ImGui::SmallButton((issue.message.starts_with("MovementBounds:") || issue.message.starts_with("UpgradeSelection:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("StatText:") || issue.message.starts_with("DeathResponse:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
 				prefabSelectedEntityId_ = issue.entityId;
 			}
 			ImGui::SameLine();
@@ -22666,11 +23031,11 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 				? ImVec4(0.95f, 0.35f, 0.3f, 1.0f)
 				: ImVec4(0.95f, 0.65f, 0.25f, 1.0f),
 			"[%s] %s",
-			(issue.message == "ThirdPersonCamera:ZoomRange" || issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
+			(issue.message == "ThirdPersonCamera:ZoomRange" || issue.message.starts_with("MovementBounds:") || issue.message.starts_with("UpgradeSelection:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("RunUpgrade:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
 			((issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:")) ? std::string(EnemyPositioningIssue(editorLanguage_, issue.message)) :
 			(issue.message == "ThirdPersonCamera:ZoomRange" ? std::string(SelectEditorText(editorLanguage_,
 				"ズーム範囲が無効です。0 < 最短距離 ≤ 最長距離 ≤ 1,000 になるように設定してください。プレイ中は既定の1.4〜30.0を使います。",
-				"The zoom range is invalid. Enter distances satisfying 0 < minimum <= maximum <= 1,000. Play uses the default 1.4 to 30.0.")) : issue.message.starts_with("MovementBounds:") ? std::string(MovementBoundsIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
+				"The zoom range is invalid. Enter distances satisfying 0 < minimum <= maximum <= 1,000. Play uses the default 1.4 to 30.0.")) : issue.message.starts_with("MovementBounds:") ? std::string(MovementBoundsIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("UpgradeSelection:") ? std::string(UpgradeSelectionIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("RunUpgrade:") ? std::string(RunUpgradeIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
 			((issue.message.starts_with("Menu runtime:") || issue.message.starts_with("MenuItem marker") || issue.message.starts_with("MenuItem selection marker")) ? LocalizeMenuIssue(issue.message) : issue.message))).c_str()
 		);
 		ImGui::PopID();
@@ -26392,7 +26757,7 @@ void ImGuiManager::DrawPrefabInspector() {
 		}
 		const bool menuAuthoringComponent = component.type == "MenuPanel" || component.type == "MenuItem" ||
 			component.type == "GamePause" || component.type == "EventTrigger" || component.type == "TextRenderer" ||
-			component.type == "UICanvas" || component.type == "UITransform" || component.type == "SpriteRenderer" || component.type == "TextMotion";
+			component.type == "UICanvas" || component.type == "UITransform" || component.type == "SpriteRenderer" || component.type == "TextMotion" || component.type == "RunUpgrade" || component.type == "UpgradeSelection";
 		const bool menuEditingAllowed = !entity->folder && !entity->locked &&
 			(!editorSession_ || editorSession_->IsEditing());
 		ImGui::BeginDisabled((menuAuthoringComponent || component.type == "EnemySpawner" || component.type == "DeathReplay" || component.type == "HitReaction" || component.type == "AttackSet" || component.type == "PlayerBehavior") && !menuEditingAllowed);
@@ -26405,10 +26770,15 @@ void ImGuiManager::DrawPrefabInspector() {
 			changed |= DrawUILayoutFields(document, *entity, component, true, uiRequest);
 		} else if (component.type == "SpriteRenderer" || (component.type == "TextRenderer" && SceneUILayout::IsUIEntity(document, *entity))) {
 			changed |= DrawUIVisualFields(document, *entity, component);
-		} else if (component.type == "MenuPanel" || component.type == "MenuItem" || component.type == "GamePause") {
+		} else if (component.type == "MenuPanel" || component.type == "MenuItem" || component.type == "GamePause" || component.type == "UpgradeSelection") {
 			changed |= DrawMenuAuthoringComponent(document, *entity, component, true, menuAuthoringRequest);
 		} else if (component.type == "EventTrigger") {
 			changed |= DrawPrefabUiEvents(document, component);
+		} else if (component.type == "RunUpgrade") {
+			// Popupの取消はPlay/Lockで原本編集が禁止された後も操作可能にする。
+			ImGui::EndDisabled();
+			changed |= DrawRunUpgradeFields(editorLanguage_, document, *entity, component, menuEditingAllowed);
+			ImGui::BeginDisabled(!menuEditingAllowed);
 		} else if (component.type == "TextMotion") {
 			changed |= DrawUITextMotionFields(component);
 		} else if (component.type == "TextRenderer") {

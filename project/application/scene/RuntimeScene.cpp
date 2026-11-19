@@ -682,6 +682,8 @@ void RuntimeScene::Initialize()
 }
 
 void RuntimeScene::ClearUiRuntime() {
+	upgradeFaultPanel_ = 0;
+	textRenderSystem_.SetUpgradeTextOverrides({});
 	gamePauseSystem_.Clear();
 	pendingUiAudioRequests_.clear();
 	menuSystem_.Clear(); eventSystem_.ClearMenuInput(); pendingMenuRequests_.clear(); deferredMenuPulses_.clear();
@@ -701,7 +703,10 @@ void RuntimeScene::SyncGamePause(const SceneDocument& document) {
 	const auto invalidRoot = gamePauseSystem_.Sync(document, menuSystem_, sceneManager_ && sceneManager_->CanPauseGame(), error);
 	if (invalidRoot) {
 		menuSystem_.RemoveBranch(document, invalidRoot);
-		gamePauseSystem_.Clear(); eventSystem_.RearmMenuKeys();
+		// 不正branchの下に残ったrootの停止理由を同Frameで復元する。
+		std::string remainingError;
+		gamePauseSystem_.Sync(document, menuSystem_, sceneManager_ && sceneManager_->CanPauseGame(), remainingError);
+		eventSystem_.RearmMenuKeys();
 		ReportMenuFailure(error);
 	}
 	uiControl_.gamePaused = gamePauseSystem_.IsPaused();
@@ -714,6 +719,7 @@ void RuntimeScene::ApplyPendingUiAudio() {
 void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests) {
 	for (const auto& request : requests) {
 		if (uiTransitionSource_.requestSerial || uiTerminalAttempted_) break;
+		if (runUpgradeSystem_.Committed()) break;
 		if (!menuSystem_.IsSourceValid(document, request.source)) continue;
         if (request.origin == SceneUiActionRequest::Origin::ReplayCompletion) {
             // 通常Eventの出所検証を緩めず、自然完了一回から来たOpenだけ追加で許可する。
@@ -762,6 +768,28 @@ void RuntimeScene::ApplyUiRequests(const SceneDocument& document, const std::vec
 			const auto* pause = target && UiEntityActive(document, target) ? SceneEntityQuery::FindEnabledComponent(*target, "GamePause") : nullptr;
 			if (!pause) { ReportMenuFailure("MenuRuntime:PauseInvalidPanel"); continue; }
 			targetPanelId = pause->gamePausePanelEntityId;
+		}
+		const uint64_t upgradePanel = upgradeFaultPanel_ ? upgradeFaultPanel_ : runUpgradeSystem_.SelectionPanel();
+		if (upgradePanel && targetPanelId == upgradePanel &&
+			(action.type == "CloseMenu" || action.type == "ResumeGame" || action.type == "CancelMenu")) {
+			ReportMenuFailure("UpgradeSelection:Close"); continue;
+		}
+		if (action.type == "SelectRunUpgrade" || action.type == "ConfirmRunUpgrade") {
+			// 保留通知が背面Panelへ届いても確定しない。現在の最前面と同じ開き直し世代だけ許可する。
+			if (request.source.panelId != menuSystem_.GetFrame().panelId || request.source.openSerial != menuSystem_.GetFrame().openSerial) continue;
+			bool accepted = !upgradeFaultPanel_ && request.confirmedItemId && targetPanelId == runUpgradeSystem_.SelectionPanel() &&
+				gameFlowSystem_.MatchesUpgrade(document, runUpgradeSystem_.SelectionToken()) && !deathSystem_.IsDefeated();
+			if (accepted) {
+				const auto& token = gameFlowSystem_.UpgradeToken();
+				accepted = action.type == "SelectRunUpgrade"
+					? runUpgradeSystem_.Select(document, request.source, token, request.confirmedItemId)
+					: runUpgradeSystem_.TryConfirm(document, statSystem_, request.source, token, request.confirmedItemId);
+			}
+			if (!accepted) {
+				if (gameFlowSystem_.IsAwaitingUpgrade()) FailUpgradeSelection("UpgradeSelection:Apply");
+				else ReportMenuFailure("UpgradeSelection:Apply");
+			}
+			continue;
 		}
 		if (deathSystem_.IsDefeated() && (action.type == "PauseGame" || action.type == "OpenMenu")) {
 			const auto* panel = document.FindEntity(targetPanelId);
@@ -866,8 +894,11 @@ void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
 	auto* document = GetSceneDocument();
 	const bool active = sceneManager_ && GetSceneInstanceId() == sceneManager_->GetActiveSceneInstanceId();
 	if (!document || !active || (context && context->IsEditing())) {
+		runUpgradeSystem_.Clear();
 		ClearUiRuntime(); textRenderSystem_.SetMenuColorOverrides({}); return;
 	}
+	runUpgradeSystem_.Sync(*document, GetSceneInstanceId());
+	if (deathSystem_.IsBlocked(runUpgradeSystem_.GetModifiers().playerEntityId) || gameFlowSystem_.IsFinished()) runUpgradeSystem_.Clear();
 	if (menuSystem_.GetFrame().instanceId != GetSceneInstanceId() || menuSystem_.GetFrame().generation != document->GetContentGeneration()) ClearUiRuntime();
 	const auto oldTop = menuSystem_.GetSource();
 	menuSystem_.Sync(*document, GetSceneInstanceId());
@@ -875,7 +906,10 @@ void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
 	SyncGamePause(*document);
 	const auto top = menuSystem_.GetSource();
 	if (oldTop.panelId != top.panelId || oldTop.openSerial != top.openSerial) eventSystem_.RearmMenuKeys();
-	if ((context && context->IsPaused()) || sceneManager_->IsTransitionHeld()) { eventSystem_.RearmMenuKeys(); return; }
+	if ((context && context->IsPaused()) || sceneManager_->IsTransitionHeld()) { eventSystem_.RearmMenuKeys(); menuSystem_.ResetPointer(); return; }
+	SyncUpgradeSelection(*document, false, allowed && !uiTransitionSource_.requestSerial);
+	const auto upgradePresentation = runUpgradeSystem_.GetPresentation(menuSystem_.GetFrame().hoveredItemId);
+	menuSystem_.SetPresentation(*document, upgradePresentation.hiddenRoots, upgradePresentation.disabledItems);
 	if (uiTransitionSource_.requestSerial) {
 		bool failed = false; std::string diagnostic;
 		if (uiLoadReservation_ != kInvalidSceneInstanceId) {
@@ -924,6 +958,15 @@ void RuntimeScene::PrepareMenuInput(float deltaTime, bool allowed) {
 	const auto input = eventSystem_.EvaluateUiInput(*document, menuSystem_.GetFrame(), deltaTime, allowed && !uiTransitionSource_.requestSerial && !uiTerminalAttempted_);
 	ApplyUiRequests(*document, input);
 	ProcessMenuPulses(*document, menuSystem_.ConsumePulses());
+	auto pointer = std::exchange(menuPointer_, {});
+	// 既存UI要求を先に処理。同Frameのキー/通知から二重に決定しない。
+	pointer.allowed = pointer.allowed && allowed && input.empty() && pending.empty() && deferred.empty() &&
+		!uiTransitionSource_.requestSerial && !uiTerminalAttempted_ && !runUpgradeSystem_.Committed() && !upgradeFaultPanel_;
+	menuSystem_.ApplyPointer(*document, pointer);
+	ProcessMenuPulses(*document, menuSystem_.ConsumePulses());
+	const auto* pointerOwner = document->FindEntity(menuSystem_.GetFrame().panelId);
+	const auto* pointerPanel = pointerOwner ? SceneEntityQuery::FindEnabledComponent(*pointerOwner, "MenuPanel") : nullptr;
+	uiControl_.pointerMenuOpen = pointerPanel && pointerPanel->menuInputMode == "Pointer";
 	uiControl_.blockGameplayInput |= menuSystem_.GetFrame().panelId != 0 || uiTransitionSource_.requestSerial != 0;
 	SyncGamePause(*document);
 	if (const auto issue = menuSystem_.ConsumeDiagnostic(); !issue.empty()) ReportMenuFailure(issue);
@@ -941,8 +984,54 @@ void RuntimeScene::SyncMenuPresentationForOwnDocument() {
 	const auto* document = GetSceneDocument();
 	// 通常Eventがactive/参照を変更した後、文字cache同期前に再検証する。キーは再評価しない。
 	menuSystem_.Sync(*document, GetSceneInstanceId());
+	auto upgrade = runUpgradeSystem_.GetPresentation(menuSystem_.GetFrame().hoveredItemId);
+	if (upgradeFaultPanel_) {
+		const auto* owner = document->FindEntity(upgradeFaultPanel_);
+		if (const auto* panel = owner ? SceneEntityQuery::FindEnabledComponent(*owner, "MenuPanel") : nullptr)
+			upgrade.disabledItems = panel->menuItemEntityIds;
+	}
+	menuSystem_.SetPresentation(*document, upgrade.hiddenRoots, upgrade.disabledItems);
+	textRenderSystem_.SetUpgradeTextOverrides(upgrade.texts);
 	textRenderSystem_.SetMenuColorOverrides(menuSystem_.GetFrame().textColors);
 	if (const auto issue = menuSystem_.ConsumeDiagnostic(); !issue.empty()) ReportMenuFailure(issue);
+}
+
+void RuntimeScene::FailUpgradeSelection(const std::string& issue) {
+	upgradeFaultPanel_ = gameFlowSystem_.UpgradePanel();
+	gameFlowSystem_.FailUpgrade(issue);
+	ReportMenuFailure(issue);
+	menuSystem_.ResetPointer(); eventSystem_.RearmMenuKeys();
+}
+void RuntimeScene::SyncUpgradeSelection(const SceneDocument& document, bool allowBegin, bool allowResume) {
+	if (!gameFlowSystem_.IsAwaitingUpgrade() || upgradeFaultPanel_) return;
+	const auto token = gameFlowSystem_.UpgradeToken();
+	if (!gameFlowSystem_.MatchesUpgrade(document, token) || deathSystem_.IsBlocked(runUpgradeSystem_.GetModifiers().playerEntityId)) {
+		FailUpgradeSelection("UpgradeSelection:Changed"); return;
+	}
+	if (!runUpgradeSystem_.SelectionPanel()) {
+		if (!allowBegin) { FailUpgradeSelection("UpgradeSelection:Changed"); return; }
+		const auto issue = runUpgradeSystem_.BeginSelection(document, token, gameFlowSystem_.UpgradePanel(), gameFlowSystem_.UpgradePool());
+		if (!issue.empty()) { FailUpgradeSelection(issue); return; }
+		menuSystem_.Sync(document, GetSceneInstanceId());
+		if (!menuSystem_.Apply(document, {menuSystem_.GetSource(), SceneMenuCommandType::Open, gameFlowSystem_.UpgradePanel()}) ||
+			!runUpgradeSystem_.BindMenuSource(menuSystem_.GetOpenSource(gameFlowSystem_.UpgradePanel()))) {
+			FailUpgradeSelection("UpgradeSelection:Open"); return;
+		}
+		eventSystem_.RearmMenuKeys(); menuSystem_.ResetPointer(); SyncGamePause(document);
+	}
+	if (!runUpgradeSystem_.ValidateSelection(document, token) ||
+		!runUpgradeSystem_.BindMenuSource(menuSystem_.GetOpenSource(gameFlowSystem_.UpgradePanel()))) {
+		FailUpgradeSelection("UpgradeSelection:Changed"); return;
+	}
+	if (allowResume && runUpgradeSystem_.Committed()) {
+		const uint64_t panel = runUpgradeSystem_.SelectionPanel();
+		if (!gameFlowSystem_.ResumeAfterUpgrade(token)) { FailUpgradeSelection("UpgradeSelection:Changed"); return; }
+		menuSystem_.RemoveBranch(document, panel);
+		runUpgradeSystem_.EndSelection(); menuSystem_.SetPresentation(document, {}, {});
+		textRenderSystem_.SetUpgradeTextOverrides({});
+		eventSystem_.RearmMenuKeys(); menuSystem_.ResetPointer(); uiControl_.blockGameplayInput = true;
+		SyncGamePause(document);
+	}
 }
 
 void RuntimeScene::PrepareGameFlowTextOverrides(bool reset) {
@@ -1011,6 +1100,7 @@ void RuntimeScene::Update(float deltaTime)
 	const bool playing = !executionContext || executionContext->IsPlaying();
 	SceneDocument* activeDocument = GetSceneDocument();
 	if (activeDocument && deathDocumentGeneration_ != activeDocument->GetContentGeneration()) {
+		runUpgradeSystem_.Clear();
 		// 内容差替え後の同じIDへ旧死亡flag/要求を持ち越さない。
 		statSystem_.Clear(); healthSystem_.Clear(); deathSystem_.Clear(); ClearDeathWorldContinuation();
 		pendingDeathActions_.clear(); pendingDeathGeneration_ = 0;
@@ -1097,7 +1187,7 @@ void RuntimeScene::Update(float deltaTime)
 		gameFlowResult = gameFlowSystem_.Update(
 			*activeDocument,
 			enemySpawnerSystem_,
-			deltaTime
+			deltaTime, false, GetSceneInstanceId()
 		);
 		ReportPreparationDiagnostic(gameFlowResult.diagnostic, flowDiagnosticSerial_);
 		for (const SceneGameFlowEntityRequest& request : gameFlowResult.entityRequests) {
@@ -1119,10 +1209,18 @@ void RuntimeScene::Update(float deltaTime)
 		}
 	} else if (!playing) {
 		gameFlowSystem_.Clear();
+		runUpgradeSystem_.Clear();
 	} else { gameFlowResult = heldDeathFlow_; gameFlowResult.gameplayAllowed = false; }
 	// pulseをheldDeathFlow/finalizeへ持ち越さない。Scene交換時もローカル値と共に破棄する。
 	const uint64_t startedDirectorId = std::exchange(gameFlowResult.startedDirectorEntityId, uint64_t{0});
 	const uint64_t startedGeneration = std::exchange(gameFlowResult.startedDocumentGeneration, uint64_t{0});
+	if (activeDocument && playing) {
+		if (startedDirectorId && startedGeneration == activeDocument->GetContentGeneration()) {
+			const auto* owner = player_ ? activeDocument->FindEntityByName("Player") : nullptr;
+			runUpgradeSystem_.BeginRun(GetSceneInstanceId(), startedGeneration, startedDirectorId, owner ? owner->id : 0);
+		}
+		runUpgradeSystem_.Sync(*activeDocument, GetSceneInstanceId());
+	} else runUpgradeSystem_.Clear();
 	const std::string runtimeSceneId = GetSceneAssetId().empty()
 		? "runtime"
 		: GetSceneAssetId();
@@ -1179,6 +1277,7 @@ void RuntimeScene::Update(float deltaTime)
 		const std::unordered_set<uint64_t> resetIds(spawnerResetEntityIds.begin(), spawnerResetEntityIds.end());
 		prefabAnimationSystem_.DiscardPresentationsForEntities(resetIds);
 		for (uint64_t entityId : spawnerResetEntityIds) {
+			runUpgradeSystem_.ResetEntity(entityId);
 			const auto* resetPlayer = player_ ? activeDocument->FindEntityByName("Player") : nullptr;
 			if (resetPlayer && resetPlayer->id == entityId) player_->ClearAttackBodyFacingLock();
 			attackRunnerSystem_.ResetEntity(*activeDocument, entityId);
@@ -1209,6 +1308,7 @@ void RuntimeScene::Update(float deltaTime)
 		}
 		if (!spawnerResetEntityIds.empty()) statSystem_.Update(*activeDocument);
 		deathSystem_.Sync(*activeDocument, statSystem_, GetSceneInstanceId());
+		if (deathSystem_.IsBlocked(runUpgradeSystem_.GetModifiers().playerEntityId)) runUpgradeSystem_.Clear();
 		// Event等で確定した死亡も、演出が姿勢を取得する前に攻撃所有分を返却する。
 		objectSystem_.RefreshTransforms(*activeDocument,enemySystem_.FinishChargeCombat(*activeDocument,statSystem_,{}));
 		ApplyDeathActions(*activeDocument, true);
@@ -1382,7 +1482,7 @@ void RuntimeScene::Update(float deltaTime)
 			*activeDocument,
 			player_,
 			deathWorldMoving ? deathWorldBindings : gameplayObjectBindings_,
-			editing
+			editing, runUpgradeSystem_.GetModifiers()
 		);
 		physicsSystem_.ResetBodies(
 			runtimeObjectBindings_,
@@ -1488,7 +1588,7 @@ void RuntimeScene::Update(float deltaTime)
 			prefabAnimationSystem_,
 			gameplayDeltaTime,
 			spawnFrame_.blockedEntityIds,
-			!uiGameplayInputBlocked_
+			!uiGameplayInputBlocked_, runUpgradeSystem_.GetModifiers()
 		);
 		// B: このframeにEnter/Exitした攻撃を、方向計算とPhysicsの前に反映する。
 		syncPlayerAttackBodyFacing();
@@ -1661,7 +1761,7 @@ void RuntimeScene::Update(float deltaTime)
 			spawnFrame_.blockedEntityIds, chargeContacts, enemySystem_.ChargeHitBoxes(),
 			[&](const SceneCombatHitEvent& hit) {
 				reactionDecisions.push_back(enemySystem_.EvaluateAcceptedHit(*activeDocument, hit));
-			}
+			}, runUpgradeSystem_.GetModifiers()
 		);
 		objectSystem_.RefreshTransforms(*activeDocument,enemySystem_.FinishChargeCombat(*activeDocument,statSystem_,reactionBindings));
 		std::vector<SceneCombatHitEvent> hitEvents = combatSystem_.ConsumeHitEvents();
@@ -1736,7 +1836,8 @@ void RuntimeScene::Update(float deltaTime)
 		camera_,
 		playing,
 		playing,
-		false
+		false,
+		runUpgradeSystem_.GetModifiers()
 	);
 #endif
 	const auto* startedDirector = activeDocument && startedDirectorId &&
@@ -1826,7 +1927,7 @@ void RuntimeScene::Update(float deltaTime)
 	if (activeDocument && playing) {
 		deathSystem_.Observe(*activeDocument, statSystem_);
 		if (!deathSystem_.IsDefeated() && gameFlowSystem_.NeedsFinalize()) {
-			gameFlowResult = gameFlowSystem_.Update(*activeDocument, enemySpawnerSystem_, 0.0f, true);
+			gameFlowResult = gameFlowSystem_.Update(*activeDocument, enemySpawnerSystem_, 0.0f, true, GetSceneInstanceId());
 			ReportPreparationDiagnostic(gameFlowResult.diagnostic, flowDiagnosticSerial_);
 			for (const auto& r : gameFlowResult.entityRequests) if (auto* e = activeDocument->FindEntity(r.entityId)) e->active = r.active;
 			for (const auto& r : gameFlowResult.waveRequests) enemySpawnerSystem_.BeginFiniteWave(r.spawnerEntityId, r.generation, r.count, r.holdUntilGameplay);
@@ -1835,6 +1936,8 @@ void RuntimeScene::Update(float deltaTime)
 				else textMotionSystem_.Play(*activeDocument, r.entityId, r.clipId);
 			}
 		}
+		if (!deathSystem_.IsDefeated()) SyncUpgradeSelection(*activeDocument, true, false);
+		if (deathSystem_.IsBlocked(runUpgradeSystem_.GetModifiers().playerEntityId) || gameFlowSystem_.IsFinished()) runUpgradeSystem_.Clear();
 		if (!defeatedAtFrameStart) heldDeathFlow_ = gameFlowResult;
 		DispatchDeaths(*activeDocument);
 		// スローを受理した対象は既存Reactionを継続する。即時停止の敗北だけ従来通り破棄。
@@ -1986,7 +2089,8 @@ void RuntimeScene::UpdatePaused()
 		camera_,
 		true,
 		false,
-		true
+		true,
+		runUpgradeSystem_.GetModifiers()
 	);
 #endif
 }
@@ -2173,6 +2277,7 @@ void RuntimeScene::RenderShadowCasters(
 
 void RuntimeScene::Finalize()
 {
+	runUpgradeSystem_.Clear();
 	PrepareReplayForFinalize();
 	pendingRestartSceneInstanceId_ = kInvalidSceneInstanceId;
 	gameFlowTextDocumentGeneration_ = 0;
@@ -2233,6 +2338,7 @@ void RuntimeScene::Finalize()
 
 void RuntimeScene::PrepareForSceneTransition()
 {
+	runUpgradeSystem_.Clear();
 	prefabAnimationSystem_.Clear(GetSceneDocument());
 	pendingPresentationRequests_.clear();
 	pendingPresentationDocumentGeneration_ = 0;

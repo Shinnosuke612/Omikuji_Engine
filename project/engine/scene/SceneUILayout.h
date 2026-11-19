@@ -1,8 +1,9 @@
-// 役割: UIの保存値を参照し、親枠からCanvas制作座標までの配置を純粋に解決する。
+// 役割: UIの保存値を参照し、Canvas制作座標の配置・描画順・枠内判定を純粋に解決する。
 #pragma once
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "../math/Matrix4x4.h"
 #include "../math/Vector2.h"
@@ -10,6 +11,8 @@
 class SceneDocument;
 struct SceneComponent;
 struct SceneEntity;
+struct SceneUIEditorView;
+struct SceneMenuFrame;
 
 namespace SceneUILayout {
 	struct Layout {
@@ -25,6 +28,22 @@ namespace SceneUILayout {
 		int sortingOrder = 0;
 		bool visible = false;
 	};
+
+	struct PaintItem {
+		uint64_t entityId = 0;
+		Layout layout;
+	};
+	struct PaintGroup {
+		int order = 0;
+		std::vector<PaintItem> items;
+	};
+	// Canvas順→sortingOrder→Hierarchy安定順。Menu枝maskを描画と共有する。
+	// includeMenuItemsは画像/文字のない操作枠も含める。Documentは変更しない。
+	std::vector<PaintGroup> CollectPaintOrder(const SceneDocument& document, const char* renderSpace,
+		uint64_t skipEntityId, const SceneUIEditorView* editorView = nullptr,
+		uint64_t menuPanelId = 0, const SceneMenuFrame* menu = nullptr, bool includeMenuItems = false);
+	// 画像内[0,1)座標を保存枠へ逆変換する。特異/非有限行列は操作不可。
+	bool ContainsNormalizedPoint(const Layout& layout, const Vector2& point);
 
 	// 無効Componentも境界として扱う。trueのEntityを旧Sprite/Text経路へ戻さない。
 	bool IsUIEntity(const SceneDocument& document, const SceneEntity& entity);

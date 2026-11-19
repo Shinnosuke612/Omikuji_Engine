@@ -4,7 +4,7 @@
 class SceneDocument;
 struct SceneComponent;
 
-// RuntimeScene所有。入力/描画/Document変更を行わず、IDだけを保持する。
+// RuntimeScene所有。OS入力採取/GPU描画/Document変更を行わず、操作状態はIDで保持する。
 class SceneMenuSystem {
 public:
 	// 内容置換/Instance変更は初期化する。Revisionだけの変更は選択を再検証する。
@@ -24,6 +24,12 @@ public:
 	void CompleteCancel(const SceneDocument& document, const SceneMenuPulse& pulse);
 	std::string ConsumeDiagnostic();
 	void Clear();
+	// 入力採取はGame。同一項目内の押下/解放で一回の既存ItemConfirmedを生成する。
+	void ApplyPointer(const SceneDocument& document, const SceneMenuPointerFrame& pointer);
+	// Pause/入力所有喪失時にも呼び、復帰後は離して押し直すまで決定しない。
+	void ResetPointer();
+	// 呼出中に値コピー。描画とクリックが同じmaskを使い、保存active/interactableを変更しない。
+	void SetPresentation(const SceneDocument&, const std::vector<uint64_t>& hiddenRoots, const std::vector<uint64_t>& disabledItems);
 	const SceneMenuFrame& GetFrame() const { return frame_; }
 	bool Matches(const SceneDocument& document, uint64_t instanceId) const;
 private:
@@ -41,10 +47,14 @@ private:
 	std::string diagnostic_;
 	uint64_t nextOpenSerial_ = 1;
 	bool initialized_ = false;
+	SceneMenuSource pointerSource_{};
+	uint64_t pointerViewportSerial_ = 0, hoveredItemId_ = 0, pressedItemId_ = 0;
+	bool pointerArmed_ = false, pointerWasDown_ = false;
 	SceneMenuFrame frame_;
 	std::vector<uint64_t> order_;
 	std::vector<uint64_t> eligible_;
 	bool initialRejected_ = false;
+	std::vector<uint64_t> hiddenVisualRoots_, disabledItemIds_;
 };
 
 // Menu用停止理由だけを所有する。Entity/ComponentのpointerやAuthoring値は保持しない。

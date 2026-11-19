@@ -12,9 +12,19 @@
 #include "SceneMovementBounds.h"
 #include "SceneReplayPresentation.h"
 #include "SceneEntityReference.h"
+#include "SceneRunUpgradeRuntime.h"
 #include "../math/Transform.h"
 #include "../math/Vector2.h"
 #include "../math/Vector4.h"
+
+// 一プレイ内の強化候補の保存定義。取得回数/適用倍率/抽選結果は含めない。
+struct SceneRunUpgradeDefinition {
+	std::string id, name, description;
+	std::string effect = "Heal";
+	float value = 0.0f; // 未設定の編集候補。効果量を制作データへ自動投入しない。
+	// 定義単体の保存契約を検証。空文字は正常、非空は診断識別子。Scene/重複IDはcallerが検証する。
+	const char* ValidationIssue() const;
+};
 
 // 地上敵の位置取り設定。距離はXZ上の移動Collider外周からの余裕、速度はScene単位/秒。
 struct SceneEnemyPositioningSettings {
@@ -440,6 +450,7 @@ struct SceneGameFlowPhase {
 	std::string id;
 	std::string label;
 	std::vector<SceneGameFlowWave> waves;
+	std::vector<SceneUpgradePoolEntry> upgradePool;
 };
 
 struct SceneComponent {
@@ -534,6 +545,7 @@ struct SceneComponent {
 	uint64_t gameFlowResultTimeTextEntityId = 0;
 	std::string gameFlowResultMotionClipId;
 	std::vector<SceneGameFlowPhase> gameFlowPhases;
+	uint64_t gameFlowUpgradeSelectionPanelEntityId = 0;
 	bool cameraIsMain = false;
 	float cameraFovY = 0.45f;
 	float cameraNearClip = 0.1f;
@@ -772,6 +784,10 @@ struct SceneComponent {
 	float healthInvulnerabilityDuration = 0.5f;
 	std::vector<SceneStatDefinition> stats;
 	std::vector<SceneFlagDefinition> flags;
+	std::vector<SceneRunUpgradeDefinition> runUpgradeEntries;
+	// 三択の制作参照だけを保存。抽選結果・選択・取得済み倍率はRuntime所有。
+	uint64_t upgradePlayerEntityId = 0, upgradeConfirmItemEntityId = 0;
+	std::array<SceneUpgradeSlot, 3> upgradeSlots{};
 	// DeathReplayは同EntityのDeathResponseだけを使い、実行状態を保存しない。
 	bool deathReplayEnabled = false; // trueで記録+3視点再生。欠落した旧Sceneはスローのみ。
 	float deathReplaySpeed = 1.0f;

@@ -657,6 +657,12 @@ private:
 	// 標準構成は候補Documentだけへ追加。移行/本番データの自動修正には使わない。
 	bool PrepareStandardMenuPanel(SceneDocument& candidate, uint64_t ownerId, std::string& error);
 	bool PrepareStandardMenuItem(SceneDocument& candidate, uint64_t itemId, bool withText, bool place, std::string& error);
+	bool DrawUpgradeSelectionFields(SceneDocument&, SceneEntity&, SceneComponent&, bool prefab, MenuAuthoringRequest&);
+	// 候補Documentにだけ構成し、呼出側の既存EditFrameで一回Undoにまとめる。
+	bool PrepareUpgradeTemplate(SceneDocument&, uint64_t ownerId);
+	Vector2 upgradeRowCenter_{0.5f, 0.35f}, upgradeCardSize_{0.22f, 0.3f};
+	Vector2 upgradeConfirmCenter_{0.5f, 0.76f}, upgradeConfirmSize_{0.22f, 0.12f};
+	float upgradeCardGap_ = 0.035f;
 	bool legacyMenuPanelAddition_ = false;
 	std::string LocalizeMenuIssue(const std::string& error) const;
 	void DrawMenuAuthoringWarning();

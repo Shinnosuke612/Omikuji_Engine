@@ -5,6 +5,15 @@
 #include <vector>
 #include <string>
 #include "../math/Vector4.h"
+#include "../math/Vector2.h"
+
+// Gameが毎Frame採取する画像左上原点の正規化座標。OS/Editor状態は所有しない。
+// 矩形変更/入力禁止を跨ぐ押下はviewportSerialで失効する。保存対象ではない。
+struct SceneMenuPointerFrame {
+	Vector2 normalizedPosition{};
+	bool inside = false, leftDown = false, allowed = false;
+	uint64_t viewportSerial = 0;
+};
 
 // 同一Instance/内容/Revisionでのみ使用する。Entity pointerやGPU資源は所有しない。
 struct SceneMenuFrame {
@@ -13,7 +22,10 @@ struct SceneMenuFrame {
 	uint64_t revision = 0;
 	uint64_t panelId = 0;
 	uint64_t selectedItemId = 0;
+	uint64_t hoveredItemId = 0;
 	std::vector<uint64_t> hiddenMarkerRoots;
+	std::vector<uint64_t> hiddenVisualRoots;
+	std::vector<uint64_t> disabledItemIds;
 	std::unordered_map<uint64_t, Vector4> textColors;
 	std::vector<uint64_t> visiblePanelIds;
 	uint64_t openSerial = 0;
@@ -45,6 +57,7 @@ struct SceneUiControlFrame {
 	// Menu rootが生存する間だけ有効。Editor Pauseとは独立した非保存の理由。
 	bool gamePaused = false;
 	bool pauseBgm = false;
+	bool pointerMenuOpen = false;
 };
 struct SceneMenuMove {
 	uint64_t instanceId = 0;

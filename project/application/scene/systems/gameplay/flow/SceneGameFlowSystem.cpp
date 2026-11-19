@@ -60,7 +60,7 @@ void SceneGameFlowSystem::Fail(ScenePreparationDiagnosticCode code, const std::s
 		diagnostic_ = {code, documentGeneration_, directorEntityId_, ++diagnosticSerial_, detail};
 }
 
-SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEnemySpawnerSystem& spawnerSystem, float deltaTime, bool finalize) {
+SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEnemySpawnerSystem& spawnerSystem, float deltaTime, bool finalize, uint64_t instance) {
 	if (documentGeneration_ != 0 && documentGeneration_ != document.GetContentGeneration()) Clear();
 	documentGeneration_ = document.GetContentGeneration();
 	SceneGameFlowResult result;
@@ -178,7 +178,12 @@ SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEn
 			++phaseIndex_;
 			stateElapsedSeconds_ = 0.0f;
 			if (phaseIndex_ >= static_cast<int>(director->gameFlowPhases.size())) { state_ = SceneGameFlowState::ResultDelay; timerRunning_ = false; }
-			else state_ = SceneGameFlowState::PhaseGap;
+			else if (director->gameFlowUpgradeSelectionPanelEntityId && !director->gameFlowPhases[phaseIndex_ - 1].upgradePool.empty()) {
+				state_ = SceneGameFlowState::UpgradeSelection; timerRunning_ = false;
+				upgradeToken_ = {instance, documentGeneration_, directorEntityId_, ++nextSelectionSerial_, director->gameFlowPhases[phaseIndex_ - 1].id};
+				upgradePanel_ = director->gameFlowUpgradeSelectionPanelEntityId;
+				upgradePool_ = director->gameFlowPhases[phaseIndex_ - 1].upgradePool;
+			} else state_ = SceneGameFlowState::PhaseGap;
 		}
 	} else if (finalize && state_ == SceneGameFlowState::PhaseGap && stateElapsedSeconds_ >= director->gameFlowInterPhaseDelaySeconds) {
 		state_ = SceneGameFlowState::PhaseActive;
@@ -205,7 +210,7 @@ SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEn
 	else if (state_ == SceneGameFlowState::Countdown) addText(director->gameFlowCountdownTextEntityId, std::to_string(countdownValue_));
 	else if (state_ == SceneGameFlowState::StartCue) addText(director->gameFlowCountdownTextEntityId, director->gameFlowStartCueText);
 	else addText(director->gameFlowCountdownTextEntityId, {});
-	if (state_ == SceneGameFlowState::PhaseActive || state_ == SceneGameFlowState::PhaseGap || state_ == SceneGameFlowState::ResultDelay) {
+	if (state_ == SceneGameFlowState::PhaseActive || state_ == SceneGameFlowState::PhaseGap || state_ == SceneGameFlowState::UpgradeSelection || state_ == SceneGameFlowState::ResultDelay) {
 		const int labelIndex = state_ == SceneGameFlowState::PhaseActive ? phaseIndex_ : phaseIndex_ - 1;
 		addText(director->gameFlowPhaseTextEntityId, labelIndex >= 0 && labelIndex < static_cast<int>(director->gameFlowPhases.size()) ? director->gameFlowPhases[labelIndex].label : std::string{});
 		const double displayedSeconds = std::floor(elapsedSeconds_ / director->gameFlowTimerDisplayStepSeconds) * director->gameFlowTimerDisplayStepSeconds;
@@ -216,7 +221,7 @@ SceneGameFlowResult SceneGameFlowSystem::Update(SceneDocument& document, SceneEn
 	}
 	if (state_ == SceneGameFlowState::PhaseActive)
 		addText(director->gameFlowRemainingTextEntityId, director->gameFlowRemainingPrefix + std::to_string(CalculateRemainingEnemies(*director, spawnerSystem, phaseIndex_, activeWaveGenerations_)));
-	else if (state_ == SceneGameFlowState::PhaseGap || state_ == SceneGameFlowState::ResultDelay)
+	else if (state_ == SceneGameFlowState::PhaseGap || state_ == SceneGameFlowState::UpgradeSelection || state_ == SceneGameFlowState::ResultDelay)
 		addText(director->gameFlowRemainingTextEntityId, director->gameFlowRemainingPrefix + "0");
 	else addText(director->gameFlowRemainingTextEntityId, {});
 	if (state_ == SceneGameFlowState::Result) addText(director->gameFlowResultTimeTextEntityId, director->gameFlowResultPrefix + FormatTimer(elapsedSeconds_, true));
@@ -232,6 +237,9 @@ bool SceneGameFlowSystem::Preflight(const SceneDocument& document, uint64_t dire
 	std::vector<SceneValidationIssue> issues;
 	SceneValidator::ValidateDocument(document, nullptr, {}, {}, issues);
 	for (const auto& issue : issues) {
+		if (issue.entityId == directorEntityId && issue.message.starts_with("UpgradeSelection:")) {
+			diagnostic.code = ScenePreparationDiagnosticCode::InvalidReference; diagnostic.detail = issue.message; return false;
+		}
 		const bool flowIssue = issue.entityId == directorEntityId && issue.message.starts_with("FlowPreparation:");
 		const bool spawnIssue = spawners.contains(issue.entityId) && issue.message.starts_with("SpawnPreparation:");
 		if (!flowIssue && !spawnIssue) continue;
@@ -276,7 +284,22 @@ std::string SceneGameFlowSystem::FormatTimer(double seconds, bool centiseconds) 
 	return buffer;
 }
 
+bool SceneGameFlowSystem::MatchesUpgrade(const SceneDocument& document, const SceneUpgradeToken& token) const {
+	if (!IsAwaitingUpgrade() || token != upgradeToken_ || !token.instance || token.generation != document.GetContentGeneration()) return false;
+	const auto* entity = document.FindEntity(directorEntityId_);
+	const auto* director = entity ? SceneEntityQuery::FindEnabledComponent(*entity, "GameFlowDirector") : nullptr;
+	if (!director || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *entity) || phaseIndex_ <= 0 ||
+		phaseIndex_ >= static_cast<int>(director->gameFlowPhases.size())) return false;
+	const auto& phase = director->gameFlowPhases[phaseIndex_ - 1];
+	return director->gameFlowUpgradeSelectionPanelEntityId == upgradePanel_ && phase.id == token.clearedPhaseId && phase.upgradePool == upgradePool_;
+}
+bool SceneGameFlowSystem::ResumeAfterUpgrade(const SceneUpgradeToken& token) {
+	if (!IsAwaitingUpgrade() || token != upgradeToken_) return false;
+	state_ = SceneGameFlowState::PhaseGap; stateElapsedSeconds_ = 0; timerRunning_ = true; gameplayAllowed_ = true;
+	upgradeToken_ = {}; upgradePanel_ = 0; upgradePool_.clear(); return true;
+}
 void SceneGameFlowSystem::Clear() {
+	upgradeToken_ = {}; upgradePanel_ = 0; upgradePool_.clear();
 	state_ = SceneGameFlowState::Inactive;
 	directorEntityId_ = 0;
 	phaseIndex_ = 0;

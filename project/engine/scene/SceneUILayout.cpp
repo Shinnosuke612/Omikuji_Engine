@@ -3,6 +3,10 @@
 
 #include "SceneDocument.h"
 #include "SceneEntityQuery.h"
+#include "SceneMenuRuntime.h"
+#include "SceneUIEditorView.h"
+#include <unordered_map>
+#include <utility>
 
 #include <algorithm>
 #include <cmath>
@@ -159,8 +163,9 @@ bool SceneUILayout::Resolve(const SceneDocument& document, uint64_t entityId,
 	auto validatePanel = [&](const SceneEntity& owner) {
 		const auto* panel = FindComponent(owner, "MenuPanel");
 		if (!panel) return true;
+		// SceneValidatorと同じ入力方式を許可し、読込と描画で配置の判定を揃える。
 		if ((panel->menuLayoutMode != "Hierarchical" && panel->menuLayoutMode != "CanvasItems") ||
-			(panel->menuInputMode != "Events" && panel->menuInputMode != "Standard")) return false;
+			(panel->menuInputMode != "Events" && panel->menuInputMode != "Standard" && panel->menuInputMode != "Pointer")) return false;
 		if (panel->menuLayoutMode != "CanvasItems") return true;
 		const auto& t = owner.transform;
 		if (owner.id != canvasEntity->id || FindComponent(owner, "UITransform") ||
@@ -226,4 +231,82 @@ Matrix4x4 SceneUILayout::UnitQuadToClip(const Layout& layout) {
 	return Multiply(Multiply(MakeScaleMatrix({ layout.size.x, layout.size.y, 1.0f }),
 		layout.localToCanvas), MakeOrthographicMatrix(0.0f, 0.0f,
 			layout.referenceSize.x, layout.referenceSize.y, 0.0f, 100.0f));
+}
+
+namespace {
+	bool IsMenuOwned(const SceneDocument& document, const SceneEntity& root) {
+		const SceneEntity* entity = &root;
+		for (size_t depth = 0; entity && depth <= document.GetEntities().size(); ++depth) {
+			if (SceneEntityQuery::FindComponent(*entity, "MenuPanel")) return true;
+			entity = document.FindEntity(entity->parentId);
+		}
+		return false;
+	}
+
+}
+std::vector<SceneUILayout::PaintGroup> SceneUILayout::CollectPaintOrder(const SceneDocument& document, const char* renderSpace,
+	uint64_t skipEntityId, const SceneUIEditorView* editorView, uint64_t menuPanelId, const SceneMenuFrame* menu, bool includeMenuItems) {
+	if (!renderSpace) return {};
+	using SceneEntityQuery::FindComponent;
+	using SceneEntityQuery::FindEnabledComponent;
+	std::unordered_map<uint64_t, std::vector<const SceneEntity*>> children;
+	for (const SceneEntity& entity : document.GetEntities()) children[entity.parentId].push_back(&entity);
+	std::vector<PaintGroup> result;
+	for (const SceneEntity& root : document.GetEntities()) {
+		if (!FindComponent(root, "UICanvas")) continue;
+		SceneUILayout::Layout canvas;
+		if (!SceneUILayout::Resolve(document, root.id, canvas) || !canvas.visible ||
+			canvas.renderSpace != renderSpace || (!editorView && !menuPanelId && IsMenuOwned(document, root))) continue;
+		PaintGroup group;
+		group.order = canvas.canvasSortingOrder;
+		std::vector<const SceneEntity*> stack;
+		auto pushChildren = [&](uint64_t id) {
+			const auto found = children.find(id);
+			if (found != children.end()) for (auto it = found->second.rbegin(); it != found->second.rend(); ++it) stack.push_back(*it);
+		};
+		pushChildren(root.id);
+		std::unordered_set<uint64_t> visited{ root.id };
+		while (!stack.empty()) {
+			const SceneEntity* entity = stack.back();
+			stack.pop_back();
+			if (!visited.insert(entity->id).second || FindComponent(*entity, "UICanvas")) continue;
+			// 通常HUDはMenu枝を除外。明示された一つのPanelだけ別Passへ渡す。
+			const uint64_t allowedPanel = editorView ? editorView->panelId : menuPanelId;
+			if (FindComponent(*entity, "MenuPanel") && entity->id != allowedPanel) continue;
+			if (menu && std::find(menu->hiddenMarkerRoots.begin(), menu->hiddenMarkerRoots.end(), entity->id) != menu->hiddenMarkerRoots.end()) continue;
+			if (menu && std::find(menu->hiddenVisualRoots.begin(), menu->hiddenVisualRoots.end(), entity->id) != menu->hiddenVisualRoots.end()) continue;
+			pushChildren(entity->id);
+			if ((menuPanelId && entity->id != menuPanelId && !document.IsDescendantOf(entity->id, menuPanelId)) ||
+				(editorView && !editorView->Allows(document, entity->id)) ||
+				entity->id == skipEntityId || !FindComponent(*entity, "UITransform") ||
+				(!FindEnabledComponent(*entity, "SpriteRenderer") && !FindEnabledComponent(*entity, "TextRenderer") && !(includeMenuItems && FindEnabledComponent(*entity, "MenuItem")))) continue;
+			SceneUILayout::Layout layout;
+			if (SceneUILayout::Resolve(document, entity->id, layout) && layout.visible && layout.canvasEntityId == root.id) {
+				group.items.push_back({ entity->id, std::move(layout) });
+			}
+		}
+		std::stable_sort(group.items.begin(), group.items.end(), [](const PaintItem& left, const PaintItem& right) {
+			return left.layout.sortingOrder < right.layout.sortingOrder;
+		});
+		if (!group.items.empty()) result.push_back(std::move(group));
+	}
+	std::stable_sort(result.begin(), result.end(), [](const PaintGroup& left, const PaintGroup& right) {
+		return left.order < right.order;
+	});
+	return result;
+}
+
+bool SceneUILayout::ContainsNormalizedPoint(const Layout& layout, const Vector2& point) {
+	if (!layout.visible || layout.renderSpace != "ScreenOverlay" || !Finite(point) ||
+		point.x < 0 || point.x >= 1 || point.y < 0 || point.y >= 1) return false;
+	const auto& m = layout.localToCanvas.m;
+	// UIは2D affine。doubleで逆変換し、小scaleでもfloat逆行列のoverflowを避ける。
+	const double determinant = double(m[0][0]) * m[1][1] - double(m[0][1]) * m[1][0];
+	if (!std::isfinite(determinant) || determinant == 0) return false;
+	const double x = double(point.x) * layout.referenceSize.x - m[3][0];
+	const double y = double(point.y) * layout.referenceSize.y - m[3][1];
+	const double localX = (x * m[1][1] - y * m[1][0]) / determinant;
+	const double localY = (y * m[0][0] - x * m[0][1]) / determinant;
+	return std::isfinite(localX) && std::isfinite(localY) &&
+		localX >= 0 && localX < layout.size.x && localY >= 0 && localY < layout.size.y;
 }

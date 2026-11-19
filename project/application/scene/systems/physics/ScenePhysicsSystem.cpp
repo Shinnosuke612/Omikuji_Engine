@@ -174,9 +174,10 @@ void ScenePhysicsSystem::SyncSceneSettings(
 	const SceneDocument& document,
 	Player* player,
 	const std::vector<SceneRuntimeObjectBinding>& bindings,
-	bool editing
+	bool editing,
+	const SceneRunUpgradeModifiers& upgrades
 ) {
-	ApplyPlayerBehavior(document, player);
+	ApplyPlayerBehavior(document, player, upgrades);
 	ApplyPlayerPhysics(document, player, bindings, editing);
 	ApplyWaterVolumes(document, player);
 	RebuildStaticColliders(document, bindings);
@@ -837,7 +838,8 @@ void ScenePhysicsSystem::Clear() {
 
 void ScenePhysicsSystem::ApplyPlayerBehavior(
 	const SceneDocument& document,
-	Player* player
+	Player* player,
+	const SceneRunUpgradeModifiers& upgrades
 ) const {
 	if (!player) {
 		return;
@@ -850,8 +852,10 @@ void ScenePhysicsSystem::ApplyPlayerBehavior(
 		return;
 	}
 
+	// 毎回基礎値から計算し、Dash/水中補正は従来の後段に委ねる。
+	const float moveSpeed = behavior->playerMoveSpeed * upgrades.ForOwner(playerEntity->id).moveSpeed;
 	player->SetBehaviorSettings(
-		behavior->playerMoveSpeed,
+		std::isfinite(moveSpeed) ? moveSpeed : behavior->playerMoveSpeed,
 		behavior->playerJumpVelocity,
 		behavior->playerTurnResponsiveness,
 		behavior->playerDashMultiplier,

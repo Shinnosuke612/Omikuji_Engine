@@ -211,7 +211,8 @@ void SceneTextRenderSystem::ResolveRasterSettings(const SceneDocument* document,
 		}
 	}
 	const auto override = textOverrides_.find(entity.id);
-	const std::string& text = override != textOverrides_.end()
+	const auto upgrade = upgradeTexts_.find(entity.id);
+	const std::string& text = upgrade != upgradeTexts_.end() ? upgrade->second : override != textOverrides_.end()
 		? override->second
 		: binding ? statText : component->textValue;
 	// Rasterizerとsignatureは同じ実効色を使用し、選択中の毎Frame再生成を避ける。
@@ -552,6 +553,7 @@ void SceneTextRenderSystem::Finalize() {
 	pendingPreparedEntity_ = 0;
 	preparedTextCursor_ = 0;
 	imagePublished_ = false;
+	upgradeTexts_.clear();
 	menuColors_.clear();
 	for (const auto& entry : texts_) {
 		if (!entry.second.textureKey.empty()) {
