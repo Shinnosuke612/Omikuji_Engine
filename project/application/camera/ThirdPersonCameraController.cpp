@@ -57,7 +57,7 @@ void ThirdPersonCameraController::SyncFromCameraPose(
 	const Vector3 toFocus = Math::Subtract(focusPosition, cameraPosition);
 	const float distance = Math::Length(toFocus);
 	if (distance <= 0.0001f) {
-		distance_ = minDistance_;
+		distance_ = zoomMinDistance_;
 		targetDistance_ = distance_;
 		normalDistance_ = distance_;
 		return;
@@ -73,7 +73,7 @@ void ThirdPersonCameraController::SyncFromCameraPose(
 	desiredYaw_ = yaw_;
 	desiredPitch_ = pitch_;
 
-	distance_ = std::clamp(distance, minDistance_, maxDistance_);
+	distance_ = std::clamp(distance, zoomMinDistance_, zoomMaxDistance_);
 	targetDistance_ = distance_;
 	normalDistance_ = distance_;
 	occlusionDistance_ = distance_;
@@ -93,8 +93,14 @@ Vector3 ThirdPersonCameraController::GetForwardDirection() const {
 	return Math::Normalize(forward);
 }
 
+void ThirdPersonCameraController::SetZoomRange(float minimum, float maximum) {
+	const bool valid = std::isfinite(minimum) && std::isfinite(maximum) && minimum > 0.0f && minimum <= maximum;
+	zoomMinDistance_ = valid ? minimum : minDistance_;
+	zoomMaxDistance_ = valid ? maximum : maxDistance_;
+}
+
 void ThirdPersonCameraController::SetDistance(float distance) {
-	normalDistance_ = std::clamp(distance, minDistance_, maxDistance_);
+	normalDistance_ = std::clamp(distance, zoomMinDistance_, zoomMaxDistance_);
 	targetDistance_ = normalDistance_;
 	distance_ = normalDistance_;
 	occlusionDistance_ = distance_;
@@ -159,8 +165,8 @@ void ThirdPersonCameraController::Update(
 				if (std::abs(wheel) > 0.000001f) {
 					targetDistance_ = std::clamp(
 						targetDistance_ - wheel * zoomStep_,
-						minDistance_,
-						maxDistance_
+						zoomMinDistance_,
+						zoomMaxDistance_
 					);
 					normalDistance_ = targetDistance_;
 				}
@@ -199,7 +205,9 @@ void ThirdPersonCameraController::Update(
 		positionSmoothTime_,
 		deltaTime
 	);
-	distance_ = std::clamp(distance_, minDistance_, maxDistance_);
+	// 通常距離と照準距離の両方を含め、モード切替時の補間を保つ。
+	distance_ = std::clamp(distance_, (std::min)(zoomMinDistance_, aimDistance_),
+		(std::max)(zoomMaxDistance_, aimDistance_));
 
 	const float cosPitch = std::cos(pitch_);
 	const float sinPitch = std::sin(pitch_);
@@ -264,7 +272,7 @@ void ThirdPersonCameraController::Update(
 			}
 			occlusionDistance_ = std::clamp(
 				occlusionDistance_,
-				minDistance_,
+				(std::min)(minDistance_, rayLength),
 				rayLength
 			);
 			cameraDistance = occlusionDistance_;
@@ -347,7 +355,7 @@ float ThirdPersonCameraController::ResolveOcclusionDistance(
 	Vector3 ray = Math::Subtract(desiredCameraPosition, focus);
 	const float desiredLength = Math::Length(ray);
 	if (desiredLength <= 0.0001f) {
-		return minDistance_;
+		return desiredLength;
 	}
 
 	const Vector3 direction = Math::Multiply(ray, 1.0f / desiredLength);
@@ -405,7 +413,7 @@ float ThirdPersonCameraController::ResolveOcclusionDistance(
 
 	return std::clamp(
 		nearest - occlusionMargin_,
-		minDistance_,
+		(std::min)(minDistance_, desiredLength),
 		desiredLength
 	);
 }

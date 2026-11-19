@@ -165,11 +165,15 @@ private:
 	void ReportPreparationDiagnostic(const ScenePreparationDiagnostic& diagnostic, uint64_t& sourceSerial);
 	// 再読込拒否/失敗だけを既存の言語対応Popup/ログ経路へ渡す。Scene進行は停止しない。
 	void ReportSceneRestartFailure(const std::string& detail);
-	void DrawSceneView(Camera* viewCamera, uint64_t skipEntityId = 0);
+	void DrawSceneView(Camera* viewCamera, uint64_t skipEntityId, bool mainView);
 	void DrawPreparedSceneContentForView(
 		Camera* viewCamera,
-		uint64_t skipEntityId
+		uint64_t skipEntityId,
+		bool mainView
 	);
+	std::unordered_map<uint64_t, float> FindMainViewBuildingVisibility(
+		const SceneDocument& document, const Camera* viewCamera
+	) const;
 	bool ShouldHidePlayerModelForCamera(Camera* viewCamera) const;
 	void ApplyRenderCamera(Camera* viewCamera);
 	bool IsPreparedDestinationDraw() const noexcept;

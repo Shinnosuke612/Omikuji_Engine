@@ -523,7 +523,9 @@
             0.0
           ],
           "type": "ThirdPersonCamera",
-          "yawReference": "World"
+          "yawReference": "World",
+          "zoomMaxDistance": 45.0,
+          "zoomMinDistance": 18.0
         },
         {
           "bodyType": "Dynamic",

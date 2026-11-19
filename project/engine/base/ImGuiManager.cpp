@@ -7,6 +7,7 @@
 #include <cassert>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -17581,6 +17582,60 @@ void ImGuiManager::DrawInspectorWindow() {
 					0.01f,
 					30.0f
 				);
+				auto zoomText = [this](const char* ja, const char* en) {
+					return SelectEditorText(editorLanguage_, ja, en);
+				};
+				const auto decimalDistance = [](float distance) {
+					// 指数表記を避け、微小な有効値も0に丸めずに表示する。
+					char buffer[64];
+					const auto result = std::to_chars(buffer, buffer + sizeof(buffer), distance, std::chars_format::fixed);
+					return result.ec == std::errc{} ? std::string(buffer, result.ptr) : std::string("—");
+				};
+				const auto minimumText = decimalDistance(component.thirdPersonZoomMinDistance);
+				const auto maximumText = decimalDistance(component.thirdPersonZoomMaxDistance);
+				ImGui::Text(zoomText("ズーム最短距離 %s / 最長距離 %s", "Zoom minimum %s / maximum %s"),
+					minimumText.c_str(), maximumText.c_str());
+				const char* zoomPopup = zoomText("ズーム範囲の編集###ThirdPersonZoomRange", "Edit Zoom Range###ThirdPersonZoomRange");
+				const char* invalidZoom = zoomText("ズーム範囲を適用できません###InvalidThirdPersonZoomRange",
+					"Cannot Apply Zoom Range###InvalidThirdPersonZoomRange");
+				// モーダル内の下書きだけを編集し、二値を一度に保存する。
+				static float zoomMinimum = 1.4f, zoomMaximum = 30.0f;
+				if (ImGui::Button(zoomPopup)) {
+					zoomMinimum = component.thirdPersonZoomMinDistance;
+					zoomMaximum = component.thirdPersonZoomMaxDistance;
+					ImGui::OpenPopup(zoomPopup);
+				}
+				if (ImGui::BeginPopupModal(zoomPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+					ImGui::InputFloat(zoomText("ズーム最短距離", "Minimum Zoom Distance"), &zoomMinimum);
+					ImGui::InputFloat(zoomText("ズーム最長距離", "Maximum Zoom Distance"), &zoomMaximum);
+					if (ImGui::Button(zoomText("適用", "Apply"))) {
+						if (SceneComponent::IsValidThirdPersonZoomRange(zoomMinimum, zoomMaximum)) {
+							thirdPersonChanged |= component.thirdPersonZoomMinDistance != zoomMinimum ||
+								component.thirdPersonZoomMaxDistance != zoomMaximum;
+							component.thirdPersonZoomMinDistance = zoomMinimum;
+							component.thirdPersonZoomMaxDistance = zoomMaximum;
+							ImGui::CloseCurrentPopup();
+						} else {
+							ImGui::OpenPopup(invalidZoom);
+						}
+					}
+					ImGui::SameLine();
+					if (ImGui::Button(zoomText("キャンセル", "Cancel"))) ImGui::CloseCurrentPopup();
+					if (ImGui::BeginPopupModal(invalidZoom, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+						ImGui::TextWrapped("%s", zoomText(
+							"0 < 最短距離 ≤ 最長距離 ≤ 1,000 になるように入力してください。",
+							"Enter distances satisfying 0 < minimum distance <= maximum distance <= 1,000."));
+						if (ImGui::Button(zoomText("閉じる", "Close"))) ImGui::CloseCurrentPopup();
+						ImGui::EndPopup();
+					}
+					ImGui::EndPopup();
+				}
+				if (ImGui::TreeNode(zoomText("ズーム設定のリファレンス", "Zoom Settings Reference"))) {
+					ImGui::TextWrapped("%s", zoomText(
+						"範囲を編集して「適用」すると、通常時の初期距離とホイールズームに反映されます。同じ値を入れると通常時の距離が固定されます。既定は1.4〜30.0で、指定できる上限は1,000です。照準距離と遮蔽物による距離調整は別です。",
+						"Edit the range and apply it to set the initial normal distance and mouse wheel limits. Equal values lock the normal distance. The default is 1.4 to 30.0, and the largest allowed distance is 1,000. Aim distance and occlusion adjustment are separate."));
+					ImGui::TreePop();
+				}
 				thirdPersonChanged |= ImGui::DragFloat(
 					LocalizedComponentWidgetLabel(editorLanguage_, "Aim Distance"),
 					&component.thirdPersonAimDistance,
@@ -22582,9 +22637,11 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 				? ImVec4(0.95f, 0.35f, 0.3f, 1.0f)
 				: ImVec4(0.95f, 0.65f, 0.25f, 1.0f),
 			"[%s] %s",
-			(issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
+			(issue.message == "ThirdPersonCamera:ZoomRange" || issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
 			((issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:")) ? std::string(EnemyPositioningIssue(editorLanguage_, issue.message)) :
-			(issue.message.starts_with("MovementBounds:") ? std::string(MovementBoundsIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
+			(issue.message == "ThirdPersonCamera:ZoomRange" ? std::string(SelectEditorText(editorLanguage_,
+				"ズーム範囲が無効です。0 < 最短距離 ≤ 最長距離 ≤ 1,000 になるように設定してください。プレイ中は既定の1.4〜30.0を使います。",
+				"The zoom range is invalid. Enter distances satisfying 0 < minimum <= maximum <= 1,000. Play uses the default 1.4 to 30.0.")) : issue.message.starts_with("MovementBounds:") ? std::string(MovementBoundsIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
 			((issue.message.starts_with("Menu runtime:") || issue.message.starts_with("MenuItem marker") || issue.message.starts_with("MenuItem selection marker")) ? LocalizeMenuIssue(issue.message) : issue.message))).c_str()
 		);
 		ImGui::PopID();

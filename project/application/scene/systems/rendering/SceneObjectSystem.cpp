@@ -871,7 +871,8 @@ void SceneObjectSystem::PrepareModelDraw() const {
 void SceneObjectSystem::DrawModels(
 	const SceneDocument& document,
 	uint64_t skipEntityId,
-	bool hidePlayerModel
+	bool hidePlayerModel,
+	const std::unordered_map<uint64_t, float>& modelVisibility
 ) const {
 	for (const SceneEntity& entity : document.GetEntities()) {
 		if (
@@ -883,7 +884,12 @@ void SceneObjectSystem::DrawModels(
 			continue;
 		}
 		if (Object3d* object = FindObject(entity.id)) {
-			object->Draw();
+			const auto found = modelVisibility.find(entity.id);
+			if (found == modelVisibility.end()) {
+				object->Draw();
+			} else if (found->second > 0.0f) {
+				object->DrawWithCoverage(found->second);
+			}
 		}
 	}
 }

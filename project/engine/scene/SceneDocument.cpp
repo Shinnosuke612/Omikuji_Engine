@@ -1626,6 +1626,8 @@ namespace {
 			result["targetEntityId"] = component.thirdPersonTargetEntityId;
 			result["targetEntityName"] = component.thirdPersonTargetEntityName;
 			result["distance"] = component.thirdPersonDistance;
+			result["zoomMinDistance"] = component.thirdPersonZoomMinDistance;
+			result["zoomMaxDistance"] = component.thirdPersonZoomMaxDistance;
 			result["aimDistance"] = component.thirdPersonAimDistance;
 			result["targetOffset"] = VectorToJson(component.thirdPersonTargetOffset);
 			result["aimTargetOffset"] =
@@ -3284,6 +3286,8 @@ namespace {
 					"distance",
 					component.thirdPersonDistance
 				);
+				component.thirdPersonZoomMinDistance = value.value("zoomMinDistance", component.thirdPersonZoomMinDistance);
+				component.thirdPersonZoomMaxDistance = value.value("zoomMaxDistance", component.thirdPersonZoomMaxDistance);
 				component.thirdPersonAimDistance = value.value(
 					"aimDistance",
 					component.thirdPersonAimDistance
@@ -5477,6 +5481,13 @@ namespace {
 		}
 	}
 
+}
+
+bool SceneComponent::IsValidThirdPersonZoomRange(float minimum, float maximum) {
+	// 通常ズームの極端値がカメラの距離計算に入らないよう、有限性に加えて上限を設ける。
+	constexpr float kMaximumZoomDistance = 1000.0f;
+	return std::isfinite(minimum) && std::isfinite(maximum) &&
+		minimum > 0.0f && minimum <= maximum && maximum <= kMaximumZoomDistance;
 }
 
 SceneDocument::ContentGeneration::ContentGeneration() { Renew(); }

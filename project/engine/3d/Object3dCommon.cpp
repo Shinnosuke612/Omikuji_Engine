@@ -6,6 +6,7 @@
 #include "SkinCluster.h"
 #include "SrvManager.h"
 #include <algorithm>
+#include <bit>
 #include <cassert>
 
 Object3dCommon* Object3dCommon::GetInstance() {
@@ -14,6 +15,10 @@ Object3dCommon* Object3dCommon::GetInstance() {
 }
 
 namespace {
+	// 通常3Dモデル用のPS b4。影は別のルート署名を使用する。
+	constexpr UINT kVisibilityRootSlot = 9;
+	constexpr auto kFullCoverage = std::bit_cast<uint32_t>(1.0f);
+
 	D3D12_CULL_MODE ToD3D12CullMode(Object3dCommon::CullMode cullMode) {
 		switch (cullMode) {
 		case Object3dCommon::CullMode::kBack:
@@ -57,6 +62,7 @@ void Object3dCommon::SetCommonRenderState() {
 
 void Object3dCommon::SetCommonRenderState(CullMode cullMode) {
 	dxCommon_->GetCommandList()->SetGraphicsRootSignature(rootSignature_.Get());
+	dxCommon_->GetCommandList()->SetGraphicsRoot32BitConstant(kVisibilityRootSlot, kFullCoverage, 0);
 	dxCommon_->GetCommandList()->SetPipelineState(
 		graphicsPipelineStates_[ToCullIndex(cullMode)].Get()
 	);
@@ -66,6 +72,7 @@ void Object3dCommon::SetCommonRenderState(CullMode cullMode) {
 void Object3dCommon::SetEditorGhostRenderState(CullMode cullMode) {
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	dxCommon_->GetCommandList()->SetGraphicsRootSignature(rootSignature_.Get());
+	dxCommon_->GetCommandList()->SetGraphicsRoot32BitConstant(kVisibilityRootSlot, kFullCoverage, 0);
 	dxCommon_->GetCommandList()->SetPipelineState(editorGhostPipelineStates_[ToCullIndex(cullMode)].Get());
 	dxCommon_->GetCommandList()->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 #endif
@@ -77,6 +84,7 @@ void Object3dCommon::SetSkinningRenderState() {
 
 void Object3dCommon::SetSkinningRenderState(CullMode cullMode) {
 	dxCommon_->GetCommandList()->SetGraphicsRootSignature(rootSignature_.Get());
+	dxCommon_->GetCommandList()->SetGraphicsRoot32BitConstant(kVisibilityRootSlot, kFullCoverage, 0);
 	dxCommon_->GetCommandList()->SetPipelineState(
 		skinningPipelineStates_[ToCullIndex(cullMode)].Get()
 	);
@@ -184,7 +192,7 @@ void Object3dCommon::MakeRootSignature(){
 
 
 	//RootParameter作成、複数指定できるので配列。
-	D3D12_ROOT_PARAMETER rootParameters[9] = {};
+	D3D12_ROOT_PARAMETER rootParameters[kVisibilityRootSlot + 1] = {};
 	rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 	rootParameters[0].Descriptor.ShaderRegister = 0;
@@ -216,6 +224,11 @@ void Object3dCommon::MakeRootSignature(){
 	rootParameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 	rootParameters[8].DescriptorTable.pDescriptorRanges = &descriptorRange[3];
 	rootParameters[8].DescriptorTable.NumDescriptorRanges = 1;
+	auto& visibility = rootParameters[kVisibilityRootSlot];
+	visibility.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	visibility.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	visibility.Constants.ShaderRegister = 4;
+	visibility.Constants.Num32BitValues = 1;
 
 	descriptionRootSignature.pParameters = rootParameters;
 	descriptionRootSignature.NumParameters = _countof(rootParameters);

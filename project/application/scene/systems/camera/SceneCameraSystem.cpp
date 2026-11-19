@@ -11,6 +11,8 @@
 #include "../../../../engine/scene/SceneDocument.h"
 #include "../../../../engine/scene/SceneEntityQuery.h"
 #include "../../../../engine/scene/SceneTransformResolver.h"
+#include "../../../../engine/utility/EditableResourcePath.h"
+#include "../../../../engine/utility/StringUtility.h"
 #include "../../../player/Player.h"
 
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 namespace {
 	using SceneEntityQuery::FindEnabledComponent;
@@ -518,6 +521,48 @@ const SceneEntity* SceneCameraSystem::ResolveThirdPersonTarget(
 	return nullptr;
 }
 
+bool SceneCameraSystem::IsAlleyCameraOccluder(const std::string& modelPath) {
+	if (modelPath.empty()) return false;
+	auto path = StringUtility::ToPath(modelPath).lexically_normal();
+	if (path.is_absolute()) {
+		path = EditableResourcePath::ToProjectRelative(
+			EditableResourcePath::ResolveResource(path));
+	}
+	constexpr std::string_view resourcePrefix = "resources/";
+	std::string key = StringUtility::ToUtf8(path);
+	if (key.starts_with(resourcePrefix)) {
+		key.erase(0, resourcePrefix.size());
+	}
+	return key == "alley/modern_building/source/mordern building.glb" ||
+		key == "alley/atlanta_office/free__atlanta_corperate_office_building.glb" ||
+		key == "alley/modern_office/modern_office_building.glb" ||
+		key == "alley/modern_office_2/modern_office_building_2.glb";
+}
+
+bool SceneCameraSystem::TryGetPlayerFollowFocus(
+	const SceneDocument& document,
+	Vector3& focus
+) const {
+	if (!playerCameraInitialized_ || IsFirstPersonMode() || IsPathPlaying()) {
+		return false;
+	}
+	const SceneEntity* cameraEntity = ResolveActiveCameraEntity(document);
+	if (!cameraEntity || cameraEntity->id != thirdPersonCameraEntityId_ ||
+		!FindEnabledComponent(*cameraEntity, "Camera")) {
+		return false;
+	}
+	const auto* thirdPerson = FindEnabledComponent(*cameraEntity, "ThirdPersonCamera");
+	const auto* target = thirdPerson
+		? ResolveThirdPersonTarget(document, *cameraEntity, *thirdPerson)
+		: nullptr;
+	if (!target || !IsEntityActiveInHierarchy(document, *target) ||
+		!HasComponent(*target, "PlayerBehavior")) {
+		return false;
+	}
+	focus = playerCameraController_.GetCurrentFocus();
+	return true;
+}
+
 bool SceneCameraSystem::UpdateThirdPersonCamera(
 	SceneDocument& document,
 	Camera* camera,
@@ -578,6 +623,14 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 			initialTransform.rotate.y,
 			initialTransform.rotate.x
 		);
+		const float zoomMinimum = thirdPerson->thirdPersonZoomMinDistance;
+		const float zoomMaximum = thirdPerson->thirdPersonZoomMaxDistance;
+		if (SceneComponent::IsValidThirdPersonZoomRange(zoomMinimum, zoomMaximum)) {
+			playerCameraController_.SetZoomRange(zoomMinimum, zoomMaximum);
+		} else {
+			// 保存値は保持し、初期距離を設定する前に通常ズームの範囲を既定値へ戻す。
+			playerCameraController_.SetZoomRange(1.4f, 30.0f);
+		}
 		playerCameraController_.SetDistance(thirdPerson->thirdPersonDistance);
 		playerCameraController_.SetAimDistance(
 			thirdPerson->thirdPersonAimDistance
@@ -672,6 +725,12 @@ bool SceneCameraSystem::UpdateThirdPersonCamera(
 		if (const SceneComponent* meshRenderer =
 			FindEnabledComponent(*binding.entity, "MeshRenderer")) {
 			modelPath = meshRenderer->modelPath;
+		}
+		// プレイヤー追従では、この建物の遮蔽をメインビューの表示で解消する。
+		if (HasComponent(*targetEntity, "PlayerBehavior") &&
+			!playerCameraController_.IsFirstPersonMode() &&
+			IsAlleyCameraOccluder(modelPath)) {
+			continue;
 		}
 		std::transform(
 			modelPath.begin(),

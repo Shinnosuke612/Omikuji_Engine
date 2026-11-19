@@ -556,6 +556,10 @@ struct SceneComponent {
 	uint64_t thirdPersonTargetEntityId = 0;
 	std::string thirdPersonTargetEntityName;
 	float thirdPersonDistance = 8.0f;
+	float thirdPersonZoomMinDistance = 1.4f;
+	float thirdPersonZoomMaxDistance = 30.0f;
+	// InspectorとScene検証で共有する通常ズーム範囲の保存条件。
+	static bool IsValidThirdPersonZoomRange(float minimum, float maximum);
 	float thirdPersonAimDistance = 3.0f;
 	Vector3 thirdPersonTargetOffset = { 0.0f, 1.35f, 0.0f };
 	Vector3 thirdPersonAimTargetOffset = { 0.0f, 1.55f, 0.0f };

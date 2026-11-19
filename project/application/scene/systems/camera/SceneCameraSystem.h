@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "../../SceneRuntimeObjectBinding.h"
@@ -79,6 +80,10 @@ public:
 			playerCameraController_.IsFirstPersonMode();
 	}
 	bool IsPathPlaying() const { return cameraPathRuntime_.IsPlaying(); }
+	// 通常のプレイヤー追従時だけ、描画が遮蔽物判定に使う注視点を返す。
+	bool TryGetPlayerFollowFocus(const SceneDocument& document, Vector3& focus) const;
+	// カメラの押し戻しと描画除外で同じ建物の範囲を使う。
+	static bool IsAlleyCameraOccluder(const std::string& modelPath);
 	bool HasCurrentPathTransform() const {
 		return cameraPathRuntime_.HasCurrentTransform();
 	}

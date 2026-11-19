@@ -1327,6 +1327,9 @@ bool SceneValidator::ValidateDocument(
 					);
 				}
 			} else if (component.type == "ThirdPersonCamera") {
+				if (!SceneComponent::IsValidThirdPersonZoomRange(component.thirdPersonZoomMinDistance, component.thirdPersonZoomMaxDistance)) {
+					addIssue(SceneValidationSeverity::Warning, entity.id, "ThirdPersonCamera:ZoomRange");
+				}
 				const bool hasCamera = std::any_of(
 					entity.components.begin(),
 					entity.components.end(),

@@ -26,12 +26,16 @@ public:
 	);
 	float GetYaw() const { return yaw_; }
 	float GetPitch() const { return pitch_; }
+	// 最後にSetLookAtへ渡した、追従平滑化後の注視点。
+	const Vector3& GetCurrentFocus() const { return currentFocus_; }
 	Vector3 GetForwardDirection() const;
 	bool IsAimMode() const { return isAimMode_; }
 	bool IsFirstPersonMode() const {
 		return isAimMode_ && distance_ <= minDistance_ + 0.05f;
 	}
 
+	// 初期距離を設定する前に渡す。無効な組は既定値へ戻す。
+	void SetZoomRange(float minimum, float maximum);
 	void SetDistance(float distance);
 	void SetAimDistance(float distance);
 	void SetTargetOffset(const Vector3& offset) { targetOffset_ = offset; }
@@ -93,6 +97,8 @@ private:
 	float aimDistance_ = 3.0f;
 	float minDistance_ = 1.4f;
 	float maxDistance_ = 30.0f;
+	float zoomMinDistance_ = 1.4f;
+	float zoomMaxDistance_ = 30.0f;
 	float minPitch_ = -1.45f;
 	float maxPitch_ = 1.35f;
 	float mouseSensitivity_ = 0.005f;

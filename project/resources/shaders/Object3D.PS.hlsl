@@ -10,6 +10,11 @@ SamplerState gShadowSampler : register(s1);
 static const int kMaxPointLights = 16;
 static const int kMaxSpotLights = 8;
 
+cbuffer ModelVisibilityCB : register(b4)
+{
+    float gModelCoverage;
+};
+
 cbuffer MaterialCB : register(b0)
 {
     float4 gMaterialColor;
@@ -202,6 +207,24 @@ PixelShaderOutput main(VertexShaderOutput input)
         discard;
     }
     ApplyDissolve(transformedUV.xy, input.worldPosition);
+    if (gModelCoverage < 1.0f)
+    {
+        // 画素を間引いて、残る部分の深度テストと書き込みを通常の描画と揃える。
+        static const uint bayer8x8[64] =
+        {
+             0, 32,  8, 40,  2, 34, 10, 42,
+            48, 16, 56, 24, 50, 18, 58, 26,
+            12, 44,  4, 36, 14, 46,  6, 38,
+            60, 28, 52, 20, 62, 30, 54, 22,
+             3, 35, 11, 43,  1, 33,  9, 41,
+            51, 19, 59, 27, 49, 17, 57, 25,
+            15, 47,  7, 39, 13, 45,  5, 37,
+            63, 31, 55, 23, 61, 29, 53, 21
+        };
+        const uint2 pixel = uint2(input.position.xy) & 7u;
+        const float threshold = (bayer8x8[pixel.y * 8u + pixel.x] + 0.5f) / 64.0f;
+        clip(gModelCoverage - threshold);
+    }
 
     if (gEnableLighting != 0)
     {

@@ -103,10 +103,12 @@ public:
 	// 値を保持し、各viewの描画定数を作る直前にID/世代から再解決する。
 	void SetSpawnPresentationFrame(SceneSpawnFrame frame);
 	void PrepareModelDraw() const;
+	// 個体別の描画率は呼び出し中だけ参照し、影や後続のビューへ持ち越さない。
 	void DrawModels(
 		const SceneDocument& document,
 		uint64_t skipEntityId,
-		bool hidePlayerModel
+		bool hidePlayerModel,
+		const std::unordered_map<uint64_t, float>& modelVisibility
 	) const;
 	void DrawSprites(
 		const SceneDocument& document,

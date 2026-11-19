@@ -12,6 +12,8 @@
 #include "../../engine/utility/Logger.h"
 
 #include "../../engine/3d/Camera.h"
+#include "../../engine/3d/Model.h"
+#include "../../engine/3d/ModelManager.h"
 #include "../../engine/3d/Object3dCommon.h"
 #include "../../engine/3d/Object3d.h"
 #include "../../engine/math/Math.h"
@@ -23,6 +25,86 @@
 #include <limits>
 
 namespace {
+	float BuildingVisibility(
+		const Vector3& camera, const Vector3& focus,
+		const Matrix4x4& world, const Vector3& minimum, const Vector3& maximum
+	) {
+		for (const auto& row : world.m) {
+			for (const float value : row) {
+				if (!std::isfinite(value)) return 1.0f;
+			}
+		}
+		if (world.m[0][3] != 0.0f || world.m[1][3] != 0.0f ||
+			world.m[2][3] != 0.0f || world.m[3][3] != 1.0f) {
+			return 1.0f;
+		}
+		const float determinant = Determinant(world);
+		// Inverseはこの閾値未満でゼロ行列を返す。
+		if (!std::isfinite(determinant) || std::abs(determinant) < 1e-6f) {
+			return 1.0f;
+		}
+		const Matrix4x4 inverse = Inverse(world);
+		const auto localCoordinate = [&](const Vector3& point, int axis) {
+			return static_cast<double>(point.x) * inverse.m[0][axis] +
+				static_cast<double>(point.y) * inverse.m[1][axis] +
+				static_cast<double>(point.z) * inverse.m[2][axis] +
+				inverse.m[3][axis];
+		};
+		const float low[] = {minimum.x, minimum.y, minimum.z};
+		const float high[] = {maximum.x, maximum.y, maximum.z};
+		double start[3], delta[3], expansionScale[3];
+		for (int axis = 0; axis < 3; ++axis) {
+			start[axis] = localCoordinate(camera, axis);
+			const double end = localCoordinate(focus, axis);
+			// 逆変換の列長でワールド距離をローカルの各面の幅に換算する。
+			expansionScale[axis] = std::hypot(
+				static_cast<double>(inverse.m[0][axis]),
+				static_cast<double>(inverse.m[1][axis]),
+				static_cast<double>(inverse.m[2][axis]));
+			if (!std::isfinite(start[axis]) || !std::isfinite(end) ||
+				!std::isfinite(expansionScale[axis]) ||
+				!std::isfinite(low[axis]) || !std::isfinite(high[axis]) ||
+				low[axis] > high[axis]) {
+				return 1.0f;
+			}
+			delta[axis] = end - start[axis];
+		}
+		const auto intersects = [&](double expansion) {
+			// 注視点より奥を隠さないよう、無限のRayではなく閉区間を比較する。
+			double enter = 0.0;
+			double exit = 1.0;
+			for (int axis = 0; axis < 3; ++axis) {
+				const double padding = expansion * expansionScale[axis];
+				const double minimum = low[axis] - padding;
+				const double maximum = high[axis] + padding;
+				if (delta[axis] == 0.0) {
+					if (start[axis] < minimum || start[axis] > maximum) return false;
+					continue;
+				}
+				const double a = (minimum - start[axis]) / delta[axis];
+				const double b = (maximum - start[axis]) / delta[axis];
+				enter = (std::max)(enter, (std::min)(a, b));
+				exit = (std::min)(exit, (std::max)(a, b));
+				if (enter > exit) return false;
+			}
+			return true;
+		};
+
+		// 完全非表示の境界は、フェード帯を追加する前と同じ元の箱。
+		if (intersects(0.0)) return 0.0f;
+		constexpr double fadeWidth = 2.0; // ALLEY PREVIEWでは1m相当。
+		if (!intersects(fadeWidth)) return 1.0f;
+		double outside = 0.0;
+		double inside = fadeWidth;
+		for (int i = 0; i < 12; ++i) {
+			const double middle = (outside + inside) * 0.5;
+			if (intersects(middle)) inside = middle;
+			else outside = middle;
+		}
+		const double t = inside / fadeWidth;
+		return static_cast<float>(t * t * (3.0 - 2.0 * t));
+	}
+
 	bool UiEntityActive(const SceneDocument& document, const SceneEntity* entity) {
 		for (size_t depth = 0; entity && entity->active && depth <= document.GetEntities().size(); ++depth) {
 			if (!entity->parentId) return true;
@@ -205,25 +287,80 @@ bool RuntimeScene::TryGetDeathReplayStatus(uint64_t owner, SceneDeathReplayStatu
 	out = { SceneDeathReplayPhase::Waiting, owner, 0.0f, {} }; return true;
 }
 
-void RuntimeScene::DrawSceneView(Camera* viewCamera, uint64_t skipEntityId) {
+void RuntimeScene::DrawSceneView(Camera* viewCamera, uint64_t skipEntityId, bool mainView) {
 	DrawEnvironment(viewCamera);
 	PrepareSceneContent(viewCamera);
 	BindLighting();
-	DrawPreparedSceneContentForView(viewCamera, skipEntityId);
+	DrawPreparedSceneContentForView(viewCamera, skipEntityId, mainView);
+}
+
+std::unordered_map<uint64_t, float> RuntimeScene::FindMainViewBuildingVisibility(
+	const SceneDocument& document, const Camera* viewCamera
+) const {
+	std::unordered_map<uint64_t, float> visibility;
+	const auto* context = sceneManager_ ? sceneManager_->GetExecutionContext() : nullptr;
+	if (!viewCamera || viewCamera != camera_ || viewCamera != GetSceneViewCamera() ||
+		!sceneManager_ || sceneManager_->GetActiveSceneInstanceId() != GetSceneInstanceId() ||
+		(context && (!context->IsPlaying() || context->IsEditing() || context->IsPaused())) ||
+		sceneManager_->IsTransitionHeld() || deathSystem_.IsDefeated()) {
+		return visibility;
+	}
+	Vector3 focus{};
+	if (!cameraSystem_.TryGetPlayerFollowFocus(document, focus)) {
+		return visibility;
+	}
+
+	struct Bounds {
+		Vector3 minimum{};
+		Vector3 maximum{};
+		bool valid = false;
+	};
+	// 建物の複製は同じModelを参照する。頂点走査はビューにつき各Model一回とする。
+	std::unordered_map<const Model*, Bounds> boundsByModel;
+	for (const auto& entity : document.GetEntities()) {
+		const auto* renderer = SceneEntityQuery::FindEnabledComponent(entity, "MeshRenderer");
+		const auto& modelPath = renderer ? renderer->modelPath : entity.modelPath;
+		if (!SceneCameraSystem::IsAlleyCameraOccluder(modelPath) ||
+			!SceneEntityQuery::IsEntityActiveInHierarchy(document, entity)) {
+			continue;
+		}
+		const auto* object = objectSystem_.FindObject(entity.id);
+		const auto* model = ModelManager::GetInstance()->FindModel(modelPath);
+		if (!object || !model) continue;
+		auto [found, inserted] = boundsByModel.try_emplace(model);
+		auto& bounds = found->second;
+		if (inserted) {
+			bounds.valid = model->GetLocalBounds(bounds.minimum, bounds.maximum);
+		}
+		if (!bounds.valid) continue;
+		const float coverage = BuildingVisibility(
+			viewCamera->GetTranslate(), focus, object->GetWorldMatrix(),
+			bounds.minimum, bounds.maximum);
+		if (coverage < 1.0f) {
+			visibility.emplace(entity.id, coverage);
+		}
+	}
+	return visibility;
 }
 
 void RuntimeScene::DrawPreparedSceneContentForView(
 	Camera* viewCamera,
-	uint64_t skipEntityId
+	uint64_t skipEntityId,
+	bool mainView
 ) {
 	SceneDocument* document = GetSceneDocument();
 	if (document) {
 		const bool hidePlayerModel =
 			ShouldHidePlayerModelForCamera(viewCamera);
+		// 監視ビューと共有影に、メインの非表示を伝播させない。
+		const auto visibility = mainView
+			? FindMainViewBuildingVisibility(*document, viewCamera)
+			: std::unordered_map<uint64_t, float>{};
 		objectSystem_.DrawModels(
 			*document,
 			skipEntityId,
-			hidePlayerModel
+			hidePlayerModel,
+			visibility
 		);
 	}
 	effectRenderSystem_.DrawScenePass(
@@ -1784,7 +1921,7 @@ Camera* RuntimeScene::GetRenderCamera() const
 
 void RuntimeScene::DrawWithCamera(Camera* viewCamera)
 {
-	DrawSceneView(viewCamera ? viewCamera : GetSceneViewCamera());
+	DrawSceneView(viewCamera ? viewCamera : GetSceneViewCamera(), 0, true);
 }
 
 void RuntimeScene::DrawEnvironment(Camera* viewCamera)
@@ -1803,7 +1940,7 @@ void RuntimeScene::DrawSceneContent(Camera* viewCamera)
 	viewCamera = viewCamera ? viewCamera : GetSceneViewCamera();
 	PrepareSceneContent(viewCamera);
 	BindLighting();
-	DrawPreparedSceneContentForView(viewCamera, 0);
+	DrawPreparedSceneContentForView(viewCamera, 0, true);
 }
 
 void RuntimeScene::PrepareSceneContent(Camera* viewCamera)
@@ -1816,7 +1953,8 @@ void RuntimeScene::DrawPreparedSceneContent(Camera* viewCamera)
 {
 	DrawPreparedSceneContentForView(
 		viewCamera ? viewCamera : GetSceneViewCamera(),
-		0
+		0,
+		true
 	);
 }
 
@@ -1893,7 +2031,7 @@ void RuntimeScene::DrawOffscreenViews()
 		runtimeObjectBindings_,
 		cameraSystem_,
 		[this](Camera* monitorCamera, uint64_t skipEntityId) {
-			DrawSceneView(monitorCamera, skipEntityId);
+			DrawSceneView(monitorCamera, skipEntityId, false);
 		}
 	);
 	if (document) {

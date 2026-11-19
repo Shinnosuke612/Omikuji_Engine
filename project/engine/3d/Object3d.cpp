@@ -10,6 +10,7 @@
 #include "SrvManager.h"
 #include "../debug/DebugRenderer.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <exception>
 #include <type_traits>
@@ -329,17 +330,21 @@ void Object3d::SetRotateQuaternion(const Quaternion& rotate) {
 }
 
 void Object3d::Draw(){
-	DrawInternal(false);
+	DrawInternal(false, 1.0f);
+}
+
+void Object3d::DrawWithCoverage(float coverage) {
+	DrawInternal(false, std::clamp(coverage, 0.0f, 1.0f));
 }
 
 void Object3d::DrawEditorGhost() {
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (!model || model->HasSkinning()) return;
-	DrawInternal(true);
+	DrawInternal(true, 1.0f);
 #endif
 }
 
-void Object3d::DrawInternal(bool editorGhost) {
+void Object3d::DrawInternal(bool editorGhost, float coverage) {
 	if (!model) {
 		return;
 	}
@@ -353,6 +358,11 @@ void Object3d::DrawInternal(bool editorGhost) {
 	}
 	else {
 		object3dCommon->SetCommonRenderState(cullMode_);
+	}
+
+	// 署名の設定後にコマンドへ値を記録し、監視ビューと材質CBを共有したままにする。
+	if (coverage < 1.0f) {
+		commandList->SetGraphicsRoot32BitConstant(9, std::bit_cast<uint32_t>(coverage), 0);
 	}
 
 	// 座標変換行列CBufferの場所を設定
