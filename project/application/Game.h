@@ -51,6 +51,46 @@ public:
 	void Draw() override;
 
 private:
+	struct TextureUploadOwner;
+	struct PreparedTextureUpload;
+	struct TextureUploadInput;
+	struct TextureUploadResult;
+	struct TextureUploadState;
+	std::unique_ptr<TextureUploadState> textureUpload_;
+	// 通常素材BのCOPY専用。通常の依存カーソル到達後に先頭枠へ移す。
+	std::unique_ptr<TextureUploadState> materialCopyLookahead_;
+	std::optional<SceneTextureUploadTicket> materialCopyLookaheadTicket_;
+	uint64_t nextTextureUploadId_ = 0;
+	bool textureUploadStopping_ = false;
+	// mainの準備処理専用。受付失敗はinput/outId不変。Sceneの生存検証は供給側で行う。
+	bool TryBeginTextureUpload(PreparedTextureUpload& input, uint64_t& outId);
+	bool TryBeginTextureUpload(const TextureUploadInput& input, uint64_t& outId);
+	bool CreateTextureUpload(const TextureUploadInput& input, std::unique_ptr<TextureUploadState>& destination, uint64_t& outId);
+	enum class SceneUploadAdmission { Accepted, Busy, Rejected };
+	SceneUploadAdmission TryBeginSceneTextureUpload(const SceneTextureUploadLoan&, uint64_t maxStagingBytes, uint64_t& outId);
+	void PumpScenePreparationBridge();
+	std::optional<SceneTextureUploadTicket> sceneTextureUploadTicket_;
+	void PumpTextureUpload(TextureUploadState&, const std::optional<SceneTextureUploadTicket>&, bool copyOnly = false);
+	void CancelMaterialCopyLookahead() noexcept;
+	void CancelTextureUpload(uint64_t uploadId) noexcept;
+	void CancelCurrentTextureUpload() noexcept;
+	// 終端結果を一度だけmoveする。失敗時out不変、cache公開は行わない。
+	bool TryTakeTextureUploadResult(uint64_t expectedId,
+		const TextureUploadOwner& expectedOwner, TextureUploadResult& out) noexcept;
+	// Finalize先頭専用。通常UpdateではGPUを待たない。
+	void DrainTextureUploadForShutdown();
+	struct TextureDirectState;
+	struct TextureDirectReceipt;
+	std::unique_ptr<TextureDirectState> textureDirect_;
+	std::unique_ptr<SceneTextureMipGenerator> gpuMipGenerator_;
+	// main threadの準備処理専用。失敗時はsourceを消費しない。Draw中は呼ばない。
+	bool QueueCopiedTextureForDirect(SceneTextureCopy& source,
+		uint64_t jobGeneration, const std::string& textureKey,
+		SceneTextureMipPolicy policy = SceneTextureMipPolicy::CpuComplete);
+	void CancelTextureDirect() noexcept;
+	// 次Updateで取消/世代更新を済ませてから一度だけ取得。失敗時out不変、SRV公開は別責務。
+	bool TryTakeTextureDirectReceipt(uint64_t expectedGeneration,
+		const std::string& expectedKey, TextureDirectReceipt& out) noexcept;
 	// client画像矩形/入力所有が変わった押下を次Frameへ持ち越さない。
 	Vector4 menuPointerRect_{};
 	uint64_t menuPointerViewportSerial_ = 0;
