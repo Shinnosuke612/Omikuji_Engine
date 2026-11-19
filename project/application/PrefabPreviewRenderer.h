@@ -2,8 +2,11 @@
 #pragma once
 
 #include <cstdint>
+#include "../engine/base/PlayerCombatPreview.h"
+#include "../engine/base/PrefabAnimationGhostFrame.h"
 #include "../engine/scene/SceneReplayPresentation.h"
 #include <memory>
+#include <map>
 #include <string>
 #include <unordered_map>
 
@@ -31,7 +34,7 @@ public:
 		bool showColliders = true;
 		bool showCombatVolumes = true;
 		bool isolateSelectedCollider = false;
-		bool showGrid = true;
+		bool showGrid = true; PlayerCombatPreview::EditVolume editVolume;
 	};
 
 	PrefabPreviewRenderer();
@@ -41,6 +44,7 @@ public:
 	// Documentはこの呼出し中だけ借用する。既存描画SystemのPreview専用資源へ同期し、
 	// UIは制作座標で描く。Event/Simulation/演出時計を進めず、原本へ書き戻さない。
     // replayFramingもこの呼出し中だけ借用。成功結果だけ表示Cameraへ適用し、編集orbitは保持。
+	// animationGhostも呼出し中だけ借用。既存Frame Fence後に専用資源へ同期し、原本/通常構図は変えない。
 	void Render(
 		const std::string& assetPath,
 		const SceneDocument& document,
@@ -52,13 +56,18 @@ public:
 		float zoom,
 		uint64_t framingSerial,
 		const OverlayOptions& overlayOptions,
-        const SceneReplayFramingRequest* replayFraming = nullptr
+        const SceneReplayFramingRequest* replayFraming = nullptr, const PlayerCombatPreview::ViewRequest* attackView = nullptr,
+        const PrefabAnimationGhost::Frame* animationGhost = nullptr
 	);
     // 直近Renderの構図計算結果。GPU/Document参照を返さない。
     bool GetReplayFramingResult(Camera& camera, SceneReplayViewSettings& manual) const {
         if (!replayFramingValid_) return false;
         camera=replayFramingCamera_; manual=replayFramingManual_; return true;
     }
+	// 直近Renderの値だけを返す。次Renderを越えて内部Cameraを借用させない。
+	const PlayerCombatPreview::ViewResult& GetAttackViewResult() const { return attackViewResult_; }
+	// 直近Renderと同じ画像/Cameraに対応する値結果。次Renderを越える場合はコピーする。
+	const PrefabAnimationGhost::Result& GetAnimationGhostResult() const { return animationGhostResult_; }
 	void Finalize();
 
 	D3D12_GPU_DESCRIPTOR_HANDLE GetTexture() const;
@@ -74,11 +83,13 @@ private:
 	};
 
     bool TryGetReplayFraming(const SceneDocument&, uint64_t owner, SceneReplayFramingBasis&) const;
-    bool replayFramingValid_=false;
+    PlayerCombatPreview::ViewResult attackViewResult_; bool replayFramingValid_=false;
     Camera replayFramingCamera_;
     SceneReplayViewSettings replayFramingManual_;
 	void SyncModels(const SceneDocument& document);
 	void SyncGhostModels(const SceneDocument* document);
+	void SyncAnimationGhostModels(const PrefabAnimationGhost::Frame* frame);
+	void DrawAnimationGhostModels();
 	void UpdateFraming(
 		const SceneDocument& document,
 		const OverlayOptions& options
@@ -99,6 +110,12 @@ private:
 	Camera* camera_ = nullptr;
 	std::unordered_map<uint64_t, ModelRuntime> models_;
 	std::unordered_map<uint64_t, ModelRuntime> ghostModels_;
+	// poseSerialを切り替える時は前Frameの既存Fence完了後、Draw記録前に破棄する。
+	std::map<std::pair<uint64_t, uint64_t>, ModelRuntime> animationGhostModels_;
+	struct GhostDraw { std::pair<uint64_t, uint64_t> key; float distance = 0; };
+	std::vector<GhostDraw> animationGhostDraws_;
+	uint64_t animationGhostPoseSerial_ = 0;
+	PrefabAnimationGhost::Result animationGhostResult_;
 	std::string framedAssetPath_;
 	uint64_t appliedFramingSerial_ = 0;
 	bool framingInitialized_ = false;

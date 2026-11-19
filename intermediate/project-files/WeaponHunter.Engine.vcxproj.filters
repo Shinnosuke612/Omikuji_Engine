@@ -84,8 +84,11 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\ImGuiManager.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\PlayerCombatEditor.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\PlayerCombatEditor.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\base\PlayerCombatPreview.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\base\PlayerCombatPreview.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\PostProcessSettingsEditor.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\PostProcessSettingsEditor.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\base\PrefabAnimationGhostFrame.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\PreparedResourceStatus.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\RenderFormats.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\SceneCopyBatch.cpp"><Filter>Engine</Filter></ClCompile>

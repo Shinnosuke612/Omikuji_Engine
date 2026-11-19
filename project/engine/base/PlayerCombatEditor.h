@@ -25,7 +25,9 @@ struct Subject {
 	uint64_t actorId = 0, entityId = 0, componentId = 0;
 	std::string componentType, attackName;
 };
-enum class Operation { None, EditAttack, EditReaction, AddReaction, Inspect, OpenPrefab, ReturnToActor };
+// 武器用の二要求も値だけを返す。Session切替・保存・反映はUI coordinatorが担当する。
+enum class Operation { None, EditAttack, EditReaction, AddReaction, Inspect, OpenPrefab, ReturnToActor, PreviewAttack,
+	EditWeaponPrefab, BindWeaponPrefab };
 enum Field : uint64_t {
 	Windup = 1ull << 0, ActiveTime = 1ull << 1, Recovery = 1ull << 2,
 	Forward = 1ull << 3, Side = 1ull << 4, Easing = 1ull << 5,
@@ -90,6 +92,8 @@ std::string DescribeIssue(const Issue& issue, EditorLanguage language);
 std::vector<Request> DrawActor(const ActorModel& model, Selection& selection,
 	EditorLanguage language, bool editable);
 Request DrawAttackFields(const AttackModel& model, EditorLanguage language, bool editable);
+// 表示開始の値型要求だけを返す。時計/コピー/Sessionの操作はcallerへ渡す。
+Request DrawPreviewAction(const AttackModel& model, EditorLanguage language, bool editable);
 Request DrawReactionFields(const ReactionModel& model, EditorLanguage language, bool editable, bool showEnabled = true);
 void DrawReference(EditorLanguage language);
 
@@ -98,4 +102,26 @@ void DrawReference(EditorLanguage language);
 bool ValidateAndApplyValueEdit(SceneDocument& document, const DocumentToken& current,
 	const Request& request, bool editingAllowed, bool& changed, Issue& issue);
 bool Matches(const DocumentToken& a, const DocumentToken& b);
+
+enum HitBoxField : unsigned { HitOffset = 1, HitSize = 2, HitTime = 4, HitKeys = 8 };
+struct HitBoxValues { Vector3 offset{}, halfSize{}; float radius = 0, start = 0, end = 0; };
+// Window indexはtokenのrevision内だけ有効。保存用IDやComponent pointerではない。
+struct HitBoxSelection {
+	DocumentToken token; Subject subject; size_t window = 0;
+	uint64_t entity = 0, collider = 0, hitBox = 0; std::string shape;
+};
+struct HitBoxEditRequest { HitBoxSelection selection; HitBoxValues values; unsigned fields = 0; SceneAttackHitGeometryTrack track; };
+struct HitBoxEditModel {
+	HitBoxSelection selection; HitBoxValues values; float duration = 0;
+	bool valid = false, geometry = false; std::vector<std::string> shared;
+	std::string japanese, english;
+	SceneAttackHitGeometryTrack track;
+};
+// 読取解決と全検証。候補も原本も同じ規則を使い、失敗時は変更しない。
+HitBoxEditModel ResolveHitBox(const SceneDocument& document, const DocumentToken& token,
+	const Subject& subject, size_t window);
+bool ValidateHitBoxEdit(const SceneDocument& document, const DocumentToken& current,
+	const HitBoxEditRequest& request, bool editable, HitBoxEditModel& model);
+// Validate成功後、指定field（選択Windowのキー配列を含む）だけ反映。Dirty/Undo/Saveはcaller所有。
+bool WriteHitBoxFields(SceneDocument& document, const HitBoxEditRequest& request);
 }

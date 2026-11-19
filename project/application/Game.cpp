@@ -1718,6 +1718,7 @@ void Game::Update() {
 	}
 #if defined(_DEBUG) || defined(DEVELOPMENT)
 	if (imguiManager_) imguiManager_->UpdateSceneSpatialPreview(deltaTime);
+	if (imguiManager_) imguiManager_->UpdatePlayerCombatPreview(deltaTime);
 	PrepareSceneSpatialPreview();
 #endif
 	editorWasEditingLastFrame_ =
@@ -4468,7 +4469,7 @@ void Game::DrawPrefabPreview() {
 	overlayOptions.showColliders = request.showColliders;
 	overlayOptions.showCombatVolumes = request.showCombatVolumes;
 	overlayOptions.isolateSelectedCollider = request.isolateSelectedCollider;
-	overlayOptions.showGrid = request.showGrid;
+	overlayOptions.showGrid = request.showGrid; overlayOptions.editVolume=request.attackView.volume;
     SceneReplayFramingRequest framing;
     const bool hasFraming=imguiManager_->GetReplayFramingRequest(true,framing);
     // Animation Previewは同じEntity IDを保つ別世代の表示用Document。元Prefabとの対応を先に照合する。
@@ -4486,8 +4487,10 @@ void Game::DrawPrefabPreview() {
 		request.zoom,
 		request.framingSerial,
 		overlayOptions,
-        matchingFraming ? &displayFraming : nullptr
+        matchingFraming ? &displayFraming : nullptr, request.attackView.enabled ? &request.attackView : nullptr,
+        request.animationGhost
 	);
+    if(request.attackView.enabled) imguiManager_->SetAttackPreviewViewResult(prefabPreviewRenderer_->GetAttackViewResult());
     if (hasFraming) {
         Camera camera; SceneReplayViewSettings manual;
         imguiManager_->SetReplayFramingResult(framing,matchingFraming && prefabPreviewRenderer_->GetReplayFramingResult(camera,manual),manual);
@@ -4499,7 +4502,8 @@ void Game::DrawPrefabPreview() {
 		prefabPreviewRenderer_->GetWidth(),
 		prefabPreviewRenderer_->GetHeight(),
 		prefabPreviewRenderer_->GetViewMatrix(),
-		prefabPreviewRenderer_->GetProjectionMatrix()
+		prefabPreviewRenderer_->GetProjectionMatrix(),
+		prefabPreviewRenderer_->GetAnimationGhostResult()
 	);
 }
 

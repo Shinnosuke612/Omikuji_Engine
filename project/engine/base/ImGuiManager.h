@@ -16,10 +16,13 @@
 #include "../math/Vector2.h"
 #include "../math/Vector4.h"
 #include "../scene/PrefabAssetRegistry.h"
+#include "../scene/PrefabEditorSession.h"
 #include "../scene/SceneUIEditorView.h"
 #include "../scene/ScenePreparationDiagnostic.h"
 #include "EditorLocalization.h"
 #include "PlayerCombatEditor.h"
+#include "PlayerCombatPreview.h"
+#include "PrefabAnimationGhostFrame.h"
 #include "../scene/SceneReplayPresentation.h"
 
 #include <d3d12.h>
@@ -94,8 +97,10 @@ struct SceneAssetRequest {
 };
 
 struct PrefabPreviewRequest {
+	PlayerCombatPreview::ViewRequest attackView;
 	const SceneDocument* document = nullptr;
 	const SceneDocument* ghostDocument = nullptr;
+	const PrefabAnimationGhost::Frame* animationGhost = nullptr; // 一回のRender中だけ借用。
 	std::string assetPath;
 	uint64_t revision = 0;
 	float yaw = 0.65f;
@@ -319,6 +324,8 @@ public:
 	void Finalize();
 	// GameのUpdateから一回、秒単位。Preview評価だけではAuthoring値を変更しない。
 	void UpdateSceneSpatialPreview(float deltaTime);
+	// GameのEditor更新で一回だけ時計を進める。描画時の評価は時計を変更しない。
+	void UpdatePlayerCombatPreview(float deltaTime);
 	// 次Updateまでの借用参照。callerはFrame越しに保持しない。
 	const SceneSpatialPreviewFrame& GetSceneSpatialPreviewFrame() const { return spatialFrame_; }
 	// 次Inspector用の一時診断。Scene保存やUndoには含めない。
@@ -369,6 +376,7 @@ public:
 		SceneStartupMode& mode
 	);
 	bool ConsumeProjectLauncherRequest(ProjectLauncherRequest& request);
+	// Project切替の既存guard用。表示中と往復で保持中のPrefabのDirtyを集計する。
 	bool HasUnsavedPrefabChanges() const;
 	void NotifySceneAssetOperationResult(
 		bool success,
@@ -395,6 +403,7 @@ public:
 		float& pitch,
 		float& zoom
 	) const;
+	// Textureと同じRenderのGhost値結果をコピーする。選択時にはSource/Camera/Viewportを再照合する。
 	void SetPrefabPreviewTexture(
 		const std::string& assetPath,
 		uint64_t revision,
@@ -402,9 +411,12 @@ public:
 		uint32_t width,
 		uint32_t height,
 		const Matrix4x4& viewMatrix,
-		const Matrix4x4& projectionMatrix
+		const Matrix4x4& projectionMatrix,
+		const PrefabAnimationGhost::Result& animationGhost = {}
 	);
 	bool GetPrefabPreviewRequest(PrefabPreviewRequest& request);
+	// Renderの値応答だけを受け取り、編集元/候補/時刻/Camera serialが一致する時だけ採用。
+	void SetAttackPreviewViewResult(const PlayerCombatPreview::ViewResult& result);
 
 	// Communication with scenes
 	const std::string& GetSelectedProjectFile() const { return selectedProjectFile_; }
@@ -585,6 +597,67 @@ private:
 	void QueuePlayerCombatRequest(PlayerCombatEditor::Request request, bool prefab);
 	void ApplyPlayerCombatRequests(SceneDocument& document, bool prefab);
 	void DrawPlayerCombatDialogs();
+	void StartPlayerAttackPreview(const SceneDocument& document, const PlayerCombatEditor::Request& request);
+	bool RefreshPlayerAttackPreview();
+	void StopPlayerAttackPreview();
+	void DrawPlayerAttackPreview();
+	void DrawAttackHitBoxEditor();
+	bool DrawAttackHitInspector(bool prefab);
+	void SelectAttackHitWindow(size_t index);
+	void QueueAttackHitCandidate();
+	void SelectAttackKey(uint64_t id);
+	size_t AttackKeyIndex() const;
+	void DrawAttackTimeline();
+	void UpdateAttackCamera(float x,float y,float width,float height);
+	void CommitAttackKeyGeometry();
+	bool attackInspector_ = true, attackEditQueued_ = false, attackKeyDragMoved_ = false, attackGizmoWaitRelease_ = false;
+	uint64_t attackDraftEpoch_ = 0, attackQueuedEpoch_ = 0, attackNextKeyId_ = 0, attackSelectedKey_ = 0;
+	uint64_t attackCameraSerial_ = 0, attackViewRequestSerial_ = 0, attackRenderedCameraSerial_ = 0;
+	std::vector<uint64_t> attackKeyIds_;
+	PlayerCombatEditor::HitBoxEditRequest attackQueuedEdit_, attackDragStartEdit_;
+	std::vector<uint64_t> attackQueuedIds_;
+	uint64_t attackQueuedKey_ = 0;
+	PlayerCombatPreview::ViewState attackView_;
+	PlayerCombatPreview::Fit attackFit_ = PlayerCombatPreview::Fit::All;
+	enum class AttackInput { None, Orbit, Pan, Zoom, Gizmo, Playhead, KeyTime };
+	AttackInput attackInput_ = AttackInput::None;
+	int attackCameraButton_ = 1;
+	Vector3 attackPanRight_{},attackPanUp_{};
+	uint32_t attackRenderedWidth_ = 0, attackRenderedHeight_ = 0;
+	float attackPanScale_ = 0, attackTimelineHeight_ = 150, attackTimeStep_ = .01f;
+	float attackImageWidth_ = 0, attackImageHeight_ = 0, attackKeyDragTime_ = 0;
+	float attackKeyDragOrigin_ = 0, attackKeyDragWidth_ = 0;
+	void DrawAttackHitBoxGizmo(float x, float y, float width, float height);
+	void ApplyAttackHitBoxRequest();
+	void UpdateAttackHitBoxCandidate();
+	bool GuardAttackHitBoxDraft(bool prefab);
+	void WarnAttackHitBox(const char* ja, const char* en);
+	void ResetAttackHitBoxEdit();
+	// 候補値だけを所有し、Windowの位置はsource tokenのrevisionに固定する。
+	PlayerCombatEditor::HitBoxEditRequest attackHitEdit_, attackHitValid_;
+	PlayerCombatEditor::HitBoxEditModel attackHitModel_;
+	bool attackHitSelected_ = false, attackHitDirty_ = false, attackHitValidInput_ = true;
+	bool attackHitApply_ = false, attackHitFocus_ = false, attackHitDragging_ = false;
+	int attackHitCommand_ = 0, attackHitOperation_ = 0;
+	int attackHitAppliedFrame_ = -1;
+	uint64_t attackHitSerial_ = 0, attackHitSampleSerial_ = 0;
+	uint64_t attackHitRequestedSerial_ = 0, attackHitRenderedSerial_ = 0;
+	float attackHitRequestedTime_ = 0, attackHitRenderedTime_ = 0;
+	PlayerCombatEditor::DocumentToken attackHitRequestedToken_, attackHitRenderedToken_;
+	Matrix4x4 attackHitDragWorld_{}, attackHitDragView_{}, attackHitDragProjection_{};
+	std::string attackHitErrorJa_, attackHitErrorEn_;
+	// Sessionとは独立したCPUコピー。Render呼出しの間だけconst Documentを貸す。
+	PlayerCombatPreview attackPreview_;
+	PlayerCombatEditor::DocumentToken attackPreviewToken_, attackPreviewSceneToken_, attackPreviewPrefabToken_;
+	PlayerCombatEditor::Subject attackPreviewSubject_;
+	bool attackPreviewActive_ = false, attackPreviewPlaying_ = false, attackPreviewVisible_ = false;
+	bool attackPreviewHadPrefab_ = false, attackPreviewPreviousWindow_ = false;
+	float attackPreviewTime_ = 0;
+	float attackPreviewSampleTime_ = 0;
+	uint64_t attackPreviewSelectionSerial_ = 0, attackPreviewDisplaySerial_ = 0;
+	std::string attackPreviewKey_;
+	PlayerCombatPreview::Issue attackPreviewIssue_;
+	bool attackPreviewWarningRequested_ = false;
 	void WarnPlayerCombat(const PlayerCombatEditor::Request& request, const PlayerCombatEditor::Issue& issue);
 	struct PlayerCombatContext {
 		PlayerCombatEditor::Request mutation, navigation;
@@ -797,6 +870,85 @@ private:
 		bool clipFocus = true;
 		bool operator==(const PrefabWorkspaceState& other) const;
 	};
+	// UIを列挙している間は値commandだけを保持し、Session切替と採用はFrame末尾で行う。
+	enum class WeaponCommand { None, Begin, Bind, Pick, SaveCurrentAndEnter, DiscardCurrentAndEnter,
+		Review, Confirm, Return, ReturnWithoutApply, SaveAndReturn, DiscardAndReturn };
+	struct WeaponDestination { ScenePrefabLink link; size_t depth=0; std::string path, name; };
+	struct WeaponRoundTrip {
+		bool active=false, applied=false, savedOnly=false, entryUnreflected=false;
+		PlayerCombatEditor::DocumentToken origin, entryWeapon, appliedWeapon;
+		PlayerCombatEditor::Subject attack;
+		uint64_t actorComponent=0;
+		WeaponDestination destination;
+		std::string projectRoot, sourcePath, sourceAsset, actorName;
+		// 元Prefabだけを保持する。表示中prefabEditorSession_の所有とは重複させない。
+		std::unique_ptr<PrefabEditorSession> originSession;
+		std::unique_ptr<SceneDocument> baseline;
+		PrefabWorkspaceState originView;
+		std::vector<PrefabAssetReference> originHistory;
+		int originHistoryIndex=-1;
+		uint64_t animationOwner=0;
+		int clip=0; float time=0;
+		size_t appliedCount=0, keptCount=0, protectedCount=0;
+	};
+	WeaponRoundTrip weaponRoundTrip_;
+	WeaponCommand weaponCommand_=WeaponCommand::None;
+	uint64_t weaponCommandSerial_=0, weaponReviewSerial_=0;
+	PlayerCombatEditor::Request weaponEntry_;
+	std::vector<WeaponDestination> weaponDestinations_;
+	int weaponDestinationIndex_=-1;
+	bool weaponEntryBind_=false, weaponPickerRequested_=false, weaponSwitchRequested_=false;
+	bool weaponReviewRequested_=false, weaponReturnRequested_=false, weaponHelpRequested_=false;
+	bool weaponWarningRequested_=false;
+	std::string weaponWarningJP_, weaponWarningEN_, weaponWarningDetail_;
+	std::unique_ptr<SceneDocument> weaponProposed_;
+	ScenePrefabValueRefresh::Plan weaponPlan_;
+	std::vector<int> weaponSelections_; // Conflict=-1、配置先維持=0、Prefab=1。
+	// 全Planとは別の表示専用値。参照/書込先を持たず、元の行indexだけで選択へ接続する。
+	struct WeaponValueSummary {
+		enum class Kind { Absent, Null, Boolean, Scalar, Vector, Array, Object, Invalid };
+		Kind kind=Kind::Absent;
+		std::string text;
+		size_t count=0;
+		bool boolean=false;
+	};
+	struct WeaponReviewRow {
+		size_t planIndex=0;
+		ScenePrefabValueRefresh::Classification group=ScenePrefabValueRefresh::Classification::Same;
+		WeaponValueSummary instance, prefab;
+	};
+	struct WeaponReviewPresentation {
+		uint64_t serial=0;
+		std::vector<WeaponReviewRow> rows;
+	};
+	WeaponReviewPresentation weaponReviewPresentation_;
+	PlayerCombatEditor::DocumentToken weaponReviewSource_;
+	PrefabDiskToken weaponReviewDisk_;
+	PlayerCombatEditor::DocumentToken weaponLeaveSource_;
+	PrefabDiskToken weaponLeaveDisk_;
+	void QueueWeaponCommand(WeaponCommand command);
+	void QueueWeaponEntry(const PlayerCombatEditor::Request& request);
+	void DrainWeaponCommands();
+	void EnterWeaponPrefab(int mode);
+	void ReviewWeaponPrefab();
+	WeaponValueSummary SummarizeWeaponValue(const ScenePrefabValueRefresh::Value& value,
+		const ScenePrefabValueRefresh::RowKey& key) const;
+	void BuildWeaponReviewPresentation();
+	void DrawWeaponPrefabReview();
+	void ConfirmWeaponPrefab();
+	void ReturnFromWeaponPrefab();
+	void DrawWeaponPrefabControls();
+	void DrawWeaponPrefabDialogs();
+	bool WeaponOrigin(SceneDocument*& document, PlayerCombatEditor::DocumentToken& token, bool requireBinding) const;
+	bool WeaponActorBound(const SceneDocument& document) const;
+	// 配置先全体を読み込みと同じ条件で検証。失敗時は保存段階を明示して通知し、原本は変更しない。
+	bool ValidateWeaponRefreshCandidate(const SceneDocument& candidate,
+		const std::string& targetPath, bool sourceSaved);
+	void DrawWeaponRefreshValidationReference();
+	bool WeaponDraftReady();
+	bool WeaponHasUnappliedChanges() const;
+	void ResetWeaponPrefabView();
+	void WarnWeaponPrefab(const char* japanese, const char* english, const std::string& detail = {});
 	PrefabWorkspaceState CapturePrefabWorkspace() const;
 	void ApplyPrefabWorkspaceView(const PrefabWorkspaceState& state);
 	// 初回復元中/失敗直後は保存候補を保持。forceはOpen/Close確定と正常終了時に使う。
@@ -825,9 +977,34 @@ private:
 	void DrawPrefabPreview();
 	void DrawPrefabAnimationTimeline();
 	void DrawPrefabTransformPoseInspector(SceneEntity& entity);
+	// 時刻候補はEditor内だけに保持し、入力終了時だけcallerへ返す。
+	// contextは対象を識別する値。Document世代/Revisionと併せ、別対象への持ち越しを防ぐ。
+	bool DrawCommittedTimeInput(const char* label, float& value, float speed, float maximum,
+		const SceneDocument& document, const std::string& context);
+	void DrawTimeInputWarning();
+	void DrawTimeInputReference();
+	void WarnTimeInput(bool duplicate);
+	struct TimeInputDraft {
+		float value = 0;
+		bool edited = false;
+		int frame = -1;
+	};
+	std::unordered_map<ImGuiID, TimeInputDraft> timeInputDrafts_;
+	bool timeInputWarningRequested_ = false, timeInputDuplicate_ = false;
 	void RebuildPrefabAnimationPreviewDocument();
 	void RebuildPlayerCombatPreviewDocument();
 	void RebuildPrefabHitBoxGhostDocument();
+	struct PoseKeyRef { int trackIndex = -1, keyIndex = -1; };
+	struct TransformPose { float time = 0; PoseKeyRef keys[3]; };
+	std::vector<TransformPose> BuildPrefabTransformPoses(const SceneDocument& document, uint64_t owner,
+		const ScenePrefabAnimationClip& clip, uint64_t target) const;
+	void RebuildPrefabAnimationGhost();
+	void ResetPrefabAnimationGhost(bool resetSettings);
+	void DrawPrefabAnimationGhostControls();
+	void DrawPrefabAnimationGhostOverlay(const ImVec2& min, const ImVec2& size, bool hovered);
+	bool PrefabAnimationGhostMatchesImage() const;
+	void SelectPrefabAnimationPose(float time);
+	void NotePrefabAnimationGhostEdit();
 	const SceneDocument& GetPrefabStageDocument() const;
 	void DrawPrefabGizmo(float x, float y, float width, float height);
 	bool WritePrefabAnimationGizmoKey(
@@ -1172,6 +1349,24 @@ private:
 	int prefabAttackPreviewIndex_ = 0;
 	float prefabTransformPoseAddTime_ = 0.0f;
 	std::string prefabTransformPoseStatus_;
+	// GhostはEditorの一時状態。保存/Undoへ含めず、画像に対応する値結果だけを選択に使う。
+	int prefabGhostMode_ = 0, prefabGhostPage_ = 0;
+	float prefabGhostOpacity_ = .20f, prefabGhostSelectedTime_ = 0;
+	bool prefabGhostSelected_ = false, prefabGhostMousePending_ = false;
+	PrefabAnimationGhost::Frame prefabGhostFrame_;
+	PrefabAnimationGhost::Result prefabGhostResult_;
+	PrefabAnimationGhost::ContextToken prefabGhostSelectionContext_;
+	std::vector<TransformPose> prefabGhostGroups_;
+	std::vector<size_t> prefabGhostIndices_;
+	std::vector<uint64_t> prefabGhostPickCandidates_;
+	uint64_t prefabGhostSerial_ = 0, prefabGhostRequestSerial_ = 0, prefabGhostDraftSerial_ = 0;
+	uint64_t prefabGhostEditRevision_ = 0, prefabGhostMouseSerial_ = 0;
+	std::string prefabGhostDraftKey_, prefabGhostSubject_, prefabGhostNoticeKey_;
+	PrefabAnimationGhost::Issue prefabGhostIssue_ = PrefabAnimationGhost::Issue::None;
+	PrefabAnimationGhost::Issue prefabGhostWarningIssue_ = PrefabAnimationGhost::Issue::None;
+	std::string prefabGhostWarningSubject_;
+	bool prefabGhostWarningPending_ = false;
+	ImVec2 prefabGhostMouseStart_{}, prefabGhostImageMin_{}, prefabGhostImageSize_{};
 	bool prefabKeyboardFocusThisFrame_ = false;
 	// ImGui 1.92以降はフォントデータをAtlasの寿命まで保持する必要がある。
 	std::vector<uint8_t> editorBaseFontData_;

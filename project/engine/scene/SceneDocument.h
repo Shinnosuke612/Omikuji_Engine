@@ -987,6 +987,48 @@ struct ScenePrefabPropertyOverride {
 	std::string label;
 };
 
+// Editor専用の値反映Plan。JSON schema/Runtime Componentには含めない。
+namespace ScenePrefabValueRefresh {
+	enum class IssueCode { None, InvalidSource, UnsupportedStructure, InvalidInstance, MissingTarget,
+		Locked, InvalidValue, StalePlan, InvalidChoice, InvalidOutput };
+	struct Issue {
+		IssueCode code = IssueCode::None;
+		uint64_t entityId = 0;
+		std::string detail; // 識別子/field path。UIの原因・対処文は既存言語設定で描画する。
+		bool operator==(const Issue&) const = default;
+	};
+	enum class Classification { Same, SourceChanged, InstanceDifference, Conflict, Protected };
+	enum class Protection { None, Placement, Identity, UnsupportedComponent, ExternalReference, UnsupportedTrack, UnsupportedValue };
+	enum class Selection { KeepInstance, UsePrefab };
+	struct RowKey {
+		uint64_t entityLocalId = 0, componentLocalId = 0;
+		std::string componentType, propertyPath;
+		bool operator==(const RowKey&) const = default;
+	};
+	struct Value {
+		bool present = false;
+		std::string json; // codecで作る比較/表示用値。Choiceから任意JSONを受け取らない。
+		bool operator==(const Value&) const = default;
+	};
+	struct Row {
+		RowKey key;
+		uint64_t instanceEntityId = 0;
+		std::string entityName;
+		Classification classification = Classification::Same;
+		Protection protection = Protection::None;
+		bool array = false;
+		Value baseline, prefab, instance;
+		bool operator==(const Row&) const = default;
+	};
+	struct Choice { RowKey key; Selection selection = Selection::KeepInstance; };
+	struct Plan {
+		uint64_t instanceRootId = 0, targetGeneration = 0, targetRevision = 0;
+		std::string sourceAssetId, sourceStructure;
+		std::vector<Row> rows;
+		Issue issue;
+		bool operator==(const Plan&) const = default;
+	};
+}
 
 class SceneDocumentRead;
 class SceneDocument {
@@ -1027,6 +1069,15 @@ public:
 	);
 	bool ApplyPrefabInstance(uint64_t rootId);
 	bool RevertPrefabInstance(uint64_t rootId);
+	// ファイルIO/採番/Dirty変更なし。編集前B・更新後Pを指定インスタンスTのID空間で比較する。
+	ScenePrefabValueRefresh::Plan InspectPrefabValueRefresh(
+		const SceneDocument& baseline, const SceneDocument& updated, uint64_t instanceRootId) const;
+	// reviewedPlanとChoiceを再照合し、成功時だけ別体outputへ候補を返す。入力は常に不変。
+	// 失敗時はoutput不変/changed=false。候補の採用・MarkDirty・保存・Undoは呼出元Sessionの責務。
+	bool CreatePrefabValueRefreshCandidate(const SceneDocument& baseline, const SceneDocument& updated,
+		uint64_t instanceRootId, const ScenePrefabValueRefresh::Plan& reviewedPlan,
+		const std::vector<ScenePrefabValueRefresh::Choice>& choices, SceneDocument& output,
+		bool& changed, ScenePrefabValueRefresh::Issue& issue) const;
 	bool UnpackPrefabInstance(uint64_t rootId);
 	uint64_t FindPrefabInstanceRoot(uint64_t entityId) const;
 	std::vector<uint64_t> CollectPrefabInstanceRoots(uint64_t entityId) const;

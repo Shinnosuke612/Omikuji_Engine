@@ -1,5 +1,6 @@
 // 役割: ImGuiエディタ各ウィンドウの描画、入力、シーン編集操作を実装する。
 #include "ImGuiManager.h"
+#include "../scene/SceneAttackHitGeometryEvaluator.h"
 #include "../project/ProjectAccessLock.h"
 #include "EditorComponentCatalog.h"
 #include "PostProcessSettingsEditor.h"
@@ -99,6 +100,7 @@ namespace {
 	using SceneTransformResolver::ResolveSceneWorldMatrix;
 	Vector2 UIEditorPoint(const Vector2& point, const Matrix4x4& matrix);
 	bool UIEditorInverse(const Matrix4x4& matrix, Matrix4x4& inverse);
+	bool AttackHitShapeFinite(const SceneDocument& doc, uint64_t id);
 	bool BuildUIEditorDocument(const SceneDocument& source, SceneDocument& preview, const Vector2& reference);
 
 	bool IsSameRotation(const Quaternion& left, const Quaternion& right) {
@@ -2710,6 +2712,8 @@ ImGuiManager::PrefabWorkspaceState ImGuiManager::CapturePrefabWorkspace() const 
 }
 
 void ImGuiManager::PersistPrefabWorkspace(bool force) {
+	// 表示専用モードの一時的なwindow表示を復元設定へ混ぜない。
+	if (attackPreviewActive_) return;
 	// 復元失敗を「利用者が閉じた」と解釈しない。次の明示操作まで元の参照を保持する。
 	if (!prefabEditorSession_ || prefabWorkspaceRestorePending_ || prefabWorkspaceRestoring_ || prefabWorkspaceRestoreFailed_) return;
 	const auto next = CapturePrefabWorkspace();
@@ -2788,6 +2792,8 @@ void ImGuiManager::RestorePrefabWorkspace() {
 }
 
 void ImGuiManager::ClosePrefabWorkspace() {
+	if (weaponRoundTrip_.active) { showPrefab_=true; QueueWeaponCommand(WeaponCommand::Return); return; }
+	ResetPrefabAnimationGhost(true);
 	if (prefabEditorSession_) prefabEditorSession_->Close(true);
 	showPrefab_ = false;
 	prefabSelectedEntityId_ = 0;
@@ -2883,6 +2889,17 @@ void ImGuiManager::DrawPrefabWorkspaceDialogs() {
 		ImGui::TextWrapped("%s", text(
 			"表示設定はEditor設定へ保存します。Prefabの内容はSaveで保存してください。未保存の変更、確認用の途中姿勢、再生時刻は復元しません。再起動後のプレビューは停止状態です。",
 			"View preferences are stored in Editor settings. Use Save for Prefab contents. Unsaved edits, preview poses and playback time are not restored; playback starts stopped."));
+		ImGui::SeparatorText(text("武器を編集してPlayerへ戻る", "Edit a weapon and return to the Player"));
+		DrawWeaponRefreshValidationReference();
+		ImGui::TextWrapped("%s",text(
+			"Playerの攻撃行から元Prefabを開くと反映先を保持します。直接開いた武器はSceneの対応する攻撃行で反映先を指定してください。『Prefabを保存』は武器ファイルだけを保存します。『保存して元の武器へ反映』では今回の変更と競合を確認し、競合を明示選択して『保存して確定』で実行します。配置先独自の差分は折りたたみ内で初期は維持、変更なしは件数だけ表示します。値の全文・Clip名・IDは項目の詳細、完全Pathは保存先・反映先の詳細で確認できます。反映件数は設定項目数で、配列は全体が上書き対象です。",
+			"Opening a source Prefab from a Player attack row retains the target. Bind directly opened weapons from the matching Scene attack row. Save Prefab saves only the weapon file. Save and reflect shows changes and conflicts; choose each conflict explicitly, then Save and confirm. Instance differences are collapsed and default to Keep; unchanged values are counted only. Individual details contain full values, clip names and IDs; destination details contain full paths. Reflection counts settings, and arrays are replaced in full."));
+		ImGui::TextWrapped("%s",text(
+			"配置、BoneAttachment、外部参照や対象外の値は保護して維持します。今回編集しても反映されない項目は理由付きで表示し、その他の保護は理由別件数で示します。反映0項目なら元の武器は変更せず、未保存の武器Prefabがあれば保存します。構成変更、Variant、武器内部Nestedは初版の対象外です。",
+			"Placement, BoneAttachment, external references and unsupported values are protected. Edits that will not reach the target stay visible with their reasons; other protected values are counted by reason. Zero reflected items leaves the target unchanged while saving any unsaved weapon edits. Structural changes, Variants and nested weapon assets are unsupported."));
+		ImGui::TextWrapped("%s",text(
+			"反映後も武器画面に残ります。『元のPlayerへ戻る』または閉じるで元の編集先へ戻ります。未保存・未反映なら確認し、反映せず戻ることもできます。元Player Prefabの未保存値とUndoはSessionごと保持します。反映先のScene / Player Prefabは戻ってから保存し、元側のUndoは元側で操作してください。保存成功・反映失敗は別に表示します。往復状態と未保存内容は再起動で復元しません。",
+			"Reflection leaves the weapon editor open. Return to original Player or Close returns to the original document. Unsaved or unreflected edits require confirmation; returning without reflection is available. The original Player Prefab session retains unsaved values and Undo. Save the target Scene / Player Prefab after returning, and use its Undo there. Saving success and reflection failure are reported separately. Round-trip state and unsaved contents are not restored after restarting."));
 		if (ImGui::Button(text("閉じる###ClosePrefabReference", "Close###ClosePrefabReference"))) ImGui::CloseCurrentPopup();
 		ImGui::EndPopup();
 	}
@@ -3448,10 +3465,13 @@ void ImGuiManager::DrawEditorWorkspace(
 		DrawPrefabWindow();
 	}
 	DrawPrefabWorkspaceDialogs();
+	ApplyAttackHitBoxRequest();
 	DrawUIReparentConfirmation();
 	DrawMenuInputConversion();
 	DrawMenuAuthoringWarning();
 	DrawPlayerCombatDialogs();
+	DrawTimeInputWarning();
+	DrawWeaponPrefabDialogs();
 	DrawSpawnPreparationWarning();
 	DrawProjectAccessWarning();
 	// タブ非表示や同Frameの警告Popupをcaptureへ反映する。
@@ -3487,6 +3507,8 @@ void ImGuiManager::DrawEditorWorkspace(
 			RefreshSceneSpatialPreviewAfterEdit();
 	}
 	HandleEditShortcuts();
+	// 全Inspector/Dialogと既存Save/Undoの終了後だけSessionを切り替える。
+	DrainWeaponCommands();
 	PersistPrefabWorkspace();
 
 	(void)textureWidth;
@@ -3512,9 +3534,11 @@ void ImGuiManager::SetPrefabPreviewTexture(
 	uint32_t width,
 	uint32_t height,
 	const Matrix4x4& viewMatrix,
-	const Matrix4x4& projectionMatrix
+	const Matrix4x4& projectionMatrix,
+	const PrefabAnimationGhost::Result& animationGhost
 ) {
 	prefabPreviewRenderedPath_ = assetPath;
+	prefabGhostResult_ = animationGhost;
 	prefabPreviewRenderedRevision_ = revision;
 	prefabPreviewTexture_ = texture;
 	prefabPreviewTextureWidth_ = (std::max)(width, 1u);
@@ -3522,6 +3546,11 @@ void ImGuiManager::SetPrefabPreviewTexture(
 	prefabPreviewViewMatrix_ = viewMatrix;
 	prefabPreviewProjectionMatrix_ = projectionMatrix;
 	prefabPreviewCameraValid_ = texture.ptr != 0;
+	if (attackPreviewActive_) {
+		attackHitRenderedSerial_ = attackHitRequestedSerial_;
+		attackHitRenderedTime_ = attackHitRequestedTime_;
+		attackHitRenderedToken_ = attackHitRequestedToken_;
+	}
 }
 
 const std::vector<std::string>& ImGuiManager::GetCachedModelAssetPaths() {
@@ -4159,6 +4188,31 @@ void ImGuiManager::RebuildPrefabHitBoxGhostDocument() {
 }
 
 bool ImGuiManager::GetPrefabPreviewRequest(PrefabPreviewRequest& request) {
+	// 他Previewの早期returnでも古いGhost要求を持ち越さない。
+	request.animationGhost = nullptr;
+	RebuildPrefabAnimationGhost();
+	if (attackPreviewActive_) {
+		if (!showPrefab_ || !RefreshPlayerAttackPreview()) return false;
+		request.document = attackPreview_.GetDocument();
+		request.assetPath = attackPreviewKey_;
+		request.revision = ++attackPreviewDisplaySerial_;
+		request.width = prefabPreviewRequestedWidth_; request.height = prefabPreviewRequestedHeight_;
+		request.yaw = prefabPreviewYaw_; request.pitch = prefabPreviewPitch_; request.zoom = prefabPreviewZoom_;
+		request.selectedEntityId = attackHitSelected_ ? attackHitEdit_.selection.entity : 0;
+		request.attackView.enabled=true;request.attackView.token=attackPreviewToken_;
+		request.attackView.serial=++attackViewRequestSerial_;request.attackView.cameraSerial=attackCameraSerial_;
+		request.attackView.candidateSerial=attackHitSerial_;request.attackView.time=attackPreviewTime_;
+		request.attackView.state=attackView_;request.attackView.fit=attackFit_;
+		if(attackHitSelected_) attackPreview_.GetEditVolume(attackHitEdit_.selection.window,attackPreviewTime_,request.attackView.volume);
+		attackHitRequestedSerial_ = attackHitSerial_; attackHitRequestedTime_ = attackPreviewTime_;
+		attackHitRequestedToken_ = attackPreviewToken_;
+		request.showSkeleton = prefabPreviewShowSkeleton_; request.showJointAxes = prefabPreviewShowJointAxes_;
+		request.showColliders = true; request.showCombatVolumes = true; request.showGrid = true;
+		request.framingSerial = prefabPreviewFramingSerial_;
+		prefabPreviewRequestedPath_ = request.assetPath; prefabPreviewRequestedRevision_ = request.revision;
+		prefabPreviewRequestUsesCombatRig_ = false;
+		return request.document != nullptr;
+	}
 	if(uiMigrationOpen_) {
 		const SceneDocument* current=uiMigrationPrefab_ ? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument():nullptr)
 			: (editorSession_ && editorSession_->IsEditing()?&editorSession_->GetEditDocument():nullptr);
@@ -4247,6 +4301,7 @@ bool ImGuiManager::GetPrefabPreviewRequest(PrefabPreviewRequest& request) {
 	request.isolateSelectedCollider = !useCombatRigPreview && prefabHitBoxSetupMode_;
 	request.showGrid = prefabGridVisible_;
 	request.framingSerial = prefabPreviewFramingSerial_;
+	request.animationGhost = prefabGhostFrame_.poseSerial ? &prefabGhostFrame_ : nullptr;
 	// Keep the exact final request identity. The renderer returns this one on a
 	// later frame, including the composed Combat Rig's source scene identity.
 	prefabPreviewRequestedPath_ = request.assetPath;
@@ -4382,7 +4437,8 @@ bool ImGuiManager::ConsumeProjectLauncherRequest(ProjectLauncherRequest& request
 }
 
 bool ImGuiManager::HasUnsavedPrefabChanges() const {
-	return prefabEditorSession_ && prefabEditorSession_->IsDirty();
+	return (prefabEditorSession_ && prefabEditorSession_->IsDirty()) ||
+		(weaponRoundTrip_.originSession && weaponRoundTrip_.originSession->IsDirty());
 }
 
 bool ImGuiManager::PickSceneEntity(
@@ -4825,6 +4881,7 @@ void ImGuiManager::UpdateAnimationRotationModeDraft() {
 }
 
 bool ImGuiManager::CanSaveAnimationRotationMode(bool prefab) {
+	if (!GuardAttackHitBoxDraft(prefab)) return false;
 	if (!rotationModeDraft_.active || rotationModeDraft_.prefab!=prefab) return true;
 	const char* message=SelectEditorText(editorLanguage_,"回転方式の候補を確定または取り消してから保存してください",
 		"Confirm or cancel Rotation Interpolation before saving.");
@@ -4834,6 +4891,7 @@ bool ImGuiManager::CanSaveAnimationRotationMode(bool prefab) {
 
 bool ImGuiManager::DrawAnimationRotationMode(SceneDocument& document, uint64_t ownerId,
 	ScenePrefabAnimationClip& clip, size_t trackIndex, bool prefab) {
+	if (attackPreviewActive_) return false;
 	if (trackIndex>=clip.tracks.size() || clip.tracks[trackIndex].property!="LocalRotation") return false;
 	const auto* modeOwner=document.FindEntity(ownerId);
 	const auto* modeAnimator=modeOwner ? FindEnabledComponent(*modeOwner,"PrefabAnimator") : nullptr;
@@ -5008,6 +5066,7 @@ void ImGuiManager::BindSceneSpatialPreview(uint64_t ownerId, int clipIndex) {
 }
 
 void ImGuiManager::DrawSceneSpatialPreviewControls() {
+	if (attackPreviewActive_) return;
 	if (!editorSession_ || !editorSession_->IsEditing()) return;
 	// SceneDebugSystemが先に開いた同名windowへ追加。Runtimeへの依存や保存fieldを増やさない。
 	if (ImGui::Begin("Scene Controls", nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
@@ -5096,6 +5155,7 @@ void ImGuiManager::CancelSceneSpatialDraft(bool clearSelection) {
 }
 
 bool ImGuiManager::BeginSceneSpatialDraft(SpatialDraftKind kind, int operation) {
+	if (attackPreviewActive_) return false;
     if (rotationModeDraft_.active) return false;
     if (spatialDraft_.kind != SpatialDraftKind::None)
         return spatialDraft_.kind == kind && spatialDraft_.operation == operation;
@@ -5447,6 +5507,7 @@ bool ImGuiManager::RebuildSceneSpatialPreview() {
 }
 
 void ImGuiManager::UpdateSceneSpatialPreview(float deltaTime) {
+	if (attackPreviewActive_) { spatialPlaying_ = false; spatialFrame_ = {}; return; }
 	UpdateAnimationRotationModeDraft();
 	if (!editorSession_ || !editorSession_->IsEditing()) {
 		ResetSceneSpatialPreview(); return;
@@ -5684,6 +5745,7 @@ void ImGuiManager::DrawSceneSpatialPreviewPlayback(const SceneComponent& animato
 }
 
 void ImGuiManager::DrawSceneSpatialPreviewInspector(SceneEntity& entity, SceneComponent& animator) {
+	if (attackPreviewActive_) return;
     if (!editorSession_->IsEditing()) return;
     ImGui::SeparatorText(SelectEditorText(editorLanguage_,"アニメーション編集","Animation Editing"));
     if (spatialOwnerId_!=entity.id) {
@@ -5755,6 +5817,7 @@ void ImGuiManager::DrawSceneSpatialPreviewInspector(SceneEntity& entity, SceneCo
 }
 
 bool ImGuiManager::DrawSceneSpatialPreviewOverlay(float x, float y, float width, float height) {
+	if (attackPreviewActive_) return false;
 	if (!IsSceneSpatialPreviewCurrent() || width <= 1 || height <= 1) return false;
 	const auto* camera = Object3dCommon::GetInstance()->GetDefaultCamera();
 	if (!camera) return false;
@@ -6161,6 +6224,9 @@ void ImGuiManager::DrawSceneGizmo(
 }
 
 void ImGuiManager::Finalize(){
+	timeInputDrafts_.clear(); timeInputWarningRequested_ = false;
+	ResetPrefabAnimationGhost(true);
+	StopPlayerAttackPreview();
 	// Game側のEditorSessionは既に解放経路に入っている。所有しているPrefab sessionを消す前に表示だけ保存する。
 	PersistPrefabWorkspace(true);
 	menuInputCandidate_.reset();
@@ -6170,6 +6236,7 @@ void ImGuiManager::Finalize(){
 	delete spatialBaseDocument_; spatialBaseDocument_ = nullptr;
 	delete spatialSampleDocument_; spatialSampleDocument_ = nullptr;
 	StopAudioPreview();
+	weaponRoundTrip_={}; weaponProposed_.reset(); weaponReviewPresentation_={}; weaponCommand_=WeaponCommand::None;
 	delete prefabEditorSession_;
 	prefabEditorSession_ = nullptr;
 	delete prefabAnimationPreviewDocument_;
@@ -14728,7 +14795,831 @@ void ImGuiManager::DrawPlayerCombatFields(const SceneDocument& suppliedDocument,
 	if (component.type == "HitReaction") r = DrawReactionFields(ResolveReaction(document,entityId),editorLanguage_,editable,false);
 	else if (attackName) r = DrawAttackFields(ResolveAttack(document,entityId,*attackName),editorLanguage_,editable);
 	r.token = token; QueuePlayerCombatRequest(std::move(r),prefab);
+	if (attackName) {
+		auto preview = DrawPreviewAction(ResolveAttack(document,entityId,*attackName),editorLanguage_,editable);
+		preview.token = token; QueuePlayerCombatRequest(std::move(preview),prefab);
+	}
 	ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); ImGui::PopID();
+}
+
+namespace {
+	std::string WeaponCanonicalPath(const std::string& value) {
+		if (value.empty()) return {};
+		std::error_code error;
+		const auto requested=PathFromUtf8(value);
+		// 絶対PathのProject境界を、resources互換リマップで隠さない。
+		const auto resolved=requested.is_absolute() ? requested : EditableResourcePath::ResolveResource(requested);
+		const auto canonical=std::filesystem::weakly_canonical(resolved,error);
+		return PathToUtf8(error ? resolved.lexically_normal() : canonical);
+	}
+	std::string WeaponProjectRoot() { return WeaponCanonicalPath(PathToUtf8(EditableResourcePath::FindProjectRoot())); }
+	bool WeaponPathInsideProject(const std::string& path) {
+		const auto root=PathFromUtf8(WeaponProjectRoot()), file=PathFromUtf8(WeaponCanonicalPath(path));
+		if (root.empty() || file.empty()) return false;
+		const auto relative=file.lexically_relative(root);
+		return !relative.empty() && !relative.is_absolute() && *relative.begin()!=std::filesystem::path("..");
+	}
+	PrefabDiskToken WeaponObserveDisk(const std::string& path) {
+		PrefabDiskToken result;
+		result.normalizedPath=WeaponCanonicalPath(path);
+		std::ifstream input(PathFromUtf8(result.normalizedPath),std::ios::binary);
+		if (!input) return {};
+		char buffer[4096];
+		while (input.read(buffer,sizeof(buffer)) || input.gcount()) result.contentBytes.append(buffer,static_cast<size_t>(input.gcount()));
+		result.valid=input.eof() && !input.bad(); return result;
+	}
+	bool WeaponSameDisk(const PrefabDiskToken& a,const PrefabDiskToken& b) {
+		return a.valid && b.valid && WeaponCanonicalPath(a.normalizedPath)==WeaponCanonicalPath(b.normalizedPath) && a.contentBytes==b.contentBytes;
+	}
+	bool WeaponBelow(const SceneDocument& document,uint64_t id,uint64_t root) {
+		std::unordered_set<uint64_t> visited;
+		while (id && visited.insert(id).second) {
+			if (id==root) return true;
+			const auto* entity=document.FindEntity(id); if (!entity) return false; id=entity->parentId;
+		}
+		return false;
+	}
+	const char* WeaponRefreshIssueText(EditorLanguage language,ScenePrefabValueRefresh::IssueCode code) {
+		using I=ScenePrefabValueRefresh::IssueCode;
+		switch(code) {
+		case I::UnsupportedStructure: return SelectEditorText(language,"構成変更、Variant、武器内部Nestedは初版の対象外です。通常保存を使うか、既存値だけの編集に戻してください。","Structural changes, Variants and nested weapon assets are unsupported. Use ordinary Save or edit existing values only.");
+		case I::InvalidSource: return SelectEditorText(language,"元Prefabの識別情報が不正です。Prefabを通常保存・再読込してから反映先を指定し直してください。","Invalid source identity. Save and reload the Prefab, then specify its target again.");
+		case I::InvalidInstance: case I::MissingTarget: return SelectEditorText(language,"反映先のEntity・Component・Prefab Linkを確認できません。元Playerへ戻って武器を指定し直してください。","Cannot verify target entities, components or Prefab links. Return to the Player and select its weapon again.");
+		case I::Locked: return SelectEditorText(language,"反映先がロックされています。元の編集先でロックを解除してください。","The target is locked. Unlock it in the original document.");
+		case I::StalePlan: return SelectEditorText(language,"確認後に編集内容が変わりました。変更一覧を開き直してください。","The content changed after review. Open the review again.");
+		case I::InvalidChoice: return SelectEditorText(language,"競合の選択が未完了、または無効です。各項目の選択を確認してください。","A conflict choice is missing or invalid. Review each selection.");
+		default: return SelectEditorText(language,"反映候補を作れません。値・参照先を確認して変更一覧を開き直してください。","Cannot prepare the candidate. Check values and references, then reopen the review.");
+		}
+	}
+}
+
+void ImGuiManager::WarnWeaponPrefab(const char* japanese,const char* english,const std::string& detail) {
+	weaponWarningJP_=japanese; weaponWarningEN_=english; weaponWarningDetail_=detail; weaponWarningRequested_=true;
+}
+
+void ImGuiManager::QueueWeaponCommand(WeaponCommand command) {
+	if (weaponCommand_!=WeaponCommand::None) {
+		WarnWeaponPrefab("別の武器操作を処理中です。完了後に再操作してください。","Another weapon operation is pending. Retry after it completes."); return;
+	}
+	weaponCommand_=command; ++weaponCommandSerial_;
+}
+
+void ImGuiManager::QueueWeaponEntry(const PlayerCombatEditor::Request& request) {
+	if (weaponRoundTrip_.active || weaponCommand_!=WeaponCommand::None) {
+		WarnWeaponPrefab("先に元のPlayerへ戻ってください。武器の往復は一件ずつ行えます。","Return to the original Player first. Only one weapon round trip can be active."); return;
+	}
+	weaponEntry_=request; weaponEntryBind_=request.operation==PlayerCombatEditor::Operation::BindWeaponPrefab;
+	weaponDestinations_.clear(); weaponDestinationIndex_=-1;
+	QueueWeaponCommand(weaponEntryBind_ ? WeaponCommand::Bind : WeaponCommand::Begin);
+}
+
+bool ImGuiManager::WeaponDraftReady() {
+	if (!editorSession_ || !editorSession_->IsEditing()) {
+		WarnWeaponPrefab("武器の操作を実行できません。Playを停止してください。","Cannot perform the weapon operation. Stop Play first."); return false;
+	}
+	if (rotationModeDraft_.active || spatialDraft_.kind!=SpatialDraftKind::None || attackHitDirty_ || uiMigrationOpen_ || menuInputCandidate_) {
+		WarnWeaponPrefab("未適用の編集候補があります。先に適用または取消してください。","Unapplied edits exist. Apply or cancel them first."); return false;
+	}
+	return true;
+}
+
+bool ImGuiManager::WeaponActorBound(const SceneDocument& document) const {
+	const auto& context=weaponRoundTrip_;
+	const auto* actor=document.FindEntity(context.attack.actorId);
+	const auto* behavior=actor ? FindComponent(*actor,"PlayerBehavior") : nullptr;
+	const auto* owner=document.FindEntity(context.attack.entityId);
+	if (!behavior || behavior->localId!=context.actorComponent || !owner ||
+		!WeaponBelow(document,owner->id,context.destination.link.instanceRootId)) return false;
+	const SceneComponent* attacks=nullptr;
+	for (const auto& component:owner->components) if (component.type=="AttackSet" && component.localId==context.attack.componentId) attacks=&component;
+	if (!attacks || std::count_if(attacks->attackDefinitions.begin(),attacks->attackDefinitions.end(),[&](const auto& attack) {
+		return attack.name==context.attack.attackName;
+	})!=1) return false;
+	const auto model=PlayerCombatEditor::ResolveActor(document,actor->id);
+	return std::any_of(model.attacks.begin(),model.attacks.end(),[&](const auto& attack) {
+		return attack.subject.entityId==context.attack.entityId && attack.subject.componentId==context.attack.componentId &&
+			attack.subject.attackName==context.attack.attackName;
+	});
+}
+
+bool ImGuiManager::WeaponOrigin(SceneDocument*& document,PlayerCombatEditor::DocumentToken& token,bool requireBinding) const {
+	const auto& context=weaponRoundTrip_;
+	document=nullptr; token={};
+	if (!context.active || WeaponProjectRoot()!=context.projectRoot) return false;
+	token.prefab=context.origin.prefab;
+	if (token.prefab) {
+		if (!context.originSession || !context.originSession->IsOpen()) return false;
+		document=&context.originSession->GetDocument(); token.key=context.originSession->GetFilePath();
+	} else {
+		if (!editorSession_) return false;
+		document=&editorSession_->GetEditDocument(); token.key=editorSession_->GetSceneFilePath(); token.epoch=editorSession_->GetEditSceneEpoch();
+	}
+	token.generation=document->GetContentGeneration(); token.revision=document->GetRevision();
+	if (WeaponCanonicalPath(token.key)!=WeaponCanonicalPath(context.origin.key) || token.epoch!=context.origin.epoch ||
+		token.generation!=context.origin.generation) return false;
+	const auto* actor=document->FindEntity(context.attack.actorId);
+	const auto* behavior=actor ? FindComponent(*actor,"PlayerBehavior") : nullptr;
+	if (!behavior || behavior->localId!=context.actorComponent) return false;
+	if (!requireBinding) return true;
+	const auto* root=document->FindEntity(context.destination.link.instanceRootId);
+	if (actor->locked || !root || root->locked || context.destination.depth>=root->prefabLinks.size() || !WeaponActorBound(*document)) return false;
+	const auto& link=root->prefabLinks[context.destination.depth]; const auto& expected=context.destination.link;
+	return link.instanceRootId==expected.instanceRootId && link.localId==expected.localId && link.assetId==expected.assetId &&
+		WeaponCanonicalPath(PrefabAssetRegistry::ResolvePath(link.assetId,link.sourcePath))==context.sourcePath;
+}
+
+void ImGuiManager::ResetWeaponPrefabView() {
+	StopPlayerAttackPreview(); ResetPrefabAnimationGhost(true);
+	prefabAnimationPreviewActive_=false; prefabAnimationPreviewPlaying_=false; prefabAnimationPreviewOwnerEntityId_=0;
+	prefabAnimationPreviewClipIndex_=0; prefabAnimationPreviewTime_=0; prefabAnimationPreviewAssetPath_.clear();
+	playerCombatPreviewEnabled_=false; prefabHitBoxSetupMode_=false; prefabHitBoxGhostVisible_=false; prefabAttackPreviewMode_=false;
+	prefabPreviewRequestedPath_.clear(); prefabPreviewRenderedPath_.clear(); prefabPreviewCameraValid_=false; prefabPreviewTexture_={};
+	playerCombatContexts_[1].returnActor=0; playerCombatContexts_[1].returnOpenPending=false;
+	ResetComponentPicker(prefabComponentPicker_); ++prefabPreviewFramingSerial_;
+}
+
+void ImGuiManager::EnterWeaponPrefab(int mode) {
+	if (!WeaponDraftReady()) return;
+	const bool prefab=weaponEntry_.token.prefab;
+	SceneDocument* origin=prefab ? (prefabEditorSession_ && prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument() : nullptr) : &editorSession_->GetEditDocument();
+	if (!origin || !PlayerCombatEditor::Matches(MakePlayerCombatToken(*origin,prefab),weaponEntry_.token) ||
+		weaponDestinationIndex_<0 || weaponDestinationIndex_>=static_cast<int>(weaponDestinations_.size())) {
+		WarnWeaponPrefab("編集元が更新されました。Playerから武器を選び直してください。","The source changed. Select the weapon from the Player again."); return;
+	}
+	const auto destination=weaponDestinations_[weaponDestinationIndex_];
+	const auto* actor=origin->FindEntity(weaponEntry_.subject.actorId);
+	const auto* behavior=actor ? FindComponent(*actor,"PlayerBehavior") : nullptr;
+	const auto* root=origin->FindEntity(destination.link.instanceRootId);
+	if (!behavior || !behavior->localId || actor->locked || !root || root->locked ||
+		!WeaponBelow(*origin,root->id,actor->id) || destination.depth>=root->prefabLinks.size()) {
+		WarnWeaponPrefab("反映先Player・武器を確認できません。識別情報とロックを確認してください。","Cannot verify the Player and weapon. Check identities and locks."); return;
+	}
+	const auto& currentLink=root->prefabLinks[destination.depth];
+	if (currentLink.assetId!=destination.link.assetId || currentLink.localId!=destination.link.localId ||
+		currentLink.instanceRootId!=destination.link.instanceRootId ||
+		WeaponCanonicalPath(PrefabAssetRegistry::ResolvePath(currentLink.assetId,currentLink.sourcePath))!=destination.path ||
+		!WeaponPathInsideProject(destination.path) ||
+		(PathFromUtf8(currentLink.sourcePath).is_absolute() && !WeaponPathInsideProject(currentLink.sourcePath))) {
+		WarnWeaponPrefab("Prefab Linkまたは編集先が変わりました。現在のProject内の武器を指定し直してください。","The Prefab link or destination changed. Select a weapon inside the current Project again."); return;
+	}
+	const bool sameOpen=prefabEditorSession_ && prefabEditorSession_->IsOpen() && WeaponCanonicalPath(prefabEditorSession_->GetFilePath())==destination.path;
+	if ((prefab && sameOpen) || (weaponEntryBind_ && (prefab || !sameOpen))) {
+		WarnWeaponPrefab("開いている武器と反映先が一致しません。Sceneの対応する武器行を選んでください。","The open weapon does not match the target. Select its matching Scene weapon row."); return;
+	}
+	if (!prefab && !sameOpen && prefabEditorSession_->IsDirty() && !mode) { weaponSwitchRequested_=true; return; }
+	std::unique_ptr<PrefabEditorSession> opened;
+	if (!sameOpen) {
+		opened=std::make_unique<PrefabEditorSession>();
+		if (!opened->Open(destination.path)) { WarnWeaponPrefab("武器Prefabを開けません。元の編集は保持しています。保存先とファイルを確認してください。","Cannot open the weapon Prefab. Original edits are preserved. Check its path and contents.",destination.path); return; }
+	}
+	auto* weapon=sameOpen ? prefabEditorSession_ : opened.get();
+	const auto& source=weapon->GetDocument();
+	if (source.GetAssetId()!=destination.link.assetId || !weapon->GetOpenBaselineDocument() ||
+		std::any_of(source.GetEntities().begin(),source.GetEntities().end(),[](const auto& e) { return FindComponent(e,"PlayerBehavior")!=nullptr; })) {
+		WarnWeaponPrefab("武器Prefabの識別情報または編集基準を確認できません。Player本体のPrefabはこの武器操作の対象外です。","Cannot verify the weapon identity or baseline. A Player body Prefab is not a weapon-editing target.",destination.path); return;
+	}
+	if (!prefab && !sameOpen && mode==1 && (!CanSaveAnimationRotationMode(true) || !prefabEditorSession_->Save())) {
+		WarnWeaponPrefab("現在のPrefabを保存できませんでした。元の編集を続けて保存先を確認してください。","Could not save the current Prefab. Continue its edits and check its destination."); return;
+	}
+	if (!PlayerCombatEditor::Matches(MakePlayerCombatToken(*origin,prefab),weaponEntry_.token)) {
+		WarnWeaponPrefab("切替前に元Playerが更新されました。Playerから武器を指定し直してください。","The original Player changed before switching. Select its weapon again."); return;
+	}
+	WeaponRoundTrip next;
+	next.origin=weaponEntry_.token; next.actorComponent=behavior->localId; next.attack=weaponEntry_.subject;
+	next.destination=destination; next.sourcePath=destination.path; next.sourceAsset=source.GetAssetId(); next.projectRoot=WeaponProjectRoot();
+	next.actorName=actor->name;
+	next.baseline=std::make_unique<SceneDocument>(*weapon->GetOpenBaselineDocument());
+	// Projectから編集・通常保存してからBindingした差も、退出確認の対象に残す。
+	const auto entryPlan=origin->InspectPrefabValueRefresh(*next.baseline,source,destination.link.instanceRootId);
+	next.entryUnreflected=entryPlan.issue.code!=ScenePrefabValueRefresh::IssueCode::None ||
+		std::any_of(entryPlan.rows.begin(),entryPlan.rows.end(),[](const auto& row) { return !(row.baseline==row.prefab); });
+	next.originView=CapturePrefabWorkspace(); next.originHistory=prefabNavigationHistory_; next.originHistoryIndex=prefabNavigationIndex_;
+	next.animationOwner=prefabAnimationPreviewOwnerEntityId_; next.clip=prefabAnimationPreviewClipIndex_; next.time=prefabAnimationPreviewTime_;
+	// 切替前に新Sessionを検証済み。元PrefabのDirty/UndoをそのSessionごと保持する。
+	if (prefab) next.originSession.reset(prefabEditorSession_);
+	else if (!sameOpen) delete prefabEditorSession_;
+	if (opened) prefabEditorSession_=opened.release();
+	next.active=true; weaponRoundTrip_=std::move(next);
+	prefabClosePopupRequested_=false; prefabOpenPopupRequested_=false; pendingPrefabOpenPath_.clear();
+	prefabWorkspaceRestorePending_=false;
+	ResetWeaponPrefabView(); showPrefab_=true; prefabFocusFramesRemaining_=2;
+	prefabSelectedEntityId_=destination.link.localId;
+	weaponRoundTrip_.entryWeapon=MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true);
+	weaponDestinations_.clear(); weaponProposed_.reset(); weaponReviewPresentation_={}; RevealPrefabInspector(); PersistPrefabWorkspace(true);
+}
+
+void ImGuiManager::ReviewWeaponPrefab() {
+	if (!WeaponDraftReady()) return;
+	SceneDocument* target=nullptr; PlayerCombatEditor::DocumentToken token;
+	if (!WeaponOrigin(target,token,true) || !prefabEditorSession_ || !prefabEditorSession_->IsOpen() ||
+		WeaponCanonicalPath(prefabEditorSession_->GetFilePath())!=weaponRoundTrip_.sourcePath ||
+		prefabEditorSession_->GetDocument().GetAssetId()!=weaponRoundTrip_.sourceAsset) {
+		WarnWeaponPrefab("反映先が更新または消失しました。元Playerへ戻って武器を指定し直してください。","The target changed or disappeared. Return to the Player and select the weapon again."); return;
+	}
+	const auto disk=WeaponObserveDisk(weaponRoundTrip_.sourcePath);
+	if (!WeaponSameDisk(disk,prefabEditorSession_->GetLastKnownDiskToken())) {
+		WarnWeaponPrefab("武器ファイルが外部更新されたか読み取れません。保存せず、通常の再読込等で内容を確認してください。","The weapon file changed externally or cannot be read. Do not overwrite it; inspect or reload its contents."); return;
+	}
+	auto proposed=std::make_unique<SceneDocument>(prefabEditorSession_->GetDocument());
+	// 保存済みならdiskを正本とする。保存時のQuaternion等の正規化を再確認できるようにする。
+	if (!prefabEditorSession_->IsDirty() && !proposed->Load(weaponRoundTrip_.sourcePath)) {
+		WarnWeaponPrefab("保存済み武器を読み直せません。ファイルを確認してください。","Cannot read the saved weapon. Check its file."); return;
+	}
+	if (!WeaponSameDisk(disk,WeaponObserveDisk(weaponRoundTrip_.sourcePath))) {
+		WarnWeaponPrefab("読込中に武器ファイルが変わりました。変更一覧を開き直してください。","The weapon file changed while reading. Reopen the review."); return;
+	}
+	auto plan=target->InspectPrefabValueRefresh(*weaponRoundTrip_.baseline,*proposed,weaponRoundTrip_.destination.link.instanceRootId);
+	if (plan.issue.code!=ScenePrefabValueRefresh::IssueCode::None) {
+		WarnWeaponPrefab(WeaponRefreshIssueText(EditorLanguage::Japanese,plan.issue.code),WeaponRefreshIssueText(EditorLanguage::English,plan.issue.code),plan.issue.detail); return;
+	}
+	weaponReviewSource_=MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true); weaponReviewDisk_=disk;
+	weaponPlan_=std::move(plan); weaponProposed_=std::move(proposed); weaponSelections_.clear();
+	for (const auto& row:weaponPlan_.rows) weaponSelections_.push_back(row.classification==ScenePrefabValueRefresh::Classification::Conflict ? -1 :
+		row.classification==ScenePrefabValueRefresh::Classification::SourceChanged ? 1 : 0);
+	weaponReviewSerial_=weaponCommandSerial_; weaponReviewRequested_=true;
+	BuildWeaponReviewPresentation();
+}
+
+void ImGuiManager::DrawWeaponRefreshValidationReference() {
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+		"「保存して確定」は、選択した値を組み合わせた配置先全体を、保存前と保存後に検証します。読み込みを妨げるエラーがあれば反映せず、警告だけなら継続します。攻撃設定を配置先のまま維持する場合、その攻撃が使うColliderの無効化だけを反映しないよう、関連項目の選択を揃えてください。",
+		"Save and confirm validates the combined target document before and after saving. Loading errors stop reflection; warnings alone do not. When keeping target attack settings, align related choices so that the collider used by that attack is not disabled by reflection."));
+	ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_,
+		"エラーの通知には対象・対処と、武器Prefabが保存済みかを表示します。配置先は変更しません。選択を見直すか、元のPlayerへ戻って既存のエラーを修正してください。反映0項目の場合も配置先全体を検証します。詳細には診断原文を表示します。",
+		"Error notices identify the target, corrective action and whether the weapon Prefab is already saved. The target stays unchanged. Review choices or return to the original Player to fix existing errors. Whole-target validation also runs when no settings are reflected. Details include raw diagnostics."));
+}
+
+bool ImGuiManager::ValidateWeaponRefreshCandidate(const SceneDocument& candidate,
+	const std::string& targetPath, bool sourceSaved) {
+	std::vector<SceneValidationIssue> issues;
+	// 読み込みと同じくCatalogなし。Prefab特有のWarning判定には元武器ではなく配置先のpathが必要。
+	if (SceneValidator::ValidateDocument(candidate, nullptr, {}, targetPath, issues)) return true;
+	issues.erase(std::remove_if(issues.begin(), issues.end(), [](const auto& issue) {
+		return issue.severity != SceneValidationSeverity::Error;
+	}), issues.end());
+
+	std::string japanese = sourceSaved
+		? "武器Prefabは保存済みですが、元の武器への反映を中止しました。配置先は変更していません。"
+		: "武器Prefabの保存と元の武器への反映を中止しました。今回の操作ではファイルと配置先を変更していません。";
+	std::string english = sourceSaved
+		? "The weapon Prefab is saved, but reflection was stopped. The target is unchanged."
+		: "Saving and reflection were stopped. This operation did not change the file or target.";
+	japanese += "\n選択した値を組み合わせた配置先全体に、読み込みを妨げる設定・参照エラーがあります。";
+	english += "\nThe combined target document contains settings or reference errors that prevent loading.";
+	if (!issues.empty()) {
+		const auto& first = issues.front();
+		const auto* entity = candidate.FindEntity(first.entityId);
+		const std::string target = entity ? entity->name + " (#" + std::to_string(entity->id) + ")" :
+			first.entityId ? "#" + std::to_string(first.entityId) : "Scene/Prefab";
+		japanese += "\n最初の対象: " + target;
+		english += "\nFirst affected target: " + target;
+		if (first.message.starts_with("Attack '") && first.message.ends_with(" requires enabled HitBox and Trigger Collider")) {
+			japanese += "\n攻撃の判定先に、有効なHitBoxとTrigger設定の有効なOBBColliderが揃っていません。変更一覧で攻撃設定と判定Colliderの有効・Trigger設定の選択を揃えてください。";
+			english += "\nThe attack target needs both an enabled HitBox and an enabled Trigger OBBCollider. Align the attack and collider enabled/Trigger choices in the review.";
+		} else if (first.message.starts_with("Attack '") && first.message.ends_with(" has no resolvable Dedicated HitBox")) {
+			japanese += "\n攻撃の判定先を解決できません。変更一覧の攻撃設定で、配置先に存在するHitBoxを参照する値を選んでください。";
+			english += "\nThe attack's HitBox reference cannot be resolved. Choose attack settings that reference a HitBox present in the target.";
+		}
+		japanese += "\nエラー件数: " + std::to_string(issues.size());
+		english += "\nError count: " + std::to_string(issues.size());
+	}
+	japanese += "\n変更一覧の選択を見直して再確認してください。配置先に既存のエラーがある場合は、元のPlayerへ戻って修正してください。診断原文は「識別情報・詳細」で確認できます。";
+	english += "\nReview the choices and confirm again. If the target already has errors, return to the original Player and correct them. Raw diagnostics are under Identifiers / details.";
+	WarnWeaponPrefab(japanese.c_str(), english.c_str(), SceneValidator::FormatIssues(issues));
+	return false;
+}
+
+void ImGuiManager::ConfirmWeaponPrefab() {
+	using namespace ScenePrefabValueRefresh;
+	if (!WeaponDraftReady() || !weaponProposed_) return;
+	SceneDocument* target=nullptr; PlayerCombatEditor::DocumentToken token;
+	if (!WeaponOrigin(target,token,true) || !prefabEditorSession_ ||
+		prefabEditorSession_->GetDocument().GetAssetId()!=weaponRoundTrip_.sourceAsset ||
+		!PlayerCombatEditor::Matches(weaponReviewSource_,MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true)) ||
+		!WeaponSameDisk(weaponReviewDisk_,WeaponObserveDisk(weaponRoundTrip_.sourcePath))) {
+		WarnWeaponPrefab("確認後に編集先またはファイルが変わりました。変更一覧を開き直してください。","The document or file changed after review. Open the review again."); return;
+	}
+	std::vector<Choice> choices;
+	for (size_t i=0;i<weaponPlan_.rows.size();++i) {
+		if (i>=weaponSelections_.size() || weaponSelections_[i]<0) {
+			WarnWeaponPrefab("競合の選択が未完了です。変更一覧で各競合を選択してください。","Conflict choices are incomplete. Choose a value for every conflict in the review."); return;
+		}
+		choices.push_back({weaponPlan_.rows[i].key,weaponSelections_[i] ? Selection::UsePrefab : Selection::KeepInstance});
+	}
+	SceneDocument candidate; bool changed=false; Issue issue;
+	// 保存前にも候補を作る。反映不能な構成やActor参照を保存成功で隠さない。
+	if (!target->CreatePrefabValueRefreshCandidate(*weaponRoundTrip_.baseline,*weaponProposed_,weaponPlan_.instanceRootId,
+		weaponPlan_,choices,candidate,changed,issue)) {
+		WarnWeaponPrefab(WeaponRefreshIssueText(EditorLanguage::Japanese,issue.code),WeaponRefreshIssueText(EditorLanguage::English,issue.code),issue.detail); return;
+	}
+	if (!WeaponActorBound(candidate)) {
+		WarnWeaponPrefab("反映するとPlayerの攻撃参照が切れます。攻撃名を維持するか、この項目は配置先を維持してください。","Reflection would break the Player attack reference. Keep the attack name or retain the target value for this item."); return;
+	}
+	if (!ValidateWeaponRefreshCandidate(candidate, token.key, false)) return;
+	if (prefabEditorSession_->IsDirty() && (!CanSaveAnimationRotationMode(true) || !prefabEditorSession_->Save())) {
+		WarnWeaponPrefab("武器の保存に失敗しました。元の武器は未変更です。通常保存で保存先と構成を確認してください。","Weapon saving failed; the target is unchanged. Check the destination and structure using ordinary Save.",weaponRoundTrip_.sourcePath); return;
+	}
+	weaponRoundTrip_.savedOnly=true;
+	InvalidateProjectCache();
+	const auto disk=WeaponObserveDisk(weaponRoundTrip_.sourcePath);
+	SceneDocument saved;
+	if (!WeaponSameDisk(disk,prefabEditorSession_->GetLastKnownDiskToken()) || !saved.Load(weaponRoundTrip_.sourcePath) ||
+		!WeaponSameDisk(disk,WeaponObserveDisk(weaponRoundTrip_.sourcePath)) || !WeaponOrigin(target,token,true)) {
+		WarnWeaponPrefab("武器Prefabは保存済み・元の武器は未反映です。保存後の内容または反映先を確認できません。変更一覧を開き直してください。","Weapon Prefab saved; target not reflected. Cannot verify the saved content or target. Open the review again."); return;
+	}
+	const auto savedPlan=target->InspectPrefabValueRefresh(*weaponRoundTrip_.baseline,saved,weaponPlan_.instanceRootId);
+	// 保存codecの正規化も利用者の確認対象。異なれば保存だけを記録し、選択を再利用しない。
+	if (!(savedPlan==weaponPlan_) || !target->CreatePrefabValueRefreshCandidate(*weaponRoundTrip_.baseline,saved,
+		weaponPlan_.instanceRootId,savedPlan,choices,candidate,changed,issue) || !WeaponActorBound(candidate)) {
+		WarnWeaponPrefab("武器Prefabは保存済み・元の武器は未反映です。保存による正規化または反映先の変化があります。変更一覧を開き直してください。","Weapon Prefab saved; target not reflected. Saving normalized values or the target changed. Open the review again."); return;
+	}
+	// 保存後の候補にも同じ検証を行い、通過前は配置先のDirty/Undo/reloadへ触れない。
+	if (!ValidateWeaponRefreshCandidate(candidate, token.key, true)) return;
+	if (changed) {
+		if (token.prefab) weaponRoundTrip_.originSession->BeginEditFrame(); else editorSession_->BeginEditFrame();
+		*target=std::move(candidate); target->MarkDirty();
+		if (token.prefab) weaponRoundTrip_.originSession->EndEditFrame(true);
+		else { editorSession_->EndEditFrame(true); editorSession_->RequestSceneReload(); }
+	}
+	auto& context=weaponRoundTrip_;
+	context.appliedCount=0; context.keptCount=0; context.protectedCount=0;
+	for (size_t i=0;i<savedPlan.rows.size();++i) {
+		const auto& row=savedPlan.rows[i];
+		if (row.classification==Classification::Protected) ++context.protectedCount;
+		else if (row.classification!=Classification::Same) {
+			if (weaponSelections_[i] && !(row.prefab==row.instance)) ++context.appliedCount;
+			else ++context.keptCount;
+		}
+	}
+	context.origin.generation=target->GetContentGeneration(); context.origin.revision=target->GetRevision();
+	context.baseline=std::make_unique<SceneDocument>(std::move(saved));
+	context.applied=true; context.savedOnly=false;
+	context.appliedWeapon=MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true);
+	weaponProposed_.reset(); weaponReviewPresentation_={};
+}
+
+bool ImGuiManager::WeaponHasUnappliedChanges() const {
+	if (!weaponRoundTrip_.active || !prefabEditorSession_ || !prefabEditorSession_->IsOpen()) return false;
+	if (prefabEditorSession_->IsDirty() || weaponRoundTrip_.savedOnly) return true;
+	if (!weaponRoundTrip_.applied && weaponRoundTrip_.entryUnreflected) return true;
+	const auto& receipt=weaponRoundTrip_.applied ? weaponRoundTrip_.appliedWeapon : weaponRoundTrip_.entryWeapon;
+	return !PlayerCombatEditor::Matches(receipt,MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true));
+}
+
+void ImGuiManager::ReturnFromWeaponPrefab() {
+	if (!weaponRoundTrip_.active || !WeaponDraftReady()) return;
+	SceneDocument* origin=nullptr; PlayerCombatEditor::DocumentToken token;
+	const bool valid=WeaponOrigin(origin,token,false);
+	ResetWeaponPrefabView();
+	// 保持Sessionを先に取り出す。表示中Sessionと同じ所有先を二度解放しない。
+	auto context=std::move(weaponRoundTrip_); weaponRoundTrip_={};
+	weaponProposed_.reset(); weaponReviewPresentation_={}; prefabClosePopupRequested_=false;
+	if (context.origin.prefab) {
+		delete prefabEditorSession_; prefabEditorSession_=context.originSession.release();
+		ApplyPrefabWorkspaceView(context.originView);
+		prefabNavigationHistory_=std::move(context.originHistory); prefabNavigationIndex_=context.originHistoryIndex;
+		prefabAnimationPreviewOwnerEntityId_=context.animationOwner; prefabAnimationPreviewClipIndex_=context.clip;
+		prefabAnimationPreviewTime_=context.time; prefabAnimationPreviewPlaying_=false;
+		prefabSelectedEntityId_=valid ? context.attack.actorId : 0;
+		prefabSummarySelectedComponentType_="PlayerBehavior"; prefabClipFocusEnabled_=false;
+		showPrefab_=true; prefabFocusFramesRemaining_=2; RevealPrefabInspector();
+	} else {
+		// 退出時の破棄は明示確認済み。保存済みファイルは巻き戻さない。
+		prefabEditorSession_->Close(true); showPrefab_=false;
+		selectedEntityId_=valid ? context.attack.actorId : 0; selectedEntityIds_.clear();
+		if (selectedEntityId_) selectedEntityIds_.insert(selectedEntityId_);
+		hierarchySelectionAnchorId_=selectedEntityId_; selectedProjectFile_.clear();
+		sceneSummarySelectedComponentType_="PlayerBehavior"; showInspector_=true; revealInspectorRequested_=true;
+		ImGui::SetWindowFocus("Scene");
+	}
+	if (valid) {
+		const auto key=token.prefab ? prefabEditorSession_->GetFilePath() : editorSession_->GetActiveSceneId();
+		componentFoldoutStates_[MakeComponentFoldoutKey(key,context.attack.actorId,"PlayerBehavior")]=true;
+		playerCombatContexts_[token.prefab ? 1 : 0].reveal=true;
+		if (origin->IsDirty()) WarnWeaponPrefab("元の編集先へ戻りました。反映先には未保存の変更があります。SceneまたはPlayer Prefabを保存してください。","Returned to the original document. The target has unsaved edits. Save the Scene or Player Prefab.");
+	} else WarnWeaponPrefab("元Playerを確認できないため自動選択しませんでした。現在の編集内容は保持しています。元のSceneまたはPlayerを選び直してください。","The original Player could not be verified and was not selected. Current edits are preserved. Select the original Scene or Player again.");
+	PersistPrefabWorkspace(true);
+}
+
+void ImGuiManager::DrainWeaponCommands() {
+	if (weaponCommand_==WeaponCommand::None || ImGui::IsAnyItemActive() || ImGuizmo::IsUsing() ||
+		ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle)) return;
+	const auto command=weaponCommand_; weaponCommand_=WeaponCommand::None;
+	if (!WeaponDraftReady()) return;
+	// 非表示になったInspectorにも未確定Frameがあり得る。鮮度検査より前に閉じる。
+	if (prefabEditorSession_) prefabEditorSession_->EndEditFrame(true);
+	if (command==WeaponCommand::Begin || command==WeaponCommand::Bind) {
+		SceneDocument* document=weaponEntry_.token.prefab ? (prefabEditorSession_->IsOpen() ? &prefabEditorSession_->GetDocument() : nullptr) : &editorSession_->GetEditDocument();
+		if (!document || !PlayerCombatEditor::Matches(weaponEntry_.token,MakePlayerCombatToken(*document,weaponEntry_.token.prefab))) {
+			WarnWeaponPrefab("編集内容が更新されました。Playerから武器を選び直してください。","The content changed. Select the weapon from the Player again."); return;
+		}
+		std::unordered_set<uint64_t> ancestors;
+		for (uint64_t id=weaponEntry_.subject.entityId;id && ancestors.insert(id).second;) {
+			const auto* entity=document->FindEntity(id); if (!entity) break;
+			for (size_t depth=0;depth<entity->prefabLinks.size();++depth) {
+				const auto* root=document->FindEntity(entity->prefabLinks[depth].instanceRootId);
+				if (!root || depth>=root->prefabLinks.size() || !WeaponBelow(*document,root->id,weaponEntry_.subject.actorId)) continue;
+				const auto& link=root->prefabLinks[depth];
+				if (!link.localId || link.assetId.empty() || link.instanceRootId!=root->id) continue;
+				const auto path=WeaponCanonicalPath(PrefabAssetRegistry::ResolvePath(link.assetId,link.sourcePath));
+				if (path.empty() || (weaponEntryBind_ && (!prefabEditorSession_->IsOpen() || path!=WeaponCanonicalPath(prefabEditorSession_->GetFilePath())))) continue;
+				if (std::none_of(weaponDestinations_.begin(),weaponDestinations_.end(),[&](const auto& item) { return item.link.instanceRootId==root->id && item.depth==depth; }))
+					weaponDestinations_.push_back({link,depth,path,root->name});
+			}
+			if (id==weaponEntry_.subject.actorId) break;
+			id=entity->parentId;
+		}
+		if (weaponDestinations_.empty()) {
+			WarnWeaponPrefab("対象のPrefab Linkがありません。Sceneの対応する武器行と元Prefabの参照を確認してください。","No matching Prefab link was found. Check the Scene weapon row and its source Prefab reference."); return;
+		}
+		if (weaponDestinations_.size()==1) { weaponDestinationIndex_=0; EnterWeaponPrefab(0); }
+		else { weaponDestinationIndex_=-1; weaponPickerRequested_=true; }
+		return;
+	}
+	if (command==WeaponCommand::Pick) { EnterWeaponPrefab(0); return; }
+	if (command==WeaponCommand::SaveCurrentAndEnter) { EnterWeaponPrefab(1); return; }
+	if (command==WeaponCommand::DiscardCurrentAndEnter) { EnterWeaponPrefab(2); return; }
+	if (!weaponRoundTrip_.active) {
+		WarnWeaponPrefab("反映先が未指定です。Playerの攻撃行から武器を開くか、開いている武器の反映先を指定してください。","No target is assigned. Open the weapon from a Player attack row or bind the open weapon to that row."); return;
+	}
+	if (command==WeaponCommand::Review) { ReviewWeaponPrefab(); return; }
+	if (command==WeaponCommand::Confirm) { ConfirmWeaponPrefab(); return; }
+	if (command==WeaponCommand::Return) {
+		if (!WeaponHasUnappliedChanges()) ReturnFromWeaponPrefab();
+		else {
+			weaponLeaveSource_=MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true);
+			weaponLeaveDisk_=WeaponObserveDisk(weaponRoundTrip_.sourcePath); weaponReturnRequested_=true;
+		}
+		return;
+	}
+	const auto leaveDisk=WeaponObserveDisk(weaponRoundTrip_.sourcePath);
+	// 読めないファイルでも、書込みを伴わない明示退出は可能にする。
+	const bool sameLeaveDisk=WeaponSameDisk(weaponLeaveDisk_,leaveDisk) || (!weaponLeaveDisk_.valid && !leaveDisk.valid);
+	if (!PlayerCombatEditor::Matches(weaponLeaveSource_,MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true)) || !sameLeaveDisk) {
+		WarnWeaponPrefab("確認後に武器が更新されました。戻る操作をやり直してください。","The weapon changed after confirmation. Start the return operation again."); return;
+	}
+	if (command==WeaponCommand::SaveAndReturn) {
+		if (!WeaponSameDisk(weaponLeaveDisk_,prefabEditorSession_->GetLastKnownDiskToken()) || !CanSaveAnimationRotationMode(true) || !prefabEditorSession_->Save()) {
+			WarnWeaponPrefab("保存して戻れません。外部更新・保存先・構成を確認してください。編集は保持しています。","Cannot save and return. Check external changes, the destination and structure. Edits are preserved."); return;
+		}
+		InvalidateProjectCache();
+	}
+	if (command==WeaponCommand::ReturnWithoutApply && prefabEditorSession_->IsDirty()) {
+		WarnWeaponPrefab("未保存の変更があります。保存して戻るか、未保存変更の破棄を明示してください。","Unsaved changes exist. Save before returning or explicitly discard those changes."); return;
+	}
+	ReturnFromWeaponPrefab();
+}
+
+void ImGuiManager::DrawWeaponPrefabControls() {
+	auto text=[&](const char* jp,const char* en) { return SelectEditorText(editorLanguage_,jp,en); };
+	if (weaponRoundTrip_.active) {
+		const auto& context=weaponRoundTrip_;
+		ImGui::TextWrapped("%s: %s",text("保存先","Save to"),context.sourcePath.c_str());
+		ImGui::TextWrapped("%s: %s / %s (Player ID %llu) / %s (ID %llu, Link %zu)",text("反映先","Reflect to"),
+			context.origin.key.c_str(),context.actorName.c_str(),static_cast<unsigned long long>(context.attack.actorId),context.destination.name.c_str(),
+			static_cast<unsigned long long>(context.destination.link.instanceRootId),context.destination.depth);
+		if (context.savedOnly) ImGui::TextWrapped("%s",text("武器Prefab保存済み・元の武器は未反映。変更一覧を開き直してください。","Weapon Prefab saved; target not reflected. Open the review again."));
+		else if (context.applied) {
+			ImGui::Text("%s: %zu / %s: %zu / %s: %zu",text("前回の反映（項目）","Last reflected (items)"),context.appliedCount,
+				text("配置先を維持（項目）","Kept target (items)"),context.keptCount,text("保護して維持（項目）","Protected and kept (items)"),context.protectedCount);
+			if (WeaponHasUnappliedChanges()) ImGui::TextWrapped("%s",text("前回の反映後に武器が更新されています。","The weapon changed after the last reflection."));
+		} else ImGui::TextUnformatted(text("反映先指定済み・未反映","Target assigned; not yet reflected"));
+		SceneDocument* origin=nullptr; PlayerCombatEditor::DocumentToken token;
+		if ((context.originSession && context.originSession->IsDirty()) || (WeaponOrigin(origin,token,false) && origin->IsDirty()))
+			ImGui::TextUnformatted(text("反映先が未保存です（戻ってから保存）。","The target is unsaved (save after returning)."));
+	} else ImGui::TextWrapped("%s",text("反映先未指定：Playerの攻撃行から武器を開くか、開いている武器の反映先を指定してください。","No target: open a weapon from a Player attack row, or assign that row as the open weapon's target."));
+	if (ImGui::Button(text("Prefabを保存###SavePrefab","Save Prefab###SavePrefab"))) {
+		if (CanSaveAnimationRotationMode(true)) {
+			if (prefabEditorSession_->Save()) InvalidateProjectCache();
+			else WarnWeaponPrefab("Prefabを保存できませんでした。保存先と構成を確認して再試行してください。","Could not save the Prefab. Check its destination and structure, then retry.",prefabEditorSession_->GetFilePath());
+		}
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(text("保存して元の武器へ反映###ReflectWeapon","Save and reflect to original weapon###ReflectWeapon"))) QueueWeaponCommand(WeaponCommand::Review);
+	ImGui::SameLine();
+	if (ImGui::Button(text("元のPlayerへ戻る###ReturnWeaponPlayer","Return to original Player###ReturnWeaponPlayer"))) QueueWeaponCommand(WeaponCommand::Return);
+	ImGui::SameLine();
+	if (ImGui::Button(text("使い方###WeaponHelp","Help###WeaponHelp"))) weaponHelpRequested_=true;
+}
+
+namespace {
+	bool WeaponReviewVisible(const ScenePrefabValueRefresh::Row& row) {
+		using C=ScenePrefabValueRefresh::Classification;
+		if (row.classification==C::Same) return false;
+		return row.classification!=C::Protected || (!(row.baseline==row.prefab) && !(row.prefab==row.instance));
+	}
+
+	const char* WeaponProtectionText(EditorLanguage language,ScenePrefabValueRefresh::Protection protection) {
+		using P=ScenePrefabValueRefresh::Protection;
+		switch(protection) {
+		case P::Placement: return SelectEditorText(language,"取り付け位置などの配置設定を維持","Preserve attachment placement");
+		case P::Identity: return SelectEditorText(language,"識別情報・Prefab Linkを維持","Preserve identity and Prefab links");
+		case P::UnsupportedComponent: return SelectEditorText(language,"BoneAttachment等の対象外Componentを維持","Preserve unsupported components, including BoneAttachment");
+		case P::ExternalReference: return SelectEditorText(language,"外部・曖昧な参照を維持","Preserve external or ambiguous references");
+		case P::UnsupportedTrack: return SelectEditorText(language,"対象外のアニメーションTrackを維持","Preserve unsupported animation tracks");
+		default: return SelectEditorText(language,"対象外の値を維持","Preserve unsupported values");
+		}
+	}
+
+	std::string WeaponReviewFieldText(EditorLanguage language,const ScenePrefabValueRefresh::RowKey& key) {
+		auto text=[&](const char* jp,const char* en) { return SelectEditorText(language,jp,en); };
+		const auto& path=key.propertyPath;
+		if (key.componentType=="PrefabAnimator" && path=="/clips") return text("姿勢クリップ","Pose clips");
+		if (key.componentType=="AttackSet" && path=="/attacks") return text("攻撃定義","Attack definitions");
+		if (!key.componentLocalId) {
+			if (path=="/transform/translate") return text("位置","Position");
+			if (path=="/transform/rotation") return text("回転","Rotation");
+			if (path=="/transform/scale") return text("拡縮","Scale");
+			if (path=="/active") return text("有効状態","Active");
+		}
+		if (path=="/enabled") return key.componentType+" / "+text("有効状態","Enabled");
+		if (key.componentType=="OBBCollider" || key.componentType=="SphereCollider") {
+			if (path=="/offset") return text("当たり判定の位置","Collider offset");
+			if (path=="/sizeMultiplier") return text("当たり判定の大きさ","Collider size");
+			if (path=="/sphereRadius") return text("当たり判定の半径","Collider radius");
+			if (path=="/active") return text("当たり判定の有効状態","Collider active");
+			if (path=="/isTrigger") return text("Trigger判定として使用","Use as trigger");
+			if (path=="/layer") return text("判定レイヤー","Collision layer");
+			if (path=="/mask") return text("判定対象レイヤー","Collision mask");
+			if (path=="/shape") return text("当たり判定の形状","Collider shape");
+			if (path=="/debugColor") return text("判定の表示色","Collider display color");
+			if (path=="/debugVisible") return text("判定の表示","Collider display");
+		}
+		if (key.componentType=="MeshRenderer") {
+			if (path=="/modelPath") return text("モデル","Model");
+			if (path=="/materialOverrides") return text("マテリアル設定","Material overrides");
+			if (path=="/cullMode") return text("面の描画方法","Face culling");
+			if (path=="/environmentReflectionOverride") return text("環境反射の上書き","Override environment reflection");
+			if (path=="/environmentReflectionIntensity") return text("環境反射の強さ","Environment reflection intensity");
+		}
+		return std::string(text("その他の設定","Other setting"))+" ("+key.componentType+" / "+path+")";
+	}
+}
+
+ImGuiManager::WeaponValueSummary ImGuiManager::SummarizeWeaponValue(
+	const ScenePrefabValueRefresh::Value& value,const ScenePrefabValueRefresh::RowKey& key) const {
+	WeaponValueSummary result;
+	if (!value.present) return result;
+	const auto parsed=nlohmann::json::parse(value.json,nullptr,false);
+	using K=WeaponValueSummary::Kind;
+	if (parsed.is_discarded()) result.kind=K::Invalid;
+	else if (parsed.is_null()) result.kind=K::Null;
+	else if (parsed.is_boolean()) { result.kind=K::Boolean; result.boolean=parsed.get<bool>(); }
+	else if (parsed.is_array()) {
+		result.count=parsed.size(); result.kind=K::Array;
+		const auto& path=key.propertyPath;
+		const bool vectorField=(!key.componentLocalId && (path=="/transform/translate" || path=="/transform/rotation" || path=="/transform/scale")) ||
+			((key.componentType=="OBBCollider" || key.componentType=="SphereCollider") &&
+				(path=="/offset" || path=="/sizeMultiplier" || path=="/debugColor"));
+		if (vectorField && (parsed.size()==3 || parsed.size()==4) &&
+			std::all_of(parsed.begin(),parsed.end(),[](const auto& item) { return item.is_number(); })) {
+			result.kind=K::Vector; result.text=parsed.dump();
+		}
+	} else if (parsed.is_object()) { result.kind=K::Object; result.count=parsed.size(); }
+	else { result.kind=K::Scalar; result.text=parsed.dump(); }
+	return result;
+}
+
+void ImGuiManager::BuildWeaponReviewPresentation() {
+	WeaponReviewPresentation next;
+	next.serial=weaponReviewSerial_;
+	for (size_t i=0;i<weaponPlan_.rows.size();++i) {
+		const auto& row=weaponPlan_.rows[i];
+		if (!WeaponReviewVisible(row)) continue;
+		next.rows.push_back({i,row.classification,SummarizeWeaponValue(row.instance,row.key),SummarizeWeaponValue(row.prefab,row.key)});
+	}
+	// 大きいclips/attacks配列を毎frame整形しない。全文と採用値は元Planだけに保持する。
+	weaponReviewPresentation_=std::move(next);
+}
+
+void ImGuiManager::DrawWeaponPrefabReview() {
+	using namespace ScenePrefabValueRefresh;
+	auto text=[&](const char* jp,const char* en) { return SelectEditorText(editorLanguage_,jp,en); };
+	const char* review=text("武器の保存・反映を確認###WeaponReview","Review weapon save and reflection###WeaponReview");
+	if (weaponReviewRequested_) { ImGui::OpenPopup(review); weaponReviewRequested_=false; }
+	ImGui::SetNextWindowSize(ImVec2(840,660),ImGuiCond_Appearing);
+	if (!ImGui::BeginPopupModal(review,nullptr)) return;
+	// 表示Snapshotが欠けたまま競合を隠さない。全Plan順との一対一対応も再照合する。
+	bool valid=weaponRoundTrip_.active && weaponProposed_ && weaponReviewPresentation_.serial==weaponReviewSerial_ &&
+		weaponSelections_.size()==weaponPlan_.rows.size();
+	size_t projected=0;
+	for (size_t i=0;valid && i<weaponPlan_.rows.size();++i) if (WeaponReviewVisible(weaponPlan_.rows[i])) {
+		valid=projected<weaponReviewPresentation_.rows.size() && weaponReviewPresentation_.rows[projected].planIndex==i &&
+			weaponReviewPresentation_.rows[projected].group==weaponPlan_.rows[i].classification;
+		++projected;
+	}
+	valid=valid && projected==weaponReviewPresentation_.rows.size();
+	if (!valid) {
+		WarnWeaponPrefab("変更一覧の表示情報が失効しました。保存・反映は行わず、変更一覧を開き直してください。","The review display expired. Nothing was saved or reflected. Open the review again.");
+		weaponReviewPresentation_={}; ImGui::CloseCurrentPopup(); ImGui::EndPopup(); return;
+	}
+	// 新しいPlanでは詳細と配置先差分を初期閉じにする。表示順を選択indexに使わない。
+	const auto serialId=std::to_string(weaponReviewSerial_); ImGui::PushID(serialId.c_str());
+	const auto& context=weaponRoundTrip_;
+	const auto sourceName=PathToUtf8(PathFromUtf8(context.sourcePath).filename());
+	const auto targetName=PathToUtf8(PathFromUtf8(context.origin.key).filename());
+	ImGui::TextWrapped("%s: %s",text("保存先","Save to"),sourceName.c_str());
+	ImGui::TextWrapped("%s: %s / %s / %s",text("反映先","Reflect to"),targetName.c_str(),context.actorName.c_str(),context.destination.name.c_str());
+	if (ImGui::TreeNode(text("保存先・反映先の詳細###WeaponDestinations","Destination details###WeaponDestinations"))) {
+		ImGui::TextWrapped("%s: %s\n%s: %s",text("保存先","Save to"),context.sourcePath.c_str(),text("反映先","Reflect to"),context.origin.key.c_str());
+		ImGui::Text("%s: %s\n%s: %llu / %s: %llu / %s: %zu",text("保存PrefabのAsset ID","Source Prefab Asset ID"),context.sourceAsset.c_str(),
+			text("PlayerのEntity ID","Player Entity ID"),static_cast<unsigned long long>(context.attack.actorId),
+			text("武器のEntity ID","Weapon Entity ID"),static_cast<unsigned long long>(context.destination.link.instanceRootId),
+			text("Link深度","Link depth"),context.destination.depth);
+		ImGui::TreePop();
+	}
+	size_t apply=0,unresolved=0,skipped=0,same=0,protectedRows=0,instanceDifferences=0;
+	size_t protectionCounts[static_cast<size_t>(Protection::UnsupportedValue)+1]{};
+	auto countChoices=[&]() {
+		apply=0; unresolved=0;
+		for (size_t i=0;i<weaponPlan_.rows.size();++i) {
+			const auto& row=weaponPlan_.rows[i];
+			if (row.classification==Classification::Conflict && weaponSelections_[i]<0) ++unresolved;
+			if (row.classification!=Classification::Same && row.classification!=Classification::Protected &&
+				weaponSelections_[i]==1 && !(row.prefab==row.instance)) ++apply;
+		}
+	};
+	countChoices();
+	for (const auto& row:weaponPlan_.rows) {
+		if (row.classification==Classification::Same) ++same;
+		else if (row.classification==Classification::InstanceDifference) ++instanceDifferences;
+		else if (row.classification==Classification::Protected) {
+			++protectedRows; if (WeaponReviewVisible(row)) ++skipped;
+			const auto reason=static_cast<size_t>(row.protection);
+			if (reason<std::size(protectionCounts)) ++protectionCounts[reason];
+		}
+	}
+	ImGui::Text("%s %zu / %s %zu / %s %zu",text("反映（項目）","Reflect (items)"),apply,
+		text("未選択の競合","Unresolved conflicts"),unresolved,text("反映されない編集","Edits not reflected"),skipped);
+	ImGui::TextWrapped("%s",text("元Scene / Player Prefabは戻ってから保存してください。","Save the original Scene / Player Prefab after returning."));
+	ImGui::BeginChild("WeaponReviewRows",ImVec2(0,-100),true);
+	auto summaryText=[&](const WeaponValueSummary& summary) -> std::string {
+		using K=WeaponValueSummary::Kind;
+		switch(summary.kind) {
+		case K::Absent: return text("値なし","Absent");
+		case K::Null: return text("未設定","Null");
+		case K::Boolean: return summary.boolean ? text("有効","Enabled") : text("無効","Disabled");
+		case K::Array: return std::to_string(summary.count)+text("件"," elements");
+		case K::Object: return std::to_string(summary.count)+text("項目"," fields");
+		case K::Invalid: return text("値を表示できません（詳細を確認）","Cannot display value (see details)");
+		default: return summary.text;
+		}
+	};
+	auto drawRow=[&](const WeaponReviewRow& entry) {
+		const auto& row=weaponPlan_.rows[entry.planIndex];
+		const auto rowId=std::to_string(entry.planIndex); ImGui::PushID(rowId.c_str());
+		ImGui::Separator();
+		const auto heading=row.entityName+" / "+WeaponReviewFieldText(editorLanguage_,row.key);
+		ImGui::TextUnformatted(heading.c_str());
+		const bool array=entry.instance.kind==WeaponValueSummary::Kind::Array || entry.prefab.kind==WeaponValueSummary::Kind::Array;
+		const auto summary=summaryText(entry.instance)+" → "+summaryText(entry.prefab)+
+			(array ? text("（内容変更・配列全体）"," (content changed; entire array)") : "");
+		// ImGuiで描画をclipする。文字列のbyte切断や、要約値からの書込は行わない。
+		ImGui::TextUnformatted(summary.c_str());
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s",summary.c_str());
+		if (entry.group==Classification::Protected) {
+			ImGui::TextWrapped("%s: %s",text("反映しません","Not reflected"),WeaponProtectionText(editorLanguage_,row.protection));
+			ImGui::TextWrapped("%s",text("Prefabへ保存しても、配置先のこの項目は維持します。","Saving the Prefab keeps this target item unchanged."));
+		} else {
+			auto& selection=weaponSelections_[entry.planIndex];
+			const char* choice=selection<0 ? text("未選択","Choose...") : selection ? text("Prefabの値を反映","Use Prefab value") : text("配置先を維持","Keep target value");
+			if (ImGui::BeginCombo(text("選択###WeaponValueChoice","Choice###WeaponValueChoice"),choice)) {
+				if (ImGui::Selectable(text("配置先を維持","Keep target value"),selection==0)) selection=0;
+				if (ImGui::Selectable(text("Prefabの値を反映","Use Prefab value"),selection==1)) selection=1;
+				ImGui::EndCombo();
+			}
+		}
+		if (ImGui::TreeNode(text("詳細###WeaponValueDetails","Details###WeaponValueDetails"))) {
+			ImGui::BeginChild("WeaponValueContents",ImVec2(0,240),true,ImGuiWindowFlags_HorizontalScrollbar);
+			ImGui::Text("%s: %llu / %s: %llu / %s: %llu",text("元PrefabのEntity ID","Source Prefab Entity ID"),static_cast<unsigned long long>(row.key.entityLocalId),
+				text("配置先のEntity ID","Target Entity ID"),static_cast<unsigned long long>(row.instanceEntityId),
+				text("Component local ID","Component local ID"),static_cast<unsigned long long>(row.key.componentLocalId));
+			ImGui::TextUnformatted((row.key.componentType+" / "+row.key.propertyPath).c_str());
+			auto fullValue=[&](const char* caption,const Value& value) {
+				ImGui::SeparatorText(caption);
+				if (!value.present) { ImGui::TextUnformatted(text("値なし","Absent")); return; }
+				const auto parsed=nlohmann::json::parse(value.json,nullptr,false);
+				if (parsed.is_array()) {
+					ImGui::Text("%s: %zu",text("要素数","Elements"),parsed.size());
+					for (const auto& item:parsed) if (item.is_object() && item.contains("name") && item["name"].is_string())
+						ImGui::TextUnformatted(item["name"].get<std::string>().c_str());
+				}
+				const auto contents=parsed.is_discarded() ? value.json : parsed.dump(2);
+				ImGui::TextUnformatted(contents.c_str());
+			};
+			fullValue(text("B：編集前 / 前回反映時","B: baseline / previous reflection"),row.baseline);
+			fullValue(text("P：保存・反映するPrefab","P: Prefab to save and reflect"),row.prefab);
+			fullValue(text("T：現在の配置先","T: current target"),row.instance);
+			ImGui::EndChild(); ImGui::TreePop();
+		}
+		ImGui::PopID();
+	};
+	auto drawGroup=[&](Classification group,const char* label) {
+		const bool exists=std::any_of(weaponReviewPresentation_.rows.begin(),weaponReviewPresentation_.rows.end(),[&](const auto& row) { return row.group==group; });
+		if (!exists) return;
+		ImGui::SeparatorText(label);
+		for (const auto& row:weaponReviewPresentation_.rows) if (row.group==group) drawRow(row);
+	};
+	drawGroup(Classification::Conflict,text("競合：値を選択してください","Conflicts: choose values"));
+	drawGroup(Classification::Protected,text("反映されない編集","Edits not reflected"));
+	drawGroup(Classification::SourceChanged,text("今回の変更","Changes from the Prefab"));
+	if (instanceDifferences) {
+		const auto label=std::string(text("配置先独自の差分 ","Instance differences "))+std::to_string(instanceDifferences)+"###WeaponInstanceDifferences";
+		if (ImGui::TreeNode(label.c_str())) {
+			for (const auto& row:weaponReviewPresentation_.rows) if (row.group==Classification::InstanceDifference) drawRow(row);
+			ImGui::TreePop();
+		}
+	}
+	ImGui::Separator();
+	ImGui::Text("%s: %zu",text("変更なし（項目）","Unchanged (items)"),same);
+	const auto protectionLabel=std::string(text("保護して維持（項目）: ","Protected and kept (items): "))+std::to_string(protectedRows)+"###WeaponProtectionSummary";
+	if (ImGui::TreeNode(protectionLabel.c_str())) {
+		ImGui::TextWrapped("%s",text("反映されない編集の件数も含みます。保護対象は上書きしません。","Includes edits not reflected. Protected values are never overwritten."));
+		for (size_t i=0;i<std::size(protectionCounts);++i) if (protectionCounts[i])
+			ImGui::TextWrapped("%s: %zu",WeaponProtectionText(editorLanguage_,static_cast<Protection>(i)),protectionCounts[i]);
+		ImGui::TreePop();
+	}
+	ImGui::EndChild();
+	// 同frameの選択変更も下端の条件へ反映する。集計元は省略していない全Plan。
+	countChoices();
+	if (unresolved) ImGui::TextWrapped("%s: %zu",text("競合を選択してください","Choose values for conflicts"),unresolved);
+	else if (!apply) ImGui::TextWrapped("%s",text("元の武器への反映はありません。未保存の武器Prefabがあれば保存します。","No target values will change. Unsaved weapon Prefab edits will be saved."));
+	const auto confirm=std::string(text("保存して確定（反映","Save and confirm (reflect "))+std::to_string(apply)+text("項目）###ConfirmWeapon"," items)###ConfirmWeapon");
+	ImGui::BeginDisabled(unresolved!=0);
+	if (ImGui::Button(confirm.c_str())) { QueueWeaponCommand(WeaponCommand::Confirm); ImGui::CloseCurrentPopup(); }
+	ImGui::EndDisabled(); ImGui::SameLine();
+	if (ImGui::Button(text("取消###CancelWeaponReview","Cancel###CancelWeaponReview"))) {
+		weaponReviewPresentation_={}; ImGui::CloseCurrentPopup();
+	}
+	ImGui::PopID(); ImGui::EndPopup();
+}
+
+void ImGuiManager::DrawWeaponPrefabDialogs() {
+	auto text=[&](const char* jp,const char* en) { return SelectEditorText(editorLanguage_,jp,en); };
+	const char* picker=text("編集する武器Prefabを選択###WeaponPicker","Choose the weapon Prefab###WeaponPicker");
+	if (weaponPickerRequested_) { ImGui::OpenPopup(picker); weaponPickerRequested_=false; }
+	ImGui::SetNextWindowSize(ImVec2(680,0),ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(picker,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s",text("攻撃の所有Entityに複数のPrefab Linkがあります。武器の元AssetとインスタンスRootを明示してください。Player本体のPrefabは選べません。","The attack owner has multiple Prefab links. Choose the weapon asset and instance root explicitly. A Player body Prefab is unsupported."));
+		for (size_t i=0;i<weaponDestinations_.size();++i) {
+			const auto& item=weaponDestinations_[i]; ImGui::PushID(static_cast<int>(i));
+			if (ImGui::Selectable(item.name.c_str(),weaponDestinationIndex_==static_cast<int>(i))) weaponDestinationIndex_=static_cast<int>(i);
+			ImGui::TextWrapped("%s / ID %llu / Link %zu / Asset %s",item.path.c_str(),static_cast<unsigned long long>(item.link.instanceRootId),item.depth,item.link.assetId.c_str());
+			ImGui::PopID();
+		}
+		ImGui::BeginDisabled(weaponDestinationIndex_<0);
+		if (ImGui::Button(text("この武器を編集###PickWeapon","Edit this weapon###PickWeapon"))) { QueueWeaponCommand(WeaponCommand::Pick); ImGui::CloseCurrentPopup(); }
+		ImGui::EndDisabled(); ImGui::SameLine();
+		if (ImGui::Button(text("取消###CancelWeaponPicker","Cancel###CancelWeaponPicker"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	const char* switching=text("現在のPrefabの未保存変更###WeaponSwitch","Unsaved edits in current Prefab###WeaponSwitch");
+	if (weaponSwitchRequested_) { ImGui::OpenPopup(switching); weaponSwitchRequested_=false; }
+	if (ImGui::BeginPopupModal(switching,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s",text("別のPrefabに未保存変更があります。武器を開く前に保存または破棄を選んでください。取消なら現在の編集を続けます。","Another Prefab has unsaved changes. Save or discard them before opening the weapon. Cancel to continue editing it."));
+		if (ImGui::Button(text("保存して武器を開く###SaveEnterWeapon","Save and open weapon###SaveEnterWeapon"))) { QueueWeaponCommand(WeaponCommand::SaveCurrentAndEnter); ImGui::CloseCurrentPopup(); }
+		ImGui::SameLine();
+		if (ImGui::Button(text("未保存変更を破棄して開く###DiscardEnterWeapon","Discard unsaved edits and open###DiscardEnterWeapon"))) { QueueWeaponCommand(WeaponCommand::DiscardCurrentAndEnter); ImGui::CloseCurrentPopup(); }
+		ImGui::SameLine();
+		if (ImGui::Button(text("取消###CancelWeaponSwitch","Cancel###CancelWeaponSwitch"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	DrawWeaponPrefabReview();
+	const char* returning=text("武器を反映せず戻りますか###WeaponReturn","Return without reflecting the weapon?###WeaponReturn");
+	if (weaponReturnRequested_) { ImGui::OpenPopup(returning); weaponReturnRequested_=false; }
+	ImGui::SetNextWindowSize(ImVec2(630,0),ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(returning,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		const bool dirty=prefabEditorSession_ && prefabEditorSession_->IsDirty();
+		ImGui::TextWrapped("%s",dirty ? text("武器に未保存変更があります。保存・反映を確認するか、反映せず戻る方法を選んでください。","The weapon has unsaved edits. Review save/reflection or choose how to return without reflecting.") :
+			text("保存済みの武器に未反映の変更があります。保存済みファイルは戻る操作では巻き戻しません。","The saved weapon has unreflected changes. Returning does not roll back its saved file."));
+		if (ImGui::Button(text("保存・反映を再確認###ReviewBeforeReturn","Review save/reflection###ReviewBeforeReturn"))) { QueueWeaponCommand(WeaponCommand::Review); ImGui::CloseCurrentPopup(); }
+		if (dirty) {
+			if (ImGui::Button(text("武器だけ保存して戻る（反映しない）###SaveReturnWeapon","Save weapon only and return (no reflection)###SaveReturnWeapon"))) { QueueWeaponCommand(WeaponCommand::SaveAndReturn); ImGui::CloseCurrentPopup(); }
+			if (ImGui::Button(text("未保存変更を破棄して戻る（反映しない）###DiscardReturnWeapon","Discard unsaved edits and return (no reflection)###DiscardReturnWeapon"))) { QueueWeaponCommand(WeaponCommand::DiscardAndReturn); ImGui::CloseCurrentPopup(); }
+		} else if (ImGui::Button(text("反映せず戻る###ReturnWithoutWeapon","Return without reflection###ReturnWithoutWeapon"))) { QueueWeaponCommand(WeaponCommand::ReturnWithoutApply); ImGui::CloseCurrentPopup(); }
+		if (ImGui::Button(text("取消・武器編集を続ける###CancelWeaponReturn","Cancel; continue editing weapon###CancelWeaponReturn"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	const char* help=text("武器Prefabの保存と往復###WeaponHelpReference","Weapon Prefab save and round trip###WeaponHelpReference");
+	if (weaponHelpRequested_) { ImGui::OpenPopup(help); weaponHelpRequested_=false; }
+	ImGui::SetNextWindowSize(ImVec2(650,540),ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(help,nullptr)) {
+		ImGui::BeginChild("WeaponHelpContents",ImVec2(0,-40));
+		PlayerCombatEditor::DrawReference(editorLanguage_);
+		DrawWeaponRefreshValidationReference();
+		ImGui::EndChild();
+		if (ImGui::Button(text("閉じる###CloseWeaponHelp","Close###CloseWeaponHelp"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+	const char* warning=text("武器の操作結果・確認###WeaponOperationNotice","Weapon operation result / notice###WeaponOperationNotice");
+	if (weaponWarningRequested_) { ImGui::OpenPopup(warning); weaponWarningRequested_=false; }
+	ImGui::SetNextWindowSize(ImVec2(620,0),ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(warning,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s",text(weaponWarningJP_.c_str(),weaponWarningEN_.c_str()));
+		if (!weaponWarningDetail_.empty() && ImGui::TreeNode(text("識別情報・詳細","Identifiers / details"))) { ImGui::TextWrapped("%s",weaponWarningDetail_.c_str()); ImGui::TreePop(); }
+		if (ImGui::Button(text("閉じる###DismissWeaponNotice","Close###DismissWeaponNotice"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
 }
 
 void ImGuiManager::ApplyPlayerCombatRequests(SceneDocument& suppliedDocument, bool prefab) {
@@ -14783,6 +15674,12 @@ void ImGuiManager::ApplyPlayerCombatRequests(SceneDocument& suppliedDocument, bo
 	if (navigation.operation == Operation::None) return;
 	const auto current = MakePlayerCombatToken(document,prefab);
 	if (!Matches(navigation.token,current)) { WarnPlayerCombat(navigation,{IssueCode::Stale,{}}); return; }
+	if (navigation.operation==Operation::EditWeaponPrefab || navigation.operation==Operation::BindWeaponPrefab) {
+		QueueWeaponEntry(navigation); return;
+	}
+	if (navigation.operation == Operation::PreviewAttack) {
+		StartPlayerAttackPreview(document,navigation); return;
+	}
 	if (navigation.operation == Operation::OpenPrefab) {
 		if (!editable) { WarnPlayerCombat(navigation,{IssueCode::Playing,{}}); return; }
 		const auto* target = document.FindEntity(navigation.subject.entityId);
@@ -14842,13 +15739,189 @@ void ImGuiManager::ApplyPlayerCombatRequests(SceneDocument& suppliedDocument, bo
 	if (navigation.operation == Operation::ReturnToActor) playerCombatContexts_[targetPrefab ? 1 : 0].reveal = true;
 }
 
+void ImGuiManager::StopPlayerAttackPreview() {
+	if (attackHitDirty_) WarnAttackHitBox("プレビュー終了により未適用候補を破棄しました。再開始して設定してください。","Unapplied draft discarded because preview ended. Restart to edit.");
+	ResetAttackHitBoxEdit();
+	if (attackPreviewActive_) showPrefab_ = attackPreviewPreviousWindow_;
+	attackPreviewActive_ = false; attackPreviewPlaying_ = false; attackPreviewVisible_ = false;
+	attackPreview_.Clear(); attackPreviewTime_ = 0; attackPreviewKey_.clear(); attackInspector_=true; attackView_={}; attackFit_=PlayerCombatPreview::Fit::All; attackInput_=AttackInput::None; ++attackCameraSerial_;
+	prefabPreviewRequestedPath_.clear(); prefabPreviewRenderedPath_.clear();
+	// 旧Timeline/空間Previewは明示再開まで停止のままにする。
+}
+
+void ImGuiManager::StartPlayerAttackPreview(const SceneDocument& document, const PlayerCombatEditor::Request& request) {
+	if (attackPreviewActive_ && !GuardAttackHitBoxDraft(attackPreviewToken_.prefab)) return;
+	auto reject = [&](const char* ja, const char* en) {
+		attackPreviewIssue_ = {ja,en,{}}; attackPreviewWarningRequested_ = true;
+	};
+	if (!editorSession_ || !editorSession_->IsEditing()) {
+		reject("攻撃プレビューを開始できません。Playを停止して再操作してください。","Cannot start attack preview. Stop Play and retry."); return;
+	}
+	if (rotationModeDraft_.active || spatialDraft_.kind != SpatialDraftKind::None || prefabHitBoxSetupMode_ || ImGuizmo::IsUsing() || uiMigrationOpen_) {
+		reject("攻撃プレビューを開始できません。未適用の姿勢・HitBox・移行操作を適用または取消し、再操作してください。","Cannot start attack preview. Apply or cancel pending pose, HitBox or migration operations, then retry."); return;
+	}
+	PlayerCombatPreview candidate;
+	if (!candidate.RebuildAndSample(document,request.subject,0)) {
+		attackPreviewIssue_ = candidate.GetIssue(); attackPreviewWarningRequested_ = true; return;
+	}
+	const bool previousWindow = attackPreviewActive_ ? attackPreviewPreviousWindow_ : showPrefab_;
+	StopPlayerAttackPreview();
+	attackPreviewPreviousWindow_ = previousWindow;
+	attackPreview_ = std::move(candidate); attackPreviewToken_ = request.token; attackPreviewSubject_ = request.subject;
+	attackPreviewSceneToken_ = MakePlayerCombatToken(editorSession_->GetEditDocument(),false);
+	attackPreviewHadPrefab_ = prefabEditorSession_ && prefabEditorSession_->IsOpen();
+	attackPreviewPrefabToken_ = attackPreviewHadPrefab_ ? MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true) : PlayerCombatEditor::DocumentToken{};
+	attackPreviewTime_ = 0; attackPreviewActive_ = true;
+	attackPreviewSampleTime_ = 0;
+	attackPreviewKey_ = "AttackPreview:" + request.token.key + "#" + std::to_string(++attackPreviewSelectionSerial_);
+	spatialPlaying_ = false; spatialFrame_ = {};
+	prefabAnimationPreviewPlaying_ = false; prefabAnimationPreviewActive_ = false; playerCombatPreviewEnabled_ = false;
+	showPrefab_ = true; prefabFocusFramesRemaining_ = 2; ++prefabPreviewFramingSerial_;
+	attackPreviewIssue_ = {};
+}
+
+bool ImGuiManager::RefreshPlayerAttackPreview() {
+	if (!attackPreviewActive_) return false;
+	if (!editorSession_ || !editorSession_->IsEditing()) { StopPlayerAttackPreview(); return false; }
+	auto sameIdentity = [](const auto& a, const auto& b) {
+		return a.prefab == b.prefab && a.key == b.key && a.epoch == b.epoch && a.generation == b.generation;
+	};
+	const bool hasPrefab = prefabEditorSession_ && prefabEditorSession_->IsOpen();
+	if (!sameIdentity(attackPreviewSceneToken_,MakePlayerCombatToken(editorSession_->GetEditDocument(),false)) ||
+		hasPrefab != attackPreviewHadPrefab_ || (hasPrefab && !sameIdentity(attackPreviewPrefabToken_,MakePlayerCombatToken(prefabEditorSession_->GetDocument(),true)))) {
+		attackPreviewIssue_ = {"編集元が切り替わったため攻撃プレビューを終了しました。現在の攻撃から再開始してください。","Attack preview ended because the document changed. Restart from the current attack.",{}};
+		attackPreviewWarningRequested_ = true; StopPlayerAttackPreview(); return false;
+	}
+	const auto& source = attackPreviewToken_.prefab ? prefabEditorSession_->GetDocument() : editorSession_->GetEditDocument();
+	const auto current = MakePlayerCombatToken(source,attackPreviewToken_.prefab);
+	if (current.revision != attackPreviewToken_.revision) {
+		if (attackHitDirty_) WarnAttackHitBox("原本が変更されたため候補を無効化しました。区間を選び直してください。","Source changed; draft invalidated. Select the window again.");
+		ResetAttackHitBoxEdit();
+		attackPreviewPlaying_ = false;
+		prefabPreviewRenderedPath_.clear(); // 編集前の画像を変更後の設定として表示しない。
+	}
+	if (rotationModeDraft_.active || spatialDraft_.kind != SpatialDraftKind::None || prefabHitBoxSetupMode_ || uiMigrationOpen_) {
+		attackPreviewIssue_ = {"別のPreview編集が始まったため終了しました。候補を適用または取消して再開始してください。","Another preview edit started. Apply or cancel it before restarting attack preview.",{}};
+		attackPreviewWarningRequested_ = true; StopPlayerAttackPreview(); return false;
+	}
+	// 同じ原本/時刻をUIとRenderの双方から要求してもコピーを再生成しない。
+	const bool needsSample = current.revision != attackPreviewToken_.revision || attackPreviewSampleTime_ != attackPreviewTime_ || attackHitSampleSerial_ != attackHitSerial_ || !attackPreview_.GetDocument();
+	bool sampled = true;
+	if (needsSample) {
+		if (attackHitDirty_) {
+			SceneDocument candidate = source;
+			PlayerCombatEditor::WriteHitBoxFields(candidate,attackHitValid_);
+			sampled = attackPreview_.RebuildAndSample(candidate,attackPreviewSubject_,attackPreviewTime_);
+			if (sampled && attackHitSelected_) sampled = AttackHitShapeFinite(*attackPreview_.GetDocument(),attackHitEdit_.selection.entity);
+			if (!sampled) {
+				attackPreviewPlaying_ = false;
+				attackHitValidInput_ = false;
+				attackHitErrorJa_ = "候補を表示できません。入力を修正または取消してください。";
+				attackHitErrorEn_ = "Cannot display draft. Correct or cancel it.";
+				sampled = attackPreview_.RebuildAndSample(source,attackPreviewSubject_,attackPreviewTime_);
+			}
+		} else sampled = attackPreview_.RebuildAndSample(source,attackPreviewSubject_,attackPreviewTime_);
+		attackHitSampleSerial_ = attackHitSerial_;
+	}
+	if (!sampled) {
+		attackPreviewIssue_ = attackPreview_.GetIssue(); attackPreviewWarningRequested_ = true;
+		StopPlayerAttackPreview(); return false;
+	}
+	attackPreviewTime_ = (std::min)(attackPreviewTime_,attackPreview_.GetDuration());
+	attackPreviewSampleTime_ = attackPreviewTime_;
+	attackPreviewToken_ = current;
+	return true;
+}
+
+void ImGuiManager::UpdatePlayerCombatPreview(float deltaTime) {
+	attackHitFocus_ = false;
+	if(attackPreviewActive_ && ImGui::GetIO().AppFocusLost){
+		if(attackInput_==AttackInput::Gizmo){attackHitEdit_=attackDragStartEdit_;attackGizmoWaitRelease_=true;QueueAttackHitCandidate();}
+		if(attackInput_==AttackInput::KeyTime){const size_t i=AttackKeyIndex();if(i<attackHitEdit_.track.keys.size()){attackHitEdit_.track.keys[i].time=attackKeyDragTime_;QueueAttackHitCandidate();}}
+		attackHitDragging_=false;attackInput_=AttackInput::None;attackPreviewPlaying_=false;
+	}
+	if (!attackPreviewActive_ || !RefreshPlayerAttackPreview()) return;
+	if (!showPrefab_ || !attackPreviewVisible_) attackPreviewPlaying_ = false;
+	if (attackPreviewPlaying_ && std::isfinite(deltaTime) && deltaTime > 0) {
+		// doubleで加算して有限な大deltaでもfloat overflowを避ける。
+		attackPreviewTime_ = static_cast<float>((std::min)(static_cast<double>(attackPreview_.GetDuration()),static_cast<double>(attackPreviewTime_) + deltaTime));
+		if (attackPreviewTime_ >= attackPreview_.GetDuration()) attackPreviewPlaying_ = false;
+	}
+	attackPreviewVisible_ = false;
+}
+
+void ImGuiManager::DrawPlayerAttackPreview() {
+	if(!RefreshPlayerAttackPreview())return;
+	attackPreviewVisible_=true;
+	const auto text=[&](const char* ja,const char* en){return SelectEditorText(editorLanguage_,ja,en);};
+	ImGui::Text("%s / %s",attackPreviewSubject_.attackName.c_str(),attackPreviewToken_.prefab?"Prefab":"Scene");
+	ImGui::BeginDisabled(attackInput_!=AttackInput::None);
+	if(ImGui::Button(text("判定Inspectorを表示","Show hit Inspector"))){attackInspector_=true;if(attackPreviewToken_.prefab){showPrefabInspector_=true;prefabInspectorRevealRequested_=true;}else{showInspector_=true;revealInspectorRequested_=true;}}
+	if(ImGui::GetWindowWidth()>650)ImGui::SameLine();if(ImGui::Button(text("選択へ注目","Frame selected"))){attackFit_=PlayerCombatPreview::Fit::Selected;++attackCameraSerial_;}
+	if(ImGui::GetWindowWidth()>650)ImGui::SameLine();if(ImGui::Button(text("全体表示","Frame all"))){attackFit_=PlayerCombatPreview::Fit::All;++attackCameraSerial_;}
+	if(ImGui::GetWindowWidth()>650)ImGui::SameLine();if(ImGui::Button(text("視点リセット","Reset view"))){attackView_.yaw=.65f;attackView_.pitch=.25f;attackFit_=PlayerCombatPreview::Fit::All;++attackCameraSerial_;}
+	if(ImGui::CollapsingHeader(text("編集元・操作・制限","Source, operations and limits"))){
+		ImGui::TextWrapped("%s",attackPreviewToken_.key.c_str());
+		ImGui::TextWrapped("%s",text("右ドラッグ：回転 / 中またはShift+右：パン / ホイール：ズーム。実命中・骨追従・開始blendはPlayで確認してください。","Right drag: orbit / Middle or Shift+right: pan / Wheel: zoom. Verify hits, attachments and initial blend in Play."));
+		if(ImGui::Button(text("使い方","Reference")))playerCombatReferenceRequested_=true;
+		if(ImGui::GetWindowWidth()>650)ImGui::SameLine();if(ImGui::Button(text("編集元を保存","Save source")))attackHitCommand_=1;
+		if(ImGui::GetWindowWidth()>650)ImGui::SameLine();if(ImGui::Button(text("元に戻す","Undo")))attackHitCommand_=2;
+		if(ImGui::GetWindowWidth()>650)ImGui::SameLine();if(ImGui::Button(text("やり直す","Redo")))attackHitCommand_=3;
+		if(ImGui::Button(text("通常のPrefab表示へ","Return to Prefab view"))&&GuardAttackHitBoxDraft(attackPreviewToken_.prefab)){ImGui::EndDisabled();StopPlayerAttackPreview();return;}
+	}
+	ImGui::EndDisabled();
+	const auto available=ImGui::GetContentRegionAvail();
+	const float regionHeight=(std::max)(available.y-attackTimelineHeight_-7,40.0f);
+	const float regionWidth=(std::max)(available.x,1.0f);
+	const uint32_t renderWidth=static_cast<uint32_t>(std::clamp(regionWidth,320.0f,1600.0f));
+	const uint32_t renderHeight=static_cast<uint32_t>(std::clamp(regionHeight,180.0f,900.0f));
+	const float aspect=static_cast<float>(renderWidth)/renderHeight;
+	const float imageWidth=(std::min)(regionWidth,regionHeight*aspect),imageHeight=imageWidth/aspect;
+	if(attackHitDragging_ && (imageWidth!=attackImageWidth_ || imageHeight!=attackImageHeight_)){
+		attackHitEdit_=attackDragStartEdit_;attackGizmoWaitRelease_=true;attackHitDragging_=false;attackInput_=AttackInput::None;QueueAttackHitCandidate();
+		WarnAttackHitBox("画面サイズが変わったためハンドル操作を取り消しました。再操作してください。","Viewport resized. Handle operation was cancelled; retry.");
+	}
+	if(attackInput_==AttackInput::KeyTime && (imageWidth!=attackImageWidth_ || imageHeight!=attackImageHeight_)){
+		const size_t key=AttackKeyIndex();if(key<attackHitEdit_.track.keys.size()){attackHitEdit_.track.keys[key].time=attackKeyDragTime_;QueueAttackHitCandidate();}
+		attackInput_=AttackInput::None;WarnAttackHitBox("画面サイズが変わったためキー移動を取り消しました。再操作してください。","Viewport resized. Key move was cancelled; retry.");
+	}
+	attackImageWidth_=imageWidth;attackImageHeight_=imageHeight;
+	prefabPreviewRequestedWidth_=renderWidth;
+	prefabPreviewRequestedHeight_=renderHeight;
+	ImGui::BeginChild("AttackVolumeImage",ImVec2(0,regionHeight),ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+	const auto origin=ImGui::GetCursorScreenPos();
+	if(prefabPreviewTexture_.ptr && prefabPreviewRenderedPath_==attackPreviewKey_ && prefabPreviewRenderedRevision_==prefabPreviewRequestedRevision_ && prefabPreviewTextureWidth_==renderWidth && prefabPreviewTextureHeight_==renderHeight){
+		ImGui::Image(ImTextureRef(static_cast<ImTextureID>(prefabPreviewTexture_.ptr)),ImVec2(imageWidth,imageHeight));
+		UpdateAttackCamera(origin.x,origin.y,imageWidth,imageHeight);
+		DrawAttackHitBoxGizmo(origin.x,origin.y,imageWidth,imageHeight);
+	}else{ImGui::TextDisabled("%s",text("表示を更新しています","Updating preview"));ImGui::Dummy(ImVec2(imageWidth,imageHeight));}
+	ImGui::EndChild();
+	ImGui::InvisibleButton("##AttackSplit",ImVec2(imageWidth,5));
+	if(ImGui::IsItemActive() && attackInput_==AttackInput::None)attackTimelineHeight_=std::clamp(attackTimelineHeight_-ImGui::GetIO().MouseDelta.y,90.0f,(std::max)(90.0f,available.y-40));
+	DrawAttackTimeline();
+}
 void ImGuiManager::DrawPlayerCombatDialogs() {
+	const char* previewTitle = SelectEditorText(editorLanguage_,"攻撃プレビューの操作結果###AttackPreviewWarning","Attack preview operation result###AttackPreviewWarning");
+	if (attackPreviewWarningRequested_) { ImGui::OpenPopup(previewTitle); attackPreviewWarningRequested_ = false; }
+	if (ImGui::BeginPopupModal(previewTitle,nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextUnformatted(SelectEditorText(editorLanguage_,"攻撃プレビューの開始・更新","Start or update attack preview"));
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+440);
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,attackPreviewIssue_.japanese.c_str(),attackPreviewIssue_.english.c_str()));
+		if (!attackPreviewIssue_.detail.empty()) {
+			ImGui::SeparatorText(SelectEditorText(editorLanguage_, "対象・詳細", "Target / details"));
+			ImGui::TextWrapped("%s", attackPreviewIssue_.detail.c_str());
+		}
+		ImGui::PopTextWrapPos();
+		if (ImGui::Button(SelectEditorText(editorLanguage_,"閉じる","Close"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
 	using namespace PlayerCombatEditor;
 	const char* title = SelectEditorText(editorLanguage_,"プレイヤー設定を適用できません###PlayerCombatWarning","Player edit could not be applied###PlayerCombatWarning");
 	if (playerCombatWarningRequested_) { ImGui::OpenPopup(title); playerCombatWarningRequested_ = false; }
 	ImGui::SetNextWindowSize(ImVec2(500,240),ImGuiCond_Appearing);
 	if (ImGui::BeginPopupModal(title,nullptr,ImGuiWindowFlags_None)) {
 		const char* operation = playerCombatWarningOperation_ == Operation::AddReaction ? SelectEditorText(editorLanguage_,"吹き飛び設定の追加","Add knockback") :
+			playerCombatWarningOperation_ == Operation::PreviewAttack ? SelectEditorText(editorLanguage_,"攻撃プレビューの開始","Start attack preview") :
 			playerCombatWarningOperation_ == Operation::EditAttack ? SelectEditorText(editorLanguage_,"攻撃設定の変更","Edit attack") :
 			playerCombatWarningOperation_ == Operation::EditReaction ? SelectEditorText(editorLanguage_,"被弾設定の変更","Edit hit reaction") :
 			SelectEditorText(editorLanguage_,"設定先への移動","Open settings source");
@@ -14862,6 +15935,7 @@ void ImGuiManager::DrawPlayerCombatDialogs() {
 	ImGui::SetNextWindowSize(ImVec2(560,540),ImGuiCond_FirstUseEver);
 	if (ImGui::BeginPopupModal(reference,nullptr,ImGuiWindowFlags_None)) {
 		PlayerCombatEditor::DrawReference(editorLanguage_);
+		DrawWeaponRefreshValidationReference();
 		if (ImGui::Button(SelectEditorText(editorLanguage_,"閉じる","Close"))) ImGui::CloseCurrentPopup();
 		ImGui::EndPopup();
 	}
@@ -14889,6 +15963,7 @@ void ImGuiManager::DrawInspectorWindow() {
 		&showInspector_,
 		ImGuiWindowFlags_AlwaysVerticalScrollbar
 	);
+	if(attackPreviewActive_ && !attackPreviewToken_.prefab && DrawAttackHitInspector(false)){ImGui::End();return;}
 	DrawSceneComponentPicker();
 
 	if (!selectedProjectFile_.empty()) {
@@ -22256,6 +23331,9 @@ void ImGuiManager::RequestOpenPrefab(
 	const std::string& filePath,
 	int historyIndex
 ) {
+	if (weaponRoundTrip_.active && WeaponCanonicalPath(filePath)!=weaponRoundTrip_.sourcePath) {
+		WarnWeaponPrefab("別Prefabを開けません。先に『元のPlayerへ戻る』で武器の往復を終了してください。","Cannot open another Prefab. End the weapon round trip using Return to original Player first."); return;
+	}
 	if (!prefabEditorSession_ || filePath.empty()) {
 		return;
 	}
@@ -22320,6 +23398,9 @@ bool ImGuiManager::OpenPrefab(
 	const std::string& filePath,
 	int historyIndex
 ) {
+	if (weaponRoundTrip_.active && WeaponCanonicalPath(filePath)!=weaponRoundTrip_.sourcePath) {
+		WarnWeaponPrefab("別Prefabを開けません。先に『元のPlayerへ戻る』で武器の往復を終了してください。","Cannot open another Prefab. End the weapon round trip using Return to original Player first."); return false;
+	}
 	if (!prefabEditorSession_ || filePath.empty()) {
 		return false;
 	}
@@ -22337,6 +23418,7 @@ bool ImGuiManager::OpenPrefab(
 	}
 
 	ResetComponentPicker(prefabComponentPicker_);
+	ResetPrefabAnimationGhost(true);
 	showPrefab_ = true;
 	prefabFocusFramesRemaining_ = 2;
 	const SceneDocument& prefab = prefabEditorSession_->GetDocument();
@@ -23044,6 +24126,22 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 }
 
 void ImGuiManager::DrawPrefabWindow() {
+	if (attackPreviewActive_) {
+		if (prefabFocusFramesRemaining_ > 0) { ImGui::SetNextWindowFocus(); --prefabFocusFramesRemaining_; }
+		bool open = true;
+		if (ImGui::Begin("Prefab",&open,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)) DrawPlayerAttackPreview();
+		else attackPreviewPlaying_ = false;
+		attackHitFocus_ |= ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		prefabKeyboardFocusThisFrame_ |= attackHitFocus_;
+		ImGui::End();
+		if (!open && GuardAttackHitBoxDraft(attackPreviewToken_.prefab)) StopPlayerAttackPreview();
+		// 数値編集は元Prefab Inspector/Sessionで継続可能。表示コピーを渡さない。
+		if (prefabEditorSession_ && prefabEditorSession_->IsOpen()) {
+			prefabEditorSession_->BeginEditFrame(); DrawPrefabInspectorWindow();
+			prefabEditorSession_->EndEditFrame(!ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left));
+		}
+		return;
+	}
 	if (!prefabEditorSession_) {
 		showPrefab_ = false;
 		return;
@@ -23078,7 +24176,8 @@ void ImGuiManager::DrawPrefabWindow() {
 			prefabEditorSession_->EndEditFrame(!editingInteractionActive);
 		}
 		if (!windowOpen) {
-			if (prefabEditorSession_->IsDirty()) {
+			if (weaponRoundTrip_.active) QueueWeaponCommand(WeaponCommand::Return);
+			else if (prefabEditorSession_->IsDirty()) {
 				prefabClosePopupRequested_ = true;
 			} else {
 				ClosePrefabWorkspace();
@@ -23235,13 +24334,9 @@ void ImGuiManager::DrawPrefabWindow() {
 	ImGui::TextUnformatted(prefabEditorSession_->GetFilePath().c_str());
 	if (prefabEditorSession_->IsDirty()) {
 		ImGui::SameLine();
-		ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.25f, 1.0f), "Unsaved");
+		ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.25f, 1.0f), "%s", SelectEditorText(editorLanguage_,"未保存","Unsaved"));
 	}
-	if (ImGui::Button("Save")) {
-		if (CanSaveAnimationRotationMode(true) && prefabEditorSession_->Save()) {
-			InvalidateProjectCache();
-		}
-	}
+	DrawWeaponPrefabControls();
 	ImGui::SameLine();
 	ImGui::BeginDisabled(!prefabEditorSession_->CanUndo());
 	if (ImGui::Button("Undo")) {
@@ -23436,7 +24531,8 @@ void ImGuiManager::DrawPrefabWindow() {
 	}
 
 	if (!windowOpen) {
-		if (prefabEditorSession_->IsDirty()) {
+		if (weaponRoundTrip_.active) QueueWeaponCommand(WeaponCommand::Return);
+		else if (prefabEditorSession_->IsDirty()) {
 			prefabClosePopupRequested_ = true;
 		} else {
 			ClosePrefabWorkspace();
@@ -23468,6 +24564,7 @@ void ImGuiManager::DrawPrefabInspectorWindow() {
 		&windowOpen,
 		ImGuiWindowFlags_NoFocusOnAppearing
 	);
+	if (attackPreviewActive_ && !attackInspector_ && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) attackHitFocus_ = false;
 	if (prefabInspectorRevealRequested_) {
 		// タブの表示だけを予約し、Prefab ViewからキーボードFocusを移さない。
 		ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -23483,6 +24580,7 @@ void ImGuiManager::DrawPrefabInspectorWindow() {
 		}
 		prefabInspectorRevealRequested_ = false;
 	}
+	if(inspectorContentsVisible && attackPreviewActive_ && attackPreviewToken_.prefab && DrawAttackHitInspector(true)){ImGui::End();showPrefabInspector_=windowOpen;return;}
 	DrawPrefabComponentPicker();
 	prefabKeyboardFocusThisFrame_ |= ImGui::IsWindowFocused(
 		ImGuiFocusedFlags_RootAndChildWindows
@@ -23510,6 +24608,564 @@ void ImGuiManager::DrawPrefabInspectorWindow() {
 
 	ImGui::End();
 	showPrefabInspector_ = windowOpen;
+}
+
+std::vector<ImGuiManager::TransformPose> ImGuiManager::BuildPrefabTransformPoses(
+    const SceneDocument& document, uint64_t owner, const ScenePrefabAnimationClip& clip, uint64_t target) const {
+    struct TimedKey { float time; int property, track, key; };
+    std::vector<TimedKey> keys;
+    for (size_t ti=0; ti<clip.tracks.size(); ++ti) {
+        const auto& track=clip.tracks[ti];
+        int property=track.property=="LocalPosition" ? 0 : track.property=="LocalRotation" ? 1 : track.property=="LocalScale" ? 2 : -1;
+        const auto* resolved=track.targetEntityId ? document.FindEntity(track.targetEntityId) : nullptr;
+        if (!resolved && !track.targetEntityName.empty()) resolved=document.FindEntityByName(track.targetEntityName);
+        if (!resolved) resolved=document.FindEntity(owner);
+        if (property<0 || !resolved || resolved->id!=target) continue;
+        for (size_t ki=0; ki<track.keyframes.size(); ++ki) {
+            const float time=track.keyframes[ki].time;
+            // NaNをsortの比較へ渡さない。Ghost要求側では、この前に不正Trackを拒否する。
+            if (std::isfinite(time)) keys.push_back({time,property,static_cast<int>(ti),static_cast<int>(ki)});
+        }
+    }
+    std::stable_sort(keys.begin(),keys.end(),[](const auto& a,const auto& b) { return a.time<b.time; });
+    std::vector<TransformPose> poses;
+    for (const auto& key:keys) {
+        // 隣接キーとの差ではなく、グループ先頭との差を使う既存Inspectorの規則。
+        if (poses.empty() || std::abs(poses.back().time-key.time)>.005f) poses.push_back({key.time,{}});
+        auto& ref=poses.back().keys[key.property];
+        if (ref.trackIndex<0) ref={key.track,key.key};
+    }
+    return poses;
+}
+
+void ImGuiManager::ResetPrefabAnimationGhost(bool resetSettings) {
+    prefabGhostFrame_={}; prefabGhostResult_={}; prefabGhostGroups_.clear(); prefabGhostIndices_.clear();
+    prefabGhostSelected_=false; prefabGhostMousePending_=false; prefabGhostPickCandidates_.clear();
+    prefabGhostIssue_=PrefabAnimationGhost::Issue::None; prefabGhostSubject_.clear();
+    prefabGhostEditRevision_=0;
+    if (resetSettings) {
+        prefabGhostMode_=0; prefabGhostPage_=0; prefabGhostOpacity_=.20f;
+        prefabGhostNoticeKey_.clear(); prefabGhostWarningPending_=false;
+    }
+}
+
+void ImGuiManager::NotePrefabAnimationGhostEdit() {
+    if (prefabEditorSession_ && prefabGhostSelected_) {
+        prefabGhostEditRevision_=prefabEditorSession_->GetDocument().GetRevision();
+        prefabGhostSelectedTime_=prefabAnimationPreviewTime_;
+    }
+}
+
+void ImGuiManager::DrawTimeInputReference() {
+	const auto text = [&](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	if (ImGui::SmallButton(text("時刻入力の使い方###TimeInputHelp", "Key time input help###TimeInputHelp")))
+		ImGui::OpenPopup("TimeInputReference");
+	if (ImGui::BeginPopup("TimeInputReference")) {
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440);
+		ImGui::TextWrapped("%s", text(
+			"Transform Pose、Scene/PrefabのKeyframe、攻撃判定キーの時刻は、Ctrl+クリックで文字入力できます。Enterまたは欄の外へフォーカスを移すと確定、ドラッグはマウスを離すと確定、Escで取消です。入力途中の0ではキーを移動・統合しません。",
+			"Ctrl-click a Transform Pose, Scene/Prefab Keyframe or attack hit key time to type. Enter or moving focus out commits; releasing a drag commits; Esc cancels. Typing an intermediate zero does not move or merge keys."));
+		ImGui::TextWrapped("%s", text(
+			"確定時に範囲と重複を確認します。Transform Poseは既存の姿勢グループ幅0.005秒以内も重複扱いです。不正な時刻は元の値を保持して警告します。対象変更・再読込で入力途中の候補は破棄します。通常キーは確定後にUndo可能です。攻撃判定は候補の変更なので、その後に「適用」で原本へ反映し、Undoします。最後に編集元を保存してください。",
+			"Range and duplicate checks run at commit. Transform Poses also reject overlap within the existing 0.005-second grouping tolerance. Invalid times keep the original value and show a warning. Target changes and reload discard unfinished input. Ordinary key commits support Undo. Attack hit keys first update a draft: Apply it to the source before using Undo. Save the source afterward."));
+		ImGui::PopTextWrapPos(); ImGui::EndPopup();
+	}
+}
+
+bool ImGuiManager::DrawCommittedTimeInput(const char* label, float& value, float speed,
+	float maximum, const SceneDocument& document, const std::string& context) {
+	// 配列indexがsortで変わる前に入力を完了する。保存データに識別子は追加しない。
+	const auto identity = context + ":" + std::to_string(document.GetContentGeneration()) +
+		":" + std::to_string(document.GetRevision());
+	ImGui::PushID(identity.c_str());
+	const ImGuiID id = ImGui::GetID(label);
+	const int frame = ImGui::GetFrameCount();
+	auto [it, inserted] = timeInputDrafts_.try_emplace(id);
+	auto& draft = it->second;
+	if (inserted || draft.frame < frame - 1) draft = {value, false, frame};
+	draft.frame = frame;
+	// Play開始やlockによる無効化も取消。無効化時のdeactivationを確定と扱わない。
+	const bool cancel = (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0 ||
+		(ImGui::GetActiveID() == id && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+	draft.edited |= ImGui::DragFloat(label, &draft.value, speed, 0, 0, "%.6f");
+	const bool finished = ImGui::IsItemDeactivated();
+	bool committed = false;
+	if (cancel) {
+		// DragFloatの文字入力とドラッグの両方を取消。復元値を確定操作と扱わない。
+		if (ImGui::GetActiveID() == id) ImGui::ClearActiveID();
+		draft = {value, false, frame};
+	} else if (finished && draft.edited) {
+		if (!std::isfinite(draft.value) || !std::isfinite(maximum) || draft.value < 0 || draft.value > maximum) {
+			WarnTimeInput(false);
+		} else if (draft.value != value) {
+			value = draft.value;
+			committed = true;
+		}
+		draft = {value, false, frame};
+	} else if (!ImGui::IsItemActive()) {
+		draft = {value, false, frame};
+	}
+	ImGui::PopID();
+	return committed;
+}
+
+void ImGuiManager::WarnTimeInput(bool duplicate) {
+	timeInputDuplicate_ = duplicate;
+	timeInputWarningRequested_ = true;
+}
+
+void ImGuiManager::DrawTimeInputWarning() {
+	// 非表示・対象切替・Undo/Reloadで旧Widgetが消えたら候補と入力所有を破棄する。
+	for (auto it = timeInputDrafts_.begin(); it != timeInputDrafts_.end();) {
+		if (it->second.frame != ImGui::GetFrameCount()) {
+			if (ImGui::GetActiveID() == it->first) ImGui::ClearActiveID();
+			it = timeInputDrafts_.erase(it);
+		} else ++it;
+	}
+	const char* title = SelectEditorText(editorLanguage_, "時刻を変更できません###TimeInputWarning", "Cannot change key time###TimeInputWarning");
+	if (timeInputWarningRequested_) { ImGui::OpenPopup(title); timeInputWarningRequested_ = false; }
+	if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextWrapped("%s", timeInputDuplicate_
+			? SelectEditorText(editorLanguage_, "移動先に既存のキー・姿勢があります。元の時刻を保持しました。重ならない時刻を入力し直してください。", "A key or pose already occupies this time. The original time was kept. Enter a non-overlapping time.")
+			: SelectEditorText(editorLanguage_, "時刻は0秒から対象の終了時刻までの有限値が必要です。元の時刻を保持しました。範囲内の数値を入力し直してください。", "Time must be finite and between zero and the end of the clip or attack. The original time was kept. Enter a value in range."));
+		if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+}
+
+void ImGuiManager::SelectPrefabAnimationPose(float time) {
+    if (!prefabEditorSession_ || !prefabEditorSession_->IsOpen() || !std::isfinite(time)) return;
+    const auto& document=prefabEditorSession_->GetDocument();
+    const auto* owner=document.FindEntity(prefabAnimationPreviewOwnerEntityId_);
+    const auto* animator=owner ? FindEnabledComponent(*owner,"PrefabAnimator") : nullptr;
+    if (!animator || prefabAnimationPreviewClipIndex_<0 ||
+        prefabAnimationPreviewClipIndex_>=static_cast<int>(animator->prefabAnimationClips.size())) return;
+    const auto& clip=animator->prefabAnimationClips[prefabAnimationPreviewClipIndex_];
+    prefabAnimationPreviewTime_=std::clamp(time,0.0f,(std::max)(clip.duration,.001f));
+    prefabAnimationPreviewPlaying_=false; prefabAnimationPreviewActive_=true;
+    prefabGhostSelected_=true; prefabGhostSelectedTime_=prefabAnimationPreviewTime_;
+    prefabGhostSelectionContext_={};
+    auto& token=prefabGhostSelectionContext_;
+    token.assetPath=prefabEditorSession_->GetFilePath(); token.generation=document.GetContentGeneration();
+    token.revision=document.GetRevision(); token.owner=owner->id; token.target=prefabSelectedEntityId_;
+    token.clip=prefabAnimationPreviewClipIndex_; token.clipName=clip.name; token.draftSerial=prefabGhostDraftSerial_;
+    const auto groups=BuildPrefabTransformPoses(document,owner->id,clip,prefabSelectedEntityId_);
+    for (size_t i=0;i<groups.size();++i) if (groups[i].time==prefabGhostSelectedTime_) {
+        if (prefabGhostMode_==2) prefabGhostPage_=static_cast<int>(i/PrefabAnimationGhost::kPosesPerPage);
+        break;
+    }
+    RevealPrefabInspector();
+    inspectorFoldoutStates_["prefab/"+prefabEditorSession_->GetFilePath()+"/"+
+        std::to_string(prefabSelectedEntityId_)+"/TransformPoses"]=true;
+}
+
+void ImGuiManager::RebuildPrefabAnimationGhost() {
+    using namespace PrefabAnimationGhost;
+    if (!prefabGhostMode_ || !showPrefab_ || !prefabEditorSession_ || !prefabEditorSession_->IsOpen()) {
+        ResetPrefabAnimationGhost(false); return;
+    }
+    const auto& source=prefabEditorSession_->GetDocument();
+    SceneReplayFramingRequest replay;
+    const bool ui=std::any_of(source.GetEntities().begin(),source.GetEntities().end(),[](const auto& e) {
+        return e.parentId==0 && FindComponent(e,"UITransform");
+    });
+    if (!prefabAnimationPreviewActive_ || (editorSession_ && !editorSession_->IsEditing()) || attackPreviewActive_ || prefabAttackPreviewMode_ ||
+        playerCombatPreviewEnabled_ || prefabHitBoxSetupMode_ || uiMigrationOpen_ || ui || GetReplayFramingRequest(true,replay)) {
+        ResetPrefabAnimationGhost(false); prefabGhostIssue_=Issue::Incompatible; return;
+    }
+    const std::string draftKey=rotationModeDraft_.active && rotationModeDraft_.prefab
+        ? std::to_string(rotationModeDraft_.generation)+":"+std::to_string(rotationModeDraft_.revision)+":"+
+          std::to_string(rotationModeDraft_.ownerId)+":"+rotationModeDraft_.clipName+":"+
+          std::to_string(rotationModeDraft_.trackIndex)+":"+rotationModeDraft_.candidate : "";
+    if (draftKey!=prefabGhostDraftKey_) { prefabGhostDraftKey_=draftKey; ++prefabGhostDraftSerial_; }
+    ContextToken token;
+    token.assetPath=prefabEditorSession_->GetFilePath(); token.generation=source.GetContentGeneration();
+    token.revision=source.GetRevision(); token.owner=prefabAnimationPreviewOwnerEntityId_; token.target=prefabSelectedEntityId_;
+    token.clip=prefabAnimationPreviewClipIndex_; token.draftSerial=prefabGhostDraftSerial_;
+    const auto* owner=source.FindEntity(token.owner);
+    const auto* animator=owner ? FindEnabledComponent(*owner,"PrefabAnimator") : nullptr;
+    const auto* clip=animator && token.clip>=0 && token.clip<static_cast<int>(animator->prefabAnimationClips.size())
+        ? &animator->prefabAnimationClips[token.clip] : nullptr;
+    if (clip) token.clipName=clip->name;
+    const auto fail=[&](Issue issue,const std::string& subject) {
+        prefabGhostFrame_={}; prefabGhostFrame_.context=token; prefabGhostResult_={};
+        prefabGhostGroups_.clear(); prefabGhostIndices_.clear(); prefabGhostMousePending_=false;
+        prefabGhostIssue_=issue; prefabGhostSubject_=subject;
+        const auto key=token.assetPath+":"+std::to_string(token.generation)+":"+std::to_string(token.revision)+":"+
+            std::to_string(token.draftSerial)+":"+std::to_string(static_cast<int>(issue))+":"+subject;
+        if (issue!=Issue::NoKeys && key!=prefabGhostNoticeKey_) {
+            prefabGhostNoticeKey_=key; prefabGhostWarningPending_=true;
+        }
+    };
+    const bool changed=!(token==prefabGhostFrame_.context);
+    if (changed) {
+        auto previous=prefabGhostSelectionContext_; previous.revision=token.revision;
+        if (prefabGhostSelected_ && !(prefabGhostSelectionContext_==token) &&
+            !(prefabGhostEditRevision_==token.revision && previous==token)) prefabGhostSelected_=false;
+        prefabGhostSelectionContext_=token; prefabGhostEditRevision_=0;
+        prefabGhostFrame_={}; prefabGhostFrame_.context=token; prefabGhostResult_={};
+        prefabGhostGroups_.clear(); prefabGhostIndices_.clear(); prefabGhostMousePending_=false;
+        prefabGhostIssue_=Issue::None; prefabGhostSubject_.clear();
+    } else if (prefabGhostIssue_!=Issue::None) return;
+    if (!clip || !source.FindEntity(token.target)) { fail(Issue::NoKeys,""); return; }
+    if (!std::isfinite(clip->duration) || clip->duration<=0) { fail(Issue::InvalidClip,clip->name); return; }
+    if (changed) {
+        SceneDocument validation=source;
+        if (!ApplyAnimationRotationModeDraft(validation,true)) { fail(Issue::InvalidDraft,clip->name); return; }
+        const auto* validationAnimator=FindEnabledComponent(*validation.FindEntity(token.owner),"PrefabAnimator");
+        const auto& validationClip=validationAnimator->prefabAnimationClips[token.clip];
+        // 評価に使う全階層を先に検査し、循環/欠落親のWorld解決を呼ばない。
+        for (const auto& entity:source.GetEntities()) {
+            std::unordered_set<uint64_t> chain;
+            const SceneEntity* parent=&entity;
+            while (parent) {
+                if (!chain.insert(parent->id).second) { fail(Issue::InvalidHierarchy,entity.name); return; }
+                if (!SpatialFinite(parent->transform.translate) || !SpatialFinite(parent->transform.scale) ||
+                    !std::isfinite(parent->transform.rotate.x) || !std::isfinite(parent->transform.rotate.y) ||
+                    !std::isfinite(parent->transform.rotate.z) || !std::isfinite(parent->transform.rotate.w)) {
+                    fail(Issue::InvalidHierarchy,parent->name); return;
+                }
+                const uint64_t id=parent->parentId;
+                parent=id ? source.FindEntity(id) : nullptr;
+                if (id && !parent) { fail(Issue::InvalidHierarchy,entity.name); return; }
+            }
+        }
+        for (const auto& track:validationClip.tracks) {
+            if (track.property!="LocalPosition" && track.property!="LocalRotation" && track.property!="LocalScale" && track.property!="Active") continue;
+            const auto* target=track.targetEntityId ? source.FindEntity(track.targetEntityId) : nullptr;
+            if (!target && !track.targetEntityName.empty()) {
+                for (const auto& e:source.GetEntities()) if (e.name==track.targetEntityName) {
+                    if (target) { fail(Issue::InvalidTrack,track.targetEntityName); return; }
+                    target=&e;
+                }
+            }
+            if ((!target && (track.targetEntityId || !track.targetEntityName.empty())) ||
+                (track.property=="LocalRotation" && track.rotationInterpolation!="QuaternionSlerp" && track.rotationInterpolation!="EulerContinuous")) {
+                fail(Issue::InvalidTrack,track.targetEntityName+" / "+track.property); return;
+            }
+            float previous=-1;
+            for (const auto& key:track.keyframes) {
+                if (!std::isfinite(key.time) || key.time<0 || key.time>clip->duration || key.time<previous ||
+                    !SpatialFinite(key.value) || !SpatialFinite(key.positionBulge)) {
+                    fail(Issue::InvalidTrack,track.targetEntityName+" / "+track.property); return;
+                }
+                previous=key.time;
+            }
+        }
+        prefabGhostGroups_=BuildPrefabTransformPoses(source,token.owner,*clip,token.target);
+        if (prefabGhostGroups_.empty()) { fail(Issue::NoKeys,""); return; }
+        if (prefabGhostSelected_ && std::none_of(prefabGhostGroups_.begin(),prefabGhostGroups_.end(),[&](const auto& p) {
+            return p.time==prefabGhostSelectedTime_;
+        })) prefabGhostSelected_=false;
+    }
+    std::vector<size_t> indices;
+    if (prefabGhostMode_==2) {
+        const size_t pages=(prefabGhostGroups_.size()+kPosesPerPage-1)/kPosesPerPage;
+        prefabGhostPage_=std::clamp(prefabGhostPage_,0,static_cast<int>(pages-1));
+        const size_t begin=static_cast<size_t>(prefabGhostPage_)*kPosesPerPage;
+        for (size_t i=begin;i<(std::min)(begin+kPosesPerPage,prefabGhostGroups_.size());++i) indices.push_back(i);
+    } else {
+        const auto it=std::lower_bound(prefabGhostGroups_.begin(),prefabGhostGroups_.end(),prefabAnimationPreviewTime_,
+            [](const auto& p,float time) { return p.time<time; });
+        const size_t next=static_cast<size_t>(it-prefabGhostGroups_.begin());
+        if (next>0) indices.push_back(next-1);
+        if (next<prefabGhostGroups_.size()) indices.push_back(next);
+        const bool exact=next<prefabGhostGroups_.size() && prefabGhostGroups_[next].time==prefabAnimationPreviewTime_;
+        if (exact && next+1<prefabGhostGroups_.size()) indices.push_back(next+1);
+        if (prefabGhostSelected_) for (size_t i=0;i<prefabGhostGroups_.size();++i)
+            if (prefabGhostGroups_[i].time==prefabGhostSelectedTime_) indices.push_back(i);
+        std::sort(indices.begin(),indices.end()); indices.erase(std::unique(indices.begin(),indices.end()),indices.end());
+    }
+    if (changed || indices!=prefabGhostIndices_ || !prefabGhostFrame_.poseSerial) {
+        SceneDocument base=source;
+        if (!ApplyAnimationRotationModeDraft(base,true)) { fail(Issue::InvalidDraft,clip->name); return; }
+        const auto* displayOwner=base.FindEntity(token.owner);
+        const auto* displayAnimator=displayOwner ? FindEnabledComponent(*displayOwner,"PrefabAnimator") : nullptr;
+        if (!displayAnimator) { fail(Issue::InvalidClip,clip->name); return; }
+        const auto& displayClip=displayAnimator->prefabAnimationClips[token.clip];
+        for (const auto& track:displayClip.tracks) if (track.property=="LocalRotation") {
+            Vector3 sample{};
+            if ((track.rotationInterpolation!="QuaternionSlerp" && track.rotationInterpolation!="EulerContinuous") ||
+                (!track.keyframes.empty() && track.rotationInterpolation=="EulerContinuous" &&
+                    !ScenePrefabAnimationEvaluator::TrySampleContinuousEuler(track,0,sample))) {
+                fail(Issue::InvalidDraft,track.targetEntityName); return;
+            }
+        }
+        std::vector<Pose> poses;
+        size_t meshCount=0;
+        for (size_t i:indices) {
+            SceneDocument scratch=base;
+            ScenePrefabAnimationEvaluator::ApplyClip(scratch,token.owner,displayClip,prefabGhostGroups_[i].time);
+            Pose pose; pose.id=i+1; pose.time=prefabGhostGroups_[i].time;
+            const auto* root=scratch.FindEntity(token.target);
+            const auto world=ResolveSceneWorldMatrix(scratch,*root);
+            if (!SpatialFinite(world)) { fail(Issue::InvalidHierarchy,root->name); return; }
+            pose.origin={world.m[3][0],world.m[3][1],world.m[3][2]};
+            for (const auto& e:scratch.GetEntities()) {
+                if ((e.id!=token.target && !scratch.IsDescendantOf(e.id,token.target)) || !IsEntityActiveInHierarchy(scratch,e)) continue;
+                const auto* mesh=FindEnabledComponent(e,"MeshRenderer");
+                if (!mesh || mesh->modelPath.empty()) continue;
+                if (++meshCount>kMaxMeshes) { fail(Issue::BudgetExceeded,root->name); return; }
+                Mesh desc; desc.entity=e.id; desc.modelPath=mesh->modelPath; desc.cullMode=mesh->meshCullMode;
+                desc.world=ResolveSceneWorldMatrix(scratch,e); desc.materials=mesh->meshMaterialOverrides;
+                if (!SpatialFinite(desc.world)) { fail(Issue::InvalidHierarchy,e.name); return; }
+                pose.meshes.push_back(std::move(desc));
+            }
+            poses.push_back(std::move(pose));
+        }
+        prefabGhostFrame_.poses=std::move(poses); prefabGhostIndices_=std::move(indices);
+        prefabGhostFrame_.poseSerial=++prefabGhostSerial_;
+    }
+    auto& frame=prefabGhostFrame_;
+    uint64_t selected=0;
+    for (const auto& pose:frame.poses) if (prefabGhostSelected_ && pose.time==prefabGhostSelectedTime_) selected=pose.id;
+    if (!frame.requestSerial || frame.selected!=selected || frame.opacity!=prefabGhostOpacity_ || frame.time!=prefabAnimationPreviewTime_ ||
+        frame.yaw!=prefabPreviewYaw_ || frame.pitch!=prefabPreviewPitch_ || frame.zoom!=prefabPreviewZoom_ ||
+        frame.width!=prefabPreviewRequestedWidth_ || frame.height!=prefabPreviewRequestedHeight_ || frame.framingSerial!=prefabPreviewFramingSerial_ ||
+        prefabGhostResult_.poseSerial!=frame.poseSerial) frame.requestSerial=++prefabGhostRequestSerial_;
+    frame.selected=selected; frame.opacity=prefabGhostOpacity_; frame.time=prefabAnimationPreviewTime_;
+    frame.yaw=prefabPreviewYaw_; frame.pitch=prefabPreviewPitch_; frame.zoom=prefabPreviewZoom_;
+    frame.width=prefabPreviewRequestedWidth_; frame.height=prefabPreviewRequestedHeight_; frame.framingSerial=prefabPreviewFramingSerial_;
+}
+
+namespace {
+    const char* PrefabGhostIssueText(EditorLanguage language, PrefabAnimationGhost::Issue issue) {
+        using PrefabAnimationGhost::Issue;
+        switch (issue) {
+        case Issue::InvalidClip: return SelectEditorText(language,"Clipの長さが不正です。正の有限秒数に直してください。","Invalid clip duration. Set a positive finite duration in seconds.");
+        case Issue::InvalidTrack: return SelectEditorText(language,"キーまたは参照が不正です。対象、時刻順・範囲、有限値、回転補間方式を確認してください。","Invalid track or reference. Check the target, ordered/in-range times, finite values and rotation interpolation.");
+        case Issue::InvalidHierarchy: return SelectEditorText(language,"階層または姿勢が不正です。親の欠落・循環とTransformの数値を確認してください。","Invalid hierarchy or pose. Check missing/cyclic parents and finite transforms.");
+        case Issue::InvalidDraft: return SelectEditorText(language,"回転方式の候補を評価できません。候補を修正するか取り消してください。","Cannot evaluate the rotation draft. Correct or cancel the draft.");
+        case Issue::BudgetExceeded: return SelectEditorText(language,"256メッシュの表示上限を超えました。「前後のキー」にするか、より小さい武器Entityを選んでください。","The 256-mesh limit was exceeded. Use adjacent keys or select a smaller weapon entity.");
+        case Issue::NoKeys: return SelectEditorText(language,"TRSキーを持つ武器のEntityを選択してください。","Select a weapon entity with TRS keys.");
+        case Issue::Incompatible: return SelectEditorText(language,"通常のPrefab AnimatorでPreview姿勢にしてください。他のPreview・UI編集を終了してください。","Enable the preview pose in the ordinary Prefab Animator. Close other previews or UI editing.");
+        case Issue::MissingModel: return SelectEditorText(language,"モデルを読めません。MeshRendererのモデルパスを確認してください。時刻ラベルは選択できます。","Cannot load the model. Check its MeshRenderer path. Time labels remain selectable.");
+        case Issue::Skinning: return SelectEditorText(language,"骨付きモデルの虚像には未対応です。静的な武器メッシュを選んでください。時刻ラベルは選択できます。","Skinned ghosts are unsupported. Select a static weapon mesh. Time labels remain selectable.");
+        case Issue::InvalidBounds: return SelectEditorText(language,"モデルの範囲を取得できません。モデルとTransformを確認してください。時刻ラベルは選択できます。","Cannot obtain model bounds. Check the model and transform. Time labels remain selectable.");
+        default: return "";
+        }
+    }
+}
+
+bool ImGuiManager::PrefabAnimationGhostMatchesImage() const {
+    const auto& frame=prefabGhostFrame_; const auto& result=prefabGhostResult_;
+    if (!prefabGhostMode_ || prefabGhostIssue_!=PrefabAnimationGhost::Issue::None || !frame.poseSerial ||
+        result.poseSerial!=frame.poseSerial || result.requestSerial!=frame.requestSerial || !(result.context==frame.context) ||
+        result.width!=prefabPreviewRequestedWidth_ || result.height!=prefabPreviewRequestedHeight_ ||
+        result.width!=prefabPreviewTextureWidth_ || result.height!=prefabPreviewTextureHeight_ ||
+        frame.yaw!=prefabPreviewYaw_ || frame.pitch!=prefabPreviewPitch_ || frame.zoom!=prefabPreviewZoom_ ||
+        frame.framingSerial!=prefabPreviewFramingSerial_ || frame.opacity!=prefabGhostOpacity_ ||
+        frame.time!=prefabAnimationPreviewTime_ || !prefabEditorSession_ || !prefabEditorSession_->IsOpen()) return false;
+    const auto& source=prefabEditorSession_->GetDocument();
+    return frame.context.assetPath==prefabEditorSession_->GetFilePath() &&
+        frame.context.generation==source.GetContentGeneration() && frame.context.revision==source.GetRevision() &&
+        frame.context.owner==prefabAnimationPreviewOwnerEntityId_ && frame.context.clip==prefabAnimationPreviewClipIndex_ &&
+        frame.context.target==prefabSelectedEntityId_;
+}
+
+void ImGuiManager::DrawPrefabAnimationGhostControls() {
+    using namespace PrefabAnimationGhost;
+    const auto text=[&](const char* jp,const char* en) { return SelectEditorText(editorLanguage_,jp,en); };
+    ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(text("キーの虚像","Key Ghosts")); ImGui::SameLine();
+    const char* modesJP[]={"非表示","前後のキー","すべてのキー"};
+    const char* modesEN[]={"Off","Adjacent Keys","All Keys"};
+    const auto* modes=editorLanguage_==EditorLanguage::Japanese ? modesJP : modesEN;
+    ImGui::SetNextItemWidth(132);
+    if (ImGui::Combo("##PrefabGhostMode",&prefabGhostMode_,modes,3)) {
+        prefabGhostFrame_.context={}; prefabGhostMousePending_=false; prefabGhostPage_=0;
+        prefabGhostIssue_=Issue::None; prefabGhostNoticeKey_.clear();
+        if (prefabGhostMode_) prefabAnimationPreviewActive_=true;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(text("使い方###PrefabGhostHelp","Help###PrefabGhostHelp"))) ImGui::OpenPopup("PrefabGhostReference");
+    if (prefabGhostMode_) {
+        ImGui::SameLine(); ImGui::SetNextItemWidth(130);
+        ImGui::SliderFloat(text("濃さ###PrefabGhostOpacity","Opacity###PrefabGhostOpacity"),&prefabGhostOpacity_,.05f,.60f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        prefabGhostOpacity_=std::isfinite(prefabGhostOpacity_) ? std::clamp(prefabGhostOpacity_,.05f,.60f) : .20f;
+    }
+    RebuildPrefabAnimationGhost();
+    if (prefabGhostMode_ && prefabEditorSession_ && prefabEditorSession_->IsOpen()) {
+        const auto* target=prefabEditorSession_->GetDocument().FindEntity(prefabSelectedEntityId_);
+        ImGui::TextDisabled(text("基点: %s","Anchor: %s"),target ? target->name.c_str() : "-");
+        if (prefabGhostMode_==2 && !prefabGhostGroups_.empty()) {
+            const int pages=static_cast<int>((prefabGhostGroups_.size()+kPosesPerPage-1)/kPosesPerPage);
+            ImGui::SameLine(); ImGui::BeginDisabled(prefabGhostPage_==0);
+            bool pageChanged=false;
+            if (ImGui::SmallButton(text("前###GhostPrev","Previous###GhostPrev"))) { --prefabGhostPage_; pageChanged=true; }
+            ImGui::EndDisabled(); ImGui::SameLine(); ImGui::Text("%d / %d (%zu)",prefabGhostPage_+1,pages,prefabGhostGroups_.size());
+            ImGui::SameLine(); ImGui::BeginDisabled(prefabGhostPage_+1>=pages);
+            if (ImGui::SmallButton(text("次###GhostNext","Next###GhostNext"))) { ++prefabGhostPage_; pageChanged=true; }
+            ImGui::EndDisabled();
+            if (pageChanged) { prefabGhostMousePending_=false; RebuildPrefabAnimationGhost(); }
+        }
+    }
+    auto issue=prefabGhostIssue_; std::string subject=prefabGhostSubject_;
+    if (issue==Issue::None && PrefabAnimationGhostMatchesImage()) for (const auto& pose:prefabGhostResult_.poses) {
+        if (pose.issue!=Issue::None) { issue=pose.issue; subject=pose.subject; break; }
+    }
+    if (prefabGhostMode_ && issue!=Issue::None) {
+        const char* status=issue==Issue::NoKeys ? text("TRSキーを持つ武器Entityを選択してください","Select a weapon entity with TRS keys") :
+            issue==Issue::Incompatible ? text("虚像を一時停止中: 通常AnimatorのPreview姿勢で表示できます","Ghosts paused: use the ordinary Animator preview pose") :
+            text("虚像の一部または全体を表示できません。詳細はポインターを合わせて確認","Some or all ghosts are unavailable. Hover for details");
+        ImGui::TextDisabled("%s",status);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s",PrefabGhostIssueText(editorLanguage_,issue),subject.c_str());
+        const std::string notice=std::to_string(static_cast<int>(issue))+":"+subject+":"+
+            std::to_string(prefabGhostFrame_.context.generation)+":"+std::to_string(prefabGhostFrame_.context.revision)+":"+
+            std::to_string(prefabGhostFrame_.context.draftSerial);
+        if (issue!=Issue::NoKeys && issue!=Issue::Incompatible && notice!=prefabGhostNoticeKey_) {
+            prefabGhostNoticeKey_=notice; prefabGhostWarningPending_=true;
+        }
+    }
+    if (prefabGhostWarningPending_) {
+        prefabGhostWarningPending_=false;
+        if (issue!=Issue::None && issue!=Issue::Incompatible && issue!=Issue::NoKeys) {
+            prefabGhostWarningIssue_=issue; prefabGhostWarningSubject_=subject;
+            ImGui::OpenPopup(text("キーの虚像###PrefabGhostWarning","Key Ghosts###PrefabGhostWarning"));
+        }
+    }
+    if (ImGui::BeginPopupModal(text("キーの虚像###PrefabGhostWarning","Key Ghosts###PrefabGhostWarning"),nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(text("キーの虚像を表示できませんでした","Could not display key ghosts"));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+440);
+        ImGui::TextUnformatted(PrefabGhostIssueText(editorLanguage_,prefabGhostWarningIssue_));
+        if (!prefabGhostWarningSubject_.empty()) ImGui::TextWrapped("%s",prefabGhostWarningSubject_.c_str());
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button(text("閉じる###CloseGhostWarning","Close###CloseGhostWarning"))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopup("PrefabGhostReference")) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+470);
+        ImGui::TextUnformatted(text("武器のキー姿勢を調整する","Editing weapon key poses"));
+        ImGui::Separator();
+        ImGui::TextWrapped("%s",text("1. AnimatorのClipと、TRSキーを持つ武器Rootを選びます。基点と子メッシュだけを複製し、親は姿勢計算に使います。",
+            "1. Select the Animator clip and the weapon root with TRS keys. Only the anchor and child meshes are duplicated; parents still affect their poses."));
+        ImGui::TextWrapped("%s",text("2. 前後またはすべてのキーを表示します。全点は32点ずつページで切り替えます。基点名を確認してください。",
+            "2. Show adjacent or all keys. All keys use 32-pose pages. Check the anchor name."));
+        ImGui::TextWrapped("%s",text("3. 時刻ラベルか虚像をクリックすると、その時刻で停止します。重なる候補は時刻一覧から選べます。選択だけでは保存内容は変わりません。",
+            "3. Click a time label or ghost to pause at that time. Choose overlapping candidates from the time list. Selection alone does not change saved data."));
+        ImGui::TextWrapped("%s",text("4. 既存GizmoまたはInspectorのTransform Posesで編集します。Partial Poseの未登録欄は補完用の値です。虚像はClip補間結果なので、その欄の値と異なる場合があります。操作したpropertyにキーが追加される場合があります。",
+            "4. Edit using the existing gizmo or Inspector Transform Poses. Missing Partial Pose fields contain completion values, which may differ from the interpolated ghost. Editing may add a key for that property."));
+        ImGui::TextWrapped("%s",text("右ドラッグでOrbit、wheelでZoom。ハンドル操作を優先します。虚像選択はモデル範囲の近似なので余白や遮蔽物の奥も候補になります。時刻ラベルで確実に選択できます。",
+            "Right drag orbits; the wheel zooms. Handles have priority. Ghost picking uses approximate model bounds, including empty space or occluded candidates. Use time labels to select a specific pose."));
+        ImGui::TextWrapped("%s",text("骨付きモデルの虚像、モデル内部アニメーションには未対応です。他のAttack/HitBox/Combat Rig/Replay/UI Preview中は停止します。虚像は当たり判定やRuntimeに影響しません。",
+            "Skinned ghosts and internal model animation are unsupported. Ghosts pause during Attack, HitBox, Combat Rig, Replay or UI previews. They do not affect collision or runtime."));
+        ImGui::PopTextWrapPos(); ImGui::EndPopup();
+    }
+}
+
+void ImGuiManager::DrawPrefabAnimationGhostOverlay(const ImVec2& min,const ImVec2& size,bool hovered) {
+    const bool matches=PrefabAnimationGhostMatchesImage();
+    const auto& io=ImGui::GetIO();
+    const bool blocked=ImGuizmo::IsUsing() || ImGuizmo::IsOver() || ImGui::IsAnyItemActive() ||
+        ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) || ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+        ImGui::IsMouseDown(ImGuiMouseButton_Middle) || io.MouseWheel!=0;
+    if (!matches || blocked || size.x<=1 || size.y<=1) prefabGhostMousePending_=false;
+    std::vector<uint64_t> labelHits, meshHits;
+    if (matches) {
+        const auto vp=Multiply(prefabGhostResult_.view,prefabGhostResult_.projection);
+        const auto project=[&](const Vector3& p,ImVec2& screen) {
+            const float w=p.x*vp.m[0][3]+p.y*vp.m[1][3]+p.z*vp.m[2][3]+vp.m[3][3];
+            if (!std::isfinite(w) || w<=0) return false;
+            const auto ndc=TransformCoord(p,vp);
+            if (!SpatialFinite(ndc) || ndc.z<0 || ndc.z>1) return false;
+            screen={min.x+(ndc.x+1)*size.x*.5f,min.y+(1-ndc.y)*size.y*.5f}; return true;
+        };
+        const auto mouse=ImGui::GetMousePos();
+        auto* draw=ImGui::GetWindowDrawList(); draw->PushClipRect(min,{min.x+size.x,min.y+size.y},true);
+        for (const auto& pose:prefabGhostResult_.poses) {
+            const bool selected=pose.id==prefabGhostFrame_.selected;
+            const ImU32 color=selected ? IM_COL32(255,175,65,245) : IM_COL32(100,195,255,190);
+            if (selected || pose.time==prefabGhostFrame_.time) for (const auto& bounds:pose.bounds) {
+                ImVec2 low{FLT_MAX,FLT_MAX}, high{-FLT_MAX,-FLT_MAX}; bool valid=true;
+                for (int i=0;i<8;++i) {
+                    ImVec2 point;
+                    if (!project({i&1?bounds.max.x:bounds.min.x,i&2?bounds.max.y:bounds.min.y,i&4?bounds.max.z:bounds.min.z},point)) { valid=false; break; }
+                    low={ (std::min)(low.x,point.x),(std::min)(low.y,point.y) };
+                    high={ (std::max)(high.x,point.x),(std::max)(high.y,point.y) };
+                }
+                if (valid) draw->AddRect(low,high,color,0,0,selected?2.0f:1.0f);
+            }
+            ImVec2 point;
+            if (project(pose.origin,point)) {
+                char time[48]; snprintf(time,sizeof(time),"%.4f s",pose.time);
+                const auto extent=ImGui::CalcTextSize(time);
+                const ImVec2 a{point.x+5,point.y-extent.y-4}, b{a.x+extent.x+6,a.y+extent.y+4};
+                draw->AddCircle(point,4,color); draw->AddRectFilled(a,b,IM_COL32(15,20,28,180));
+                draw->AddText({a.x+3,a.y+2},color,time);
+                if (mouse.x>=a.x && mouse.x<=b.x && mouse.y>=a.y && mouse.y<=b.y) {
+                    labelHits.push_back(pose.id);
+                    if (hovered && !blocked && pose.bounds.empty()) ImGui::SetTooltip("%s",
+                        SelectEditorText(editorLanguage_,"この時刻は表示できるメッシュがありません。クリックで時刻を選べます。","No drawable mesh at this time. Click to select its time."));
+                }
+            }
+        }
+        draw->PopClipRect();
+        if (hovered && !blocked && labelHits.empty()) {
+            const auto inverse=Inverse(vp);
+            const Vector3 rayNear=TransformCoord({(mouse.x-min.x)/size.x*2-1,1-(mouse.y-min.y)/size.y*2,0},inverse);
+            const Vector3 rayFar=TransformCoord({(mouse.x-min.x)/size.x*2-1,1-(mouse.y-min.y)/size.y*2,1},inverse);
+            const auto direction=Math::Subtract(rayFar,rayNear);
+            if (SpatialFinite(inverse) && SpatialFinite(rayNear) && SpatialFinite(direction)) for (const auto& pose:prefabGhostResult_.poses) {
+                bool hit=false;
+                for (const auto& bounds:pose.bounds) {
+                    const Vector3 center{(bounds.min.x+bounds.max.x)*.5f,(bounds.min.y+bounds.max.y)*.5f,(bounds.min.z+bounds.max.z)*.5f};
+                    if (TransformCoord(center,prefabGhostResult_.view).z<=0) continue;
+                    float entry=0, exit=(std::numeric_limits<float>::max)();
+                    const float origins[]={rayNear.x,rayNear.y,rayNear.z}, dirs[]={direction.x,direction.y,direction.z};
+                    const float lows[]={bounds.min.x,bounds.min.y,bounds.min.z}, highs[]={bounds.max.x,bounds.max.y,bounds.max.z};
+                    bool intersects=true;
+                    for (int axis=0;axis<3;++axis) {
+                        if (std::abs(dirs[axis])<1e-8f) { if (origins[axis]<lows[axis] || origins[axis]>highs[axis]) intersects=false; }
+                        else {
+                            float a=(lows[axis]-origins[axis])/dirs[axis], b=(highs[axis]-origins[axis])/dirs[axis];
+                            if (a>b) std::swap(a,b);
+                            entry=(std::max)(entry,a); exit=(std::min)(exit,b);
+                            if (entry>exit) intersects=false;
+                        }
+                    }
+                    if (intersects) { hit=true; break; }
+                }
+                if (hit) meshHits.push_back(pose.id);
+            }
+        }
+    }
+    if (matches && hovered && !blocked && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        prefabGhostMousePending_=true; prefabGhostMouseStart_=ImGui::GetMousePos();
+        prefabGhostMouseSerial_=prefabGhostResult_.requestSerial;
+        prefabGhostImageMin_=min; prefabGhostImageSize_=size;
+        prefabGhostPickCandidates_=labelHits.empty()?meshHits:labelHits;
+        // 表示中の時刻で止めてから左解放を待つ。再生時計で候補画像を差し替えない。
+        prefabAnimationPreviewPlaying_=false; prefabAnimationPreviewTime_=prefabGhostFrame_.time;
+    }
+    if (prefabGhostMousePending_) {
+        const auto mouse=ImGui::GetMousePos();
+        const float dx=mouse.x-prefabGhostMouseStart_.x, dy=mouse.y-prefabGhostMouseStart_.y;
+        if (dx*dx+dy*dy>io.MouseDragThreshold*io.MouseDragThreshold ||
+            min.x!=prefabGhostImageMin_.x || min.y!=prefabGhostImageMin_.y || size.x!=prefabGhostImageSize_.x || size.y!=prefabGhostImageSize_.y ||
+            prefabGhostMouseSerial_!=prefabGhostResult_.requestSerial) prefabGhostMousePending_=false;
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && prefabGhostMousePending_) {
+            prefabGhostMousePending_=false;
+            if (hovered && !blocked) {
+                if (prefabGhostPickCandidates_.size()>1) ImGui::OpenPopup("PrefabGhostCandidates");
+                else if (prefabGhostPickCandidates_.size()==1) {
+                    for (const auto& pose:prefabGhostResult_.poses) if (pose.id==prefabGhostPickCandidates_.front()) SelectPrefabAnimationPose(pose.time);
+                } else PickPrefabEntity(min.x,min.y,size.x,size.y);
+            }
+        }
+    }
+    if (ImGui::BeginPopup("PrefabGhostCandidates")) {
+        if (!matches || prefabGhostMouseSerial_!=prefabGhostResult_.requestSerial) ImGui::CloseCurrentPopup();
+        else {
+            ImGui::TextUnformatted(SelectEditorText(editorLanguage_,"キー時刻を選択","Select key time"));
+            for (const auto& pose:prefabGhostResult_.poses) {
+                if (std::find(prefabGhostPickCandidates_.begin(),prefabGhostPickCandidates_.end(),pose.id)==prefabGhostPickCandidates_.end()) continue;
+                ImGui::PushID(static_cast<int>(pose.id));
+                char label[48]; snprintf(label,sizeof(label),"%.6f s",pose.time);
+                if (ImGui::Selectable(label)) SelectPrefabAnimationPose(pose.time);
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void ImGuiManager::DrawPrefabPreview() {
@@ -23750,6 +25406,7 @@ void ImGuiManager::DrawPrefabPreview() {
 		SaveEditorSettings();
 	}
 	ImGui::PopID();
+	DrawPrefabAnimationGhostControls();
 
 	const float availableWidth = (std::max)(
 		ImGui::GetContentRegionAvail().x,
@@ -23778,7 +25435,7 @@ void ImGuiManager::DrawPrefabPreview() {
 	const bool stageHovered = ImGui::IsWindowHovered(
 		ImGuiHoveredFlags_AllowWhenBlockedByActiveItem
 	);
-	if (stageHovered) {
+	if (stageHovered && (!prefabGhostMode_ || !ImGuizmo::IsUsing())) {
 		// Image has no Item ID, so use a stable Stage ID to own the wheel.
 		ImGui::SetKeyOwner(
 			ImGuiKey_MouseWheelY,
@@ -23818,7 +25475,7 @@ void ImGuiManager::DrawPrefabPreview() {
 			imageSize
 		);
 		const bool imageHovered = ImGui::IsItemHovered();
-		if (imageHovered) {
+		if (imageHovered && (!prefabGhostMode_ || !ImGuizmo::IsUsing())) {
 			const ImGuiIO& io = ImGui::GetIO();
 			if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
 				prefabPreviewYaw_ += io.MouseDelta.x * 0.01f;
@@ -23831,6 +25488,7 @@ void ImGuiManager::DrawPrefabPreview() {
 		}
 		if (!prefabPreviewRequestUsesCombatRig_) {
 			DrawPrefabGizmo(imageMin.x, imageMin.y, imageSize.x, imageSize.y);
+			if (prefabGhostMode_ && ImGuizmo::IsUsing()) prefabAnimationPreviewPlaying_ = false;
 		}
 		if (prefabAxisVisible_) {
 			DrawWorldAxisIndicator(
@@ -23858,12 +25516,14 @@ void ImGuiManager::DrawPrefabPreview() {
 		if (
 			!prefabPreviewRequestUsesCombatRig_ &&
 			imageHovered &&
+			(!prefabGhostMode_ || !prefabGhostFrame_.poseSerial) &&
 			ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
 			!ImGuizmo::IsOver() &&
 			!ImGuizmo::IsUsing()
 		) {
 			PickPrefabEntity(imageMin.x, imageMin.y, imageSize.x, imageSize.y);
 		}
+		if (prefabGhostMode_) DrawPrefabAnimationGhostOverlay(imageMin, imageSize, imageHovered);
 	} else {
 		const char* message = document.GetEntities().empty()
 			? "Prefab has no Entities."
@@ -23968,6 +25628,11 @@ void ImGuiManager::HandleEditShortcuts() {
 		ImGui::IsKeyPressed(ImGuiKey_Y, false) ||
 		(io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false));
 	if (!saveRequested && !undoRequested && !redoRequested) {
+		return;
+	}
+	if (attackPreviewActive_ && attackHitFocus_) {
+		attackHitCommand_ = saveRequested ? 1 : undoRequested ? 2 : 3;
+		ApplyAttackHitBoxRequest();
 		return;
 	}
 
@@ -25061,60 +26726,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 			: index == 1 ? "LocalRotation" : "LocalScale";
 	};
 
-	struct PoseKeyRef {
-		int trackIndex = -1;
-		int keyIndex = -1;
-	};
-	struct TransformPose {
-		float time = 0.0f;
-		PoseKeyRef keys[3];
-	};
-	struct TimedKeyRef {
-		float time = 0.0f;
-		int property = -1;
-		int trackIndex = -1;
-		int keyIndex = -1;
-	};
-
-	std::vector<TimedKeyRef> transformKeys;
-	for (size_t trackIndex = 0; trackIndex < clip.tracks.size(); ++trackIndex) {
-		const SceneAnimationTrack& track = clip.tracks[trackIndex];
-		const int property = propertyIndex(track.property);
-		if (property < 0 || resolveTrackTargetId(track) != entity.id) {
-			continue;
-		}
-		for (size_t keyIndex = 0; keyIndex < track.keyframes.size(); ++keyIndex) {
-			transformKeys.push_back({
-				track.keyframes[keyIndex].time,
-				property,
-				static_cast<int>(trackIndex),
-				static_cast<int>(keyIndex)
-			});
-		}
-	}
-	std::stable_sort(
-		transformKeys.begin(),
-		transformKeys.end(),
-		[](const TimedKeyRef& left, const TimedKeyRef& right) {
-			return left.time < right.time;
-		}
-	);
-
-	std::vector<TransformPose> poses;
-	for (const TimedKeyRef& key : transformKeys) {
-		if (
-			poses.empty() ||
-			std::abs(poses.back().time - key.time) > kKeyTimeTolerance
-		) {
-			poses.push_back({});
-			poses.back().time = key.time;
-		}
-		PoseKeyRef& destination = poses.back().keys[key.property];
-		if (destination.trackIndex < 0) {
-			destination.trackIndex = key.trackIndex;
-			destination.keyIndex = key.keyIndex;
-		}
-	}
+	const auto poses = BuildPrefabTransformPoses(document, owner->id, clip, entity.id);
 
 	const auto authoringValue = [&](int property) {
 		return property == 0
@@ -25211,11 +26823,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 			}
 		);
 	};
-	const auto activatePreviewAt = [&](float time) {
-		prefabAnimationPreviewTime_ = std::clamp(time, 0.0f, duration);
-		prefabAnimationPreviewPlaying_ = false;
-		prefabAnimationPreviewActive_ = true;
-	};
+	const auto activatePreviewAt = [&](float time) { SelectPrefabAnimationPose(time); };
 
 	if (!DrawPersistentInspectorHeader(
 		"prefab/" + prefabEditorSession_->GetFilePath() + "/" +
@@ -25227,7 +26835,9 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 	for (size_t ti=0;ti<clip.tracks.size();++ti) {
 		if (clip.tracks[ti].property!="LocalRotation" || resolveTrackTargetId(clip.tracks[ti])!=entity.id) continue;
 		ImGui::PushID(static_cast<int>(ti));
-		if (DrawAnimationRotationMode(document,owner->id,clip,ti,true)) document.MarkDirty();
+		if (DrawAnimationRotationMode(document,owner->id,clip,ti,true)) {
+			document.MarkDirty(); NotePrefabAnimationGhostEdit();
+		}
 		ImGui::PopID();
 	}
 	if (rotationModeDraft_.active) return;
@@ -25291,7 +26901,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 				return;
 			}
 			for (int property = 0; property < 3; ++property) upsertKey(property,time,values[property]);
-			document.MarkDirty();
+			document.MarkDirty(); NotePrefabAnimationGhostEdit();
 			activatePreviewAt(time);
 			char message[96]{};
 			std::snprintf(
@@ -25348,7 +26958,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 						track.easing = easing;
 					}
 				}
-				document.MarkDirty();
+				document.MarkDirty(); NotePrefabAnimationGhostEdit();
 			}
 		}
 		ImGui::EndCombo();
@@ -25360,6 +26970,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 		return;
 	}
 
+	DrawTimeInputReference();
 	for (size_t poseIndex = 0; poseIndex < poses.size(); ++poseIndex) {
 		const TransformPose& pose = poses[poseIndex];
 		const bool complete =
@@ -25372,29 +26983,45 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 			poses[poseIndex + 1].keys[1].trackIndex >= 0 &&
 			poses[poseIndex + 1].keys[2].trackIndex >= 0;
 		ImGui::PushID(static_cast<int>(poseIndex));
+		const bool ghostSelected = prefabGhostSelected_ && prefabGhostSelectionContext_.target == entity.id &&
+			prefabGhostSelectionContext_.generation == document.GetContentGeneration() &&
+			prefabGhostSelectionContext_.revision == document.GetRevision() && prefabGhostSelectedTime_ == pose.time;
+		if (ghostSelected) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 		const char* state = complete ? "Transform Pose" : "Partial Pose";
 		if (ImGui::TreeNodeEx(
 			"Pose",
-			ImGuiTreeNodeFlags_DefaultOpen,
+			ImGuiTreeNodeFlags_DefaultOpen | (ghostSelected ? ImGuiTreeNodeFlags_Selected : 0),
 			"%s  %.3f s",
 			state,
 			pose.time
 		)) {
 			float editedTime = pose.time;
-			if (ImGui::DragFloat(
-				"Time", &editedTime, 0.01f, 0.0f, duration, "%.3f s"
-			)) {
-				editedTime = std::clamp(editedTime, 0.0f, duration);
-				for (const PoseKeyRef& key : pose.keys) {
-					if (key.trackIndex >= 0 && key.keyIndex >= 0) {
-						clip.tracks[key.trackIndex].keyframes[key.keyIndex].time = editedTime;
-						sortTrack(key.trackIndex);
+			if (DrawCommittedTimeInput(LocalizedComponentWidgetLabel(editorLanguage_, "Time"),
+				editedTime, 0.01f, duration, document,
+				"pose/" + std::to_string(owner->id) + "/" + std::to_string(entity.id) + "/" +
+				std::to_string(prefabAnimationPreviewClipIndex_))) {
+				// 既存の姿勢グループ許容差と同じ範囲で、他の姿勢との意図しない統合を拒否。
+				const bool duplicate = std::any_of(poses.begin(), poses.end(), [&](const auto& other) {
+					return &other != &pose && std::abs(other.time - editedTime) <= kKeyTimeTolerance;
+				});
+				if (duplicate) WarnTimeInput(true);
+				else {
+					prefabEditorSession_->EndEditFrame(true);
+					prefabEditorSession_->BeginEditFrame();
+					for (const PoseKeyRef& key : pose.keys) {
+						if (key.trackIndex >= 0 && key.keyIndex >= 0) {
+							clip.tracks[key.trackIndex].keyframes[key.keyIndex].time = editedTime;
+							sortTrack(key.trackIndex);
+						}
 					}
+					document.MarkDirty(); NotePrefabAnimationGhostEdit();
+					prefabEditorSession_->EndEditFrame(true);
+					prefabEditorSession_->BeginEditFrame();
+					SelectPrefabAnimationPose(editedTime);
+					// sort前のPoseKeyRefを、このFrameの残りの項目で再使用しない。
+					ImGui::TreePop(); ImGui::PopID();
+					return;
 				}
-				document.MarkDirty();
-				prefabAnimationPreviewTime_ = editedTime;
-				prefabAnimationPreviewPlaying_ = false;
-				prefabAnimationPreviewActive_ = true;
 			}
 
 			Vector3 position = resolvePoseValue(pose, 0);
@@ -25402,18 +27029,18 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 			Vector3 scale = resolvePoseValue(pose, 2);
 			if (ImGui::DragFloat3("Position", &position.x, 0.01f)) {
 				upsertKey(0, pose.time, position);
-				document.MarkDirty();
+				document.MarkDirty(); NotePrefabAnimationGhostEdit();
 				activatePreviewAt(pose.time);
 			}
 			const Vector3 nextRotation=hasNextPose ? resolvePoseValue(poses[poseIndex+1],1) : Vector3{};
 			if (DrawRawAnimationRotation(editorLanguage_,rotationValue,hasNextPose ? &nextRotation : nullptr)) {
 				upsertKey(1, pose.time, rotationValue);
-				document.MarkDirty();
+				document.MarkDirty(); NotePrefabAnimationGhostEdit();
 				activatePreviewAt(pose.time);
 			}
 			if (ImGui::DragFloat3("Scale", &scale.x, 0.01f)) {
 				upsertKey(2, pose.time, scale);
-				document.MarkDirty();
+				document.MarkDirty(); NotePrefabAnimationGhostEdit();
 				activatePreviewAt(pose.time);
 			}
 
@@ -25460,7 +27087,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 								clip.tracks[key.trackIndex]
 									.keyframes[key.keyIndex].easingToNext.clear();
 							}
-							document.MarkDirty();
+							document.MarkDirty(); NotePrefabAnimationGhostEdit();
 							activatePreviewAt((pose.time + nextPose.time) * 0.5f);
 						}
 						for (const char* easing : {
@@ -25474,7 +27101,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 									clip.tracks[key.trackIndex]
 										.keyframes[key.keyIndex].easingToNext = easing;
 								}
-								document.MarkDirty();
+								document.MarkDirty(); NotePrefabAnimationGhostEdit();
 								activatePreviewAt((pose.time + nextPose.time) * 0.5f);
 							}
 						}
@@ -25490,12 +27117,12 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 						&positionStartKey.positionBulge.x,
 						0.01f
 					)) {
-						document.MarkDirty();
+						document.MarkDirty(); NotePrefabAnimationGhostEdit();
 						activatePreviewAt((pose.time + nextPose.time) * 0.5f);
 					}
 					if (ImGui::SmallButton("Reset Bulge")) {
 						positionStartKey.positionBulge = {};
-						document.MarkDirty();
+						document.MarkDirty(); NotePrefabAnimationGhostEdit();
 						activatePreviewAt((pose.time + nextPose.time) * 0.5f);
 					}
 					ImGui::TextDisabled(
@@ -25517,7 +27144,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 						);
 					}
 				}
-				document.MarkDirty();
+				document.MarkDirty(); NotePrefabAnimationGhostEdit();
 				activatePreviewAt(pose.time);
 			}
 			if (!complete) {
@@ -25525,10 +27152,8 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 				ImGui::TextDisabled("Missing Transform keys are kept unchanged.");
 			}
 
-			if (ImGui::SmallButton("Edit with Gizmo")) {
-				prefabAnimationPreviewTime_ = pose.time;
-				prefabAnimationPreviewPlaying_ = false;
-				prefabAnimationPreviewActive_ = true;
+			if (ImGui::SmallButton(SelectEditorText(editorLanguage_,"Gizmoで編集","Edit with Gizmo"))) {
+				SelectPrefabAnimationPose(pose.time);
 			}
 			ImGui::SameLine();
 			if (poseValuesValid && ImGui::SmallButton("Duplicate")) {
@@ -25544,7 +27169,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 							resolvePoseValue(pose, property)
 						);
 					}
-					document.MarkDirty();
+					document.MarkDirty(); NotePrefabAnimationGhostEdit();
 					prefabAnimationPreviewTime_ = duplicateTime;
 					prefabAnimationPreviewPlaying_ = false;
 					prefabAnimationPreviewActive_ = true;
@@ -25560,7 +27185,7 @@ void ImGuiManager::DrawPrefabTransformPoseInspector(SceneEntity& entity) {
 						keys.erase(keys.begin() + key.keyIndex);
 					}
 				}
-				document.MarkDirty();
+				document.MarkDirty(); NotePrefabAnimationGhostEdit();
 			}
 			ImGui::TreePop();
 		}
@@ -25664,7 +27289,7 @@ bool ImGuiManager::WritePrefabAnimationGizmoKey(
 		}
 		prefabAnimationPreviewTime_ = keyframe.time;
 		keyframe.value = storedValue;
-		document.MarkDirty();
+		document.MarkDirty(); NotePrefabAnimationGhostEdit();
 		return true;
 	}
 
@@ -25677,7 +27302,7 @@ bool ImGuiManager::WritePrefabAnimationGizmoKey(
 			return left.time < right.time;
 		}
 	);
-	document.MarkDirty();
+	document.MarkDirty(); NotePrefabAnimationGhostEdit();
 	return true;
 }
 
@@ -25808,11 +27433,18 @@ void ImGuiManager::DrawPrefabGizmo(
 			: gizmoOperation_ == 1
 				? MakeEulerFromQuaternion(localRotate)
 				: localScale;
+		const bool holdGhostTime = prefabGhostMode_ && prefabGhostFrame_.poseSerial;
+		const float ghostTime = prefabAnimationPreviewTime_;
 		WritePrefabAnimationGizmoKey(
 			sourceEntity->id,
 			property,
 			value
 		);
+		if (holdGhostTime) {
+			// 既存の近接キー更新はキー自身の時刻へ移る。Ghost編集中は表示時刻を固定する。
+			prefabAnimationPreviewTime_ = ghostTime;
+			if (prefabGhostSelected_) prefabGhostSelectedTime_ = ghostTime;
+		}
 		return;
 	}
 	if (gizmoOperation_ == 0) {
@@ -27715,6 +29347,7 @@ void ImGuiManager::DrawPrefabInspector() {
 				changed = true;
 			}
 		} else if (component.type == "PrefabAnimator") {
+			DrawTimeInputReference();
 			int removeClipIndex = -1;
 			for (size_t clipIndex = 0;
 				clipIndex < component.prefabAnimationClips.size();
@@ -27806,12 +29439,18 @@ void ImGuiManager::DrawPrefabInspector() {
 								++keyIndex) {
 								SceneAnimationKeyframe& key = track.keyframes[keyIndex];
 								ImGui::PushID(static_cast<int>(keyIndex));
-								if (ImGui::DragFloat(
-									LocalizedComponentWidgetLabel(editorLanguage_, "Time"), &key.time, 0.01f, 0.0f, clip.duration
-								)) {
-									key.time = std::clamp(key.time, 0.0f, clip.duration);
-									keyframeTimeChanged = true;
-									changed = true;
+								float editedTime = key.time;
+								if (DrawCommittedTimeInput(LocalizedComponentWidgetLabel(editorLanguage_, "Time"),
+									editedTime, 0.01f, clip.duration, document,
+									"prefab-key/" + std::to_string(entity->id) + "/" + std::to_string(component.localId))) {
+									const bool duplicate = std::any_of(track.keyframes.begin(), track.keyframes.end(),
+										[&](const auto& other) { return &other != &key && other.time == editedTime; });
+									if (duplicate) WarnTimeInput(true);
+									else {
+										prefabEditorSession_->EndEditFrame(true);
+										prefabEditorSession_->BeginEditFrame();
+										key.time = editedTime; keyframeTimeChanged = true;
+									}
 								}
 								if (track.property == "Active") {
 									bool activeValue = key.value.x >= 0.5f;
@@ -27850,6 +29489,9 @@ void ImGuiManager::DrawPrefabInspector() {
 										return left.time < right.time;
 									}
 								);
+								document.MarkDirty();
+								prefabEditorSession_->EndEditFrame(true);
+								prefabEditorSession_->BeginEditFrame();
 							}
 							if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Keyframeを追加###AddKeyframe", "Add Keyframe###AddKeyframe"))) {
 								SceneAnimationKeyframe keyframe = track.keyframes.empty()
@@ -28105,4 +29747,583 @@ void ImGuiManager::SetReplayFramingResult(const SceneReplayFramingRequest& reque
     } else if (request.convertToManual) {
         replayFramingManualResult_=manual; replayFramingResultSource_=request.view; replayFramingResultSerial_=request.serial; replayFramingManualReady_=true;
     }
+}
+
+void ImGuiManager::WarnAttackHitBox(const char* ja,const char* en) {
+	attackPreviewIssue_={
+		ja,en,{
+		}
+	};
+	attackPreviewWarningRequested_=true;
+}
+bool ImGuiManager::GuardAttackHitBoxDraft(bool prefab) {
+	if(!attackPreviewActive_||!attackHitDirty_||attackPreviewToken_.prefab!=prefab)return true;
+	WarnAttackHitBox("操作できません。当たり判定の未適用候補を適用または取消して再操作してください。","Cannot perform this operation. Apply or cancel the hit volume draft first.");
+	return false;
+}
+void ImGuiManager::ResetAttackHitBoxEdit() {
+	attackHitSelected_=attackHitDirty_=attackHitApply_=attackHitDragging_=false;
+	attackKeyIds_.clear(); attackSelectedKey_=0; attackEditQueued_=false; attackGizmoWaitRelease_=false; ++attackDraftEpoch_; attackInput_=AttackInput::None;
+	attackHitCommand_=0;
+	attackHitEdit_={
+	};
+	attackHitValid_={
+	};
+	attackHitModel_={
+	};
+	attackHitErrorJa_.clear();
+	attackHitErrorEn_.clear();
+	attackHitValidInput_=true;
+	++attackHitSerial_;
+	prefabPreviewRenderedPath_.clear();
+}
+namespace {
+	// Colliderのworld中心/寸法のoverflowを保存前にも確認する。Transform自体は変更しない。
+	Vector3 AttackHitPoint(const Vector3& point, const Matrix4x4& world) {
+		return {
+			point.x*world.m[0][0]+point.y*world.m[1][0]+point.z*world.m[2][0]+world.m[3][0], point.x*world.m[0][1]+point.y*world.m[1][1]+point.z*world.m[2][1]+world.m[3][1], point.x*world.m[0][2]+point.y*world.m[1][2]+point.z*world.m[2][2]+world.m[3][2]
+		};
+	}
+	bool AttackKeyShapesFinite(const SceneDocument& candidate,const PlayerCombatEditor::Subject& subject,const PlayerCombatEditor::HitBoxEditRequest& edit) {
+		for(const auto& key:edit.track.keys){
+			PlayerCombatPreview sample;PlayerCombatPreview::EditVolume volume;
+			if(!sample.RebuildAndSample(candidate,subject,key.time) || !sample.GetEditVolume(edit.selection.window,key.time,volume))return false;
+		}
+		return true;
+	}
+	bool AttackHitShapeFinite(const SceneDocument& doc,uint64_t id) {
+		const auto* e=doc.FindEntity(id);
+		if(!e)return false;
+		const SceneComponent* c=nullptr;
+		for(const auto& component:e->components)if(component.type=="OBBCollider")c=&component;
+		if(!c)return false;
+		const auto world=SceneTransformResolver::ResolveSceneWorldMatrix(doc,*e);
+		if(!SpatialFinite(world))return false;
+		const auto center=AttackHitPoint(c->colliderOffset,world);
+		if(!SpatialFinite(center))return false;
+		float lengths[3]{
+		};
+		for(int i=0;i<3;++i){
+			lengths[i]=Math::Length({
+				world.m[i][0],world.m[i][1],world.m[i][2]
+			}
+			);
+			if(!std::isfinite(lengths[i]))return false;
+		}
+		const auto& h=c->colliderSizeMultiplier;
+		const float extents[3]={
+			(std::max)(std::abs(h.x),0.001f)*lengths[0],(std::max)(std::abs(h.y),0.001f)*lengths[1],(std::max)(std::abs(h.z),0.001f)*lengths[2]
+		};
+		const float radius=(std::max)(c->colliderSphereRadius,0.001f)*(std::max)({
+			lengths[0],lengths[1],lengths[2]
+		}
+		);
+		double bound=c->colliderShape=="Sphere"?radius:double(extents[0])+extents[1]+extents[2];
+		return std::isfinite(bound)&&bound<=(std::numeric_limits<float>::max)()&& std::abs(double(center.x))+bound<=(std::numeric_limits<float>::max)()&&std::abs(double(center.y))+bound<=(std::numeric_limits<float>::max)()&&std::abs(double(center.z))+bound<=(std::numeric_limits<float>::max)();
+	}
+}
+void ImGuiManager::UpdateAttackHitBoxCandidate() {
+	using namespace PlayerCombatEditor;
+	attackPreviewPlaying_=false;
+	attackHitDirty_=true;
+	attackHitValidInput_=false;
+	const auto& source=attackPreviewToken_.prefab?prefabEditorSession_->GetDocument():editorSession_->GetEditDocument();
+	HitBoxEditModel model;
+	if(ValidateHitBoxEdit(source,MakePlayerCombatToken(source,attackPreviewToken_.prefab),attackHitEdit_,editorSession_->IsEditing(),model)) {
+		// 一時candidateの内容世代は原本tokenへ昇格させない。
+		SceneDocument candidate=source;
+		WriteHitBoxFields(candidate,attackHitEdit_);
+		PlayerCombatPreview sample;
+		if(sample.RebuildAndSample(candidate,attackPreviewSubject_,attackPreviewTime_)&&AttackHitShapeFinite(*sample.GetDocument(),attackHitEdit_.selection.entity)&&AttackKeyShapesFinite(candidate,attackPreviewSubject_,attackHitEdit_)) {
+			attackHitValid_=attackHitEdit_;
+			attackHitValidInput_=true;
+			attackHitErrorJa_.clear();
+			attackHitErrorEn_.clear();
+			++attackHitSerial_;
+			prefabPreviewRenderedPath_.clear();
+			return;
+		}
+		model.japanese="候補の表示値が不正です。位置・大きさを小さくして再入力してください。";
+		model.english="Invalid evaluated volume. Reduce position or size and retry.";
+	}
+	attackHitErrorJa_=model.japanese;
+	attackHitErrorEn_=model.english;
+}
+void ImGuiManager::ApplyAttackHitBoxRequest() {
+	using namespace PlayerCombatEditor;
+	if(!attackPreviewActive_)return;
+	if(attackEditQueued_){
+		attackEditQueued_=false;
+		if(attackQueuedEpoch_==attackDraftEpoch_ && Matches(attackQueuedEdit_.selection.token,attackPreviewToken_)){
+			attackHitEdit_=attackQueuedEdit_;attackKeyIds_=attackQueuedIds_;attackSelectedKey_=attackQueuedKey_;
+			UpdateAttackHitBoxCandidate();
+		}else WarnAttackHitBox("編集対象が変わりました。選択し直して再操作してください。","Edit target changed. Select it again and retry.");
+	}
+	if(attackHitCommand_ && attackHitApply_) {
+		attackHitCommand_=0; attackHitApply_=false;
+		WarnAttackHitBox("適用と保存・Undoを同時に実行できません。一操作ずつ行ってください。","Cannot apply and save or undo together. Perform one operation at a time.");
+		return;
+	}
+	if(attackHitCommand_) {
+		const int command=attackHitCommand_;
+		attackHitCommand_=0;
+		if(attackHitAppliedFrame_==ImGui::GetFrameCount()) {
+			WarnAttackHitBox("適用と保存・Undoは一操作ずつ行ってください。","Apply and save or undo must be separate operations.");
+			return;
+		}
+		if(!GuardAttackHitBoxDraft(attackPreviewToken_.prefab))return;
+		const bool prefab=attackPreviewToken_.prefab;
+		if(command==1){
+			const bool saved=prefab?prefabEditorSession_->Save():editorSession_->Save();
+			if(saved&&prefab)InvalidateProjectCache();
+			if(!saved)WarnAttackHitBox("編集元を保存できません。保存先の状態を確認して再操作してください。","Could not save the source. Check its destination and retry.");
+		}
+		if(command==2){
+			if(prefab)prefabEditorSession_->Undo();
+			else editorSession_->Undo();
+		}
+		if(command==3){
+			if(prefab)prefabEditorSession_->Redo();
+			else editorSession_->Redo();
+		}
+		return;
+	}
+	if(!attackHitApply_)return;
+	attackHitApply_=false;
+	if(!attackHitDirty_)return;
+	if(!attackHitValidInput_){
+		WarnAttackHitBox("適用できません。入力を修正して再操作してください。","Cannot apply. Correct the input and retry.");
+		return;
+	}
+	auto& source=attackPreviewToken_.prefab?prefabEditorSession_->GetDocument():editorSession_->GetEditDocument();
+	HitBoxEditModel model;
+	if(!ValidateHitBoxEdit(source,MakePlayerCombatToken(source,attackPreviewToken_.prefab),attackHitEdit_,editorSession_->IsEditing(),model)) {
+		WarnAttackHitBox(model.japanese.c_str(),model.english.c_str());
+		return;
+	}
+	// 別Inspectorのinteraction中にはsnapshotを確定しない。
+	if(ImGuizmo::IsUsing()||ImGui::IsAnyItemActive()){
+		WarnAttackHitBox("別の編集を終了してから適用してください。","Finish the other edit before applying.");
+		return;
+	}
+	const bool prefab=attackPreviewToken_.prefab;
+	if(prefab)prefabEditorSession_->EndEditFrame(true);
+	else editorSession_->EndEditFrame(true);
+	if(!ValidateHitBoxEdit(source,MakePlayerCombatToken(source,prefab),attackHitEdit_,true,model)){
+		WarnAttackHitBox(model.japanese.c_str(),model.english.c_str());
+		return;
+	}
+	SceneDocument candidate=source;
+	const bool differs=WriteHitBoxFields(candidate,attackHitEdit_);
+	PlayerCombatPreview sample;
+	if(!sample.RebuildAndSample(candidate,attackPreviewSubject_,attackPreviewTime_)||!AttackHitShapeFinite(*sample.GetDocument(),attackHitEdit_.selection.entity)||!AttackKeyShapesFinite(candidate,attackPreviewSubject_,attackHitEdit_)){
+		WarnAttackHitBox("適用できません。候補の表示値を確認してください。","Cannot apply. Check the evaluated draft values.");
+		return;
+	}
+	if(differs){
+		if(prefab)prefabEditorSession_->BeginEditFrame();
+		else editorSession_->BeginEditFrame();
+		WriteHitBoxFields(source,attackHitEdit_);
+		source.MarkDirty();
+		if(prefab)prefabEditorSession_->EndEditFrame(true);
+		else{
+			editorSession_->EndEditFrame(true);
+			editorSession_->RequestSceneReload();
+		}
+	}
+	attackPreviewToken_=MakePlayerCombatToken(source,prefab);
+	attackHitEdit_.selection.token=attackPreviewToken_;
+	attackHitModel_=ResolveHitBox(source,attackPreviewToken_,attackPreviewSubject_,attackHitEdit_.selection.window);
+	attackHitEdit_.values=attackHitModel_.values;
+	attackHitEdit_.track=attackHitModel_.track;
+	attackHitEdit_.fields=0;
+	attackHitValid_=attackHitEdit_;
+	attackHitDirty_=false;
+	attackHitAppliedFrame_=ImGui::GetFrameCount();
+	attackPreviewPlaying_=false;
+	++attackHitSerial_;
+	prefabPreviewRenderedPath_.clear();
+}
+void ImGuiManager::DrawAttackHitBoxEditor() {
+	DrawAttackHitInspector(attackPreviewToken_.prefab);
+}
+void ImGuiManager::DrawAttackHitBoxGizmo(float x,float y,float width,float height) {
+	using namespace PlayerCombatEditor;
+	if(!attackHitSelected_||!attackHitValidInput_||!attackHitModel_.geometry||attackPreviewPlaying_||attackEditQueued_)return;
+	if(attackGizmoWaitRelease_){if(ImGui::IsMouseDown(ImGuiMouseButton_Left))return;attackGizmoWaitRelease_=false;}
+	const size_t key=AttackKeyIndex();
+	if(!attackHitEdit_.track.keys.empty() && (key>=attackHitEdit_.track.keys.size() || attackHitEdit_.track.keys[key].time!=attackPreviewTime_)) return;
+	if(attackInput_!=AttackInput::None && attackInput_!=AttackInput::Gizmo)return;
+	if(attackRenderedCameraSerial_!=attackCameraSerial_ || attackRenderedWidth_!=prefabPreviewRequestedWidth_ || attackRenderedHeight_!=prefabPreviewRequestedHeight_ || attackFit_!=PlayerCombatPreview::Fit::None)return;
+	const bool matching=attackHitRenderedSerial_==attackHitSerial_&&attackHitRenderedTime_==attackPreviewTime_&&Matches(attackHitRenderedToken_,attackPreviewToken_);
+	if(!matching&&!attackHitDragging_)return;
+	const auto* doc=attackPreview_.GetDocument();
+	const auto* entity=doc?doc->FindEntity(attackHitEdit_.selection.entity):nullptr;
+	if(!entity)return;
+	bool bone=false;
+	for(const auto* p=entity;p;p=doc->FindEntity(p->parentId))for(const auto& c:p->components)bone|=c.enabled&&c.type=="BoneAttachment";
+	if(bone){
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"骨追従は未再現です。ローカル数値欄で編集してください。","Bone attachment is not evaluated. Use local numeric fields."));
+		return;
+	}
+	// 一操作中は姿勢とカメラを固定し、候補offsetからworldを再累積しない。
+	if(!attackHitDragging_){
+		attackHitDragWorld_=SceneTransformResolver::ResolveSceneWorldMatrix(*doc,*entity);
+		attackHitDragView_=prefabPreviewViewMatrix_;
+		attackHitDragProjection_=prefabPreviewProjectionMatrix_;
+	}
+	const auto& world=attackHitDragWorld_;
+	const auto inverse=Inverse(world);
+	if(!SpatialFinite(world)||!SpatialFinite(inverse)||!SpatialMatrixMatches(Multiply(world,inverse),MakeIdentity4x4())){
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"逆変換できません。ローカル数値欄を使用してください。","Cannot invert this pose. Use local numeric fields."));
+		return;
+	}
+	Vector3 axes[3]{
+	};
+	float lengths[3]{
+	};
+	bool orthogonal=true;
+	for(int i=0;i<3;++i){
+		axes[i]={
+			world.m[i][0],world.m[i][1],world.m[i][2]
+		};
+		lengths[i]=Math::Length(axes[i]);
+		if(!std::isfinite(lengths[i])||lengths[i]<=1e-6f)return;
+		axes[i]=Math::Multiply(axes[i],1.0f/lengths[i]);
+	}
+	for(int i=0;i<3;++i)for(int j=i+1;j<3;++j)orthogonal&=std::abs(Math::Dot(axes[i],axes[j]))<=1e-4f;
+	orthogonal&=Math::Dot(axes[0],Math::Cross(axes[1],axes[2]))>0;
+	if(attackHitOperation_==1&&(!orthogonal||attackHitEdit_.selection.shape!="Box")){
+		ImGui::TextWrapped("%s",SelectEditorText(editorLanguage_,"サイズハンドルは直交した正の箱形状に対応します。数値欄を使用してください。","Size handles require a right-handed orthogonal box. Use numeric fields."));
+		return;
+	}
+	auto v=attackHitValid_.values;
+	if(key<attackHitValid_.track.keys.size()){
+		const auto& selected=attackHitValid_.track.keys[key];v.offset=selected.offset;v.halfSize=selected.halfSize;v.radius=selected.radius;
+		attackHitEdit_.values.offset=v.offset;attackHitEdit_.values.halfSize=v.halfSize;attackHitEdit_.values.radius=v.radius;
+	}
+	PlayerCombatPreview::EditVolume editVolume;
+	if(!attackPreview_.GetEditVolume(attackHitEdit_.selection.window,attackPreviewTime_,editVolume))return;
+	const auto center=AttackHitPoint(v.offset,world);
+	Matrix4x4 matrix=MakeIdentity4x4();
+	matrix.m[3][0]=center.x;
+	matrix.m[3][1]=center.y;
+	matrix.m[3][2]=center.z;
+	if(attackHitOperation_==1){
+		const float h[3]={
+			v.halfSize.x,v.halfSize.y,v.halfSize.z
+		};
+		for(int i=0;i<3;++i){
+			const float scale=(std::max)(std::abs(h[i]),0.001f)*lengths[i];
+			matrix.m[i][0]=axes[i].x*scale;
+			matrix.m[i][1]=axes[i].y*scale;
+			matrix.m[i][2]=axes[i].z*scale;
+		}
+	}
+	ImGuizmo::SetOrthographic(false);
+	ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+	ImGuizmo::SetRect(x,y,width,height);
+	const bool changed=ImGuizmo::Manipulate(&attackHitDragView_.m[0][0],&attackHitDragProjection_.m[0][0],attackHitOperation_?ImGuizmo::SCALE:ImGuizmo::TRANSLATE,attackHitOperation_?ImGuizmo::LOCAL:ImGuizmo::WORLD,&matrix.m[0][0]);
+	if(!attackHitDragging_ && ImGuizmo::IsUsing()){attackDragStartEdit_=attackHitEdit_;attackInput_=AttackInput::Gizmo;}
+	attackHitDragging_=ImGuizmo::IsUsing();
+	if(!attackHitDragging_ && attackInput_==AttackInput::Gizmo)attackInput_=AttackInput::None;
+	if(changed&&SpatialFinite(matrix)){
+		if(!attackHitOperation_){
+			attackHitEdit_.values.offset=AttackHitPoint(Vector3{
+				matrix.m[3][0],matrix.m[3][1],matrix.m[3][2]
+			}
+			,inverse);
+			attackHitEdit_.fields|=HitOffset;
+		}
+		else{
+			float size[3]{
+			};
+			auto reconstructed=MakeIdentity4x4();
+			reconstructed.m[3][0]=center.x;
+			reconstructed.m[3][1]=center.y;
+			reconstructed.m[3][2]=center.z;
+			for(int i=0;i<3;++i){
+				const Vector3 axis{
+					matrix.m[i][0],matrix.m[i][1],matrix.m[i][2]
+				};
+				const float extent=Math::Dot(axis,axes[i]);
+				size[i]=(std::max)(extent/lengths[i],0.001f);
+				reconstructed.m[i][0]=axes[i].x*extent;
+				reconstructed.m[i][1]=axes[i].y*extent;
+				reconstructed.m[i][2]=axes[i].z*extent;
+			}
+			if(!SpatialMatrixMatches(reconstructed,matrix))return;
+			attackHitEdit_.values.halfSize={
+				size[0],size[1],size[2]
+			};
+			attackHitEdit_.fields|=HitSize;
+		}
+		CommitAttackKeyGeometry();
+		QueueAttackHitCandidate();
+	}
+}
+
+// キーのIDはdraft内だけで有効。sort後も配列位置ではなく同じキーを追跡する。
+size_t ImGuiManager::AttackKeyIndex() const {
+	const auto found=std::find(attackKeyIds_.begin(),attackKeyIds_.end(),attackSelectedKey_);
+	return found==attackKeyIds_.end()?attackHitEdit_.track.keys.size():static_cast<size_t>(found-attackKeyIds_.begin());
+}
+void ImGuiManager::SelectAttackHitWindow(size_t index) {
+	if(!GuardAttackHitBoxDraft(attackPreviewToken_.prefab))return;
+	const auto& source=attackPreviewToken_.prefab?prefabEditorSession_->GetDocument():editorSession_->GetEditDocument();
+	ResetAttackHitBoxEdit();
+	attackHitModel_=PlayerCombatEditor::ResolveHitBox(source,attackPreviewToken_,attackPreviewSubject_,index);
+	attackHitSelected_=attackHitModel_.valid;
+	attackHitEdit_.selection=attackHitModel_.selection;attackHitEdit_.values=attackHitModel_.values;attackHitEdit_.track=attackHitModel_.track;
+	for(size_t i=0;i<attackHitEdit_.track.keys.size();++i)attackKeyIds_.push_back(++attackNextKeyId_);
+	attackHitValid_=attackHitEdit_;attackInspector_=true;
+	if(attackPreviewToken_.prefab){showPrefabInspector_=true;prefabInspectorRevealRequested_=true;}else{showInspector_=true;revealInspectorRequested_=true;}
+	if(!attackHitSelected_)WarnAttackHitBox(attackHitModel_.japanese.c_str(),attackHitModel_.english.c_str());
+}
+void ImGuiManager::SelectAttackKey(uint64_t id) {
+	if(attackEditQueued_ && attackSelectedKey_!=id){WarnAttackHitBox("値を編集中です。操作を終了してから別のキーを選んでください。","Finish the value edit before selecting another key.");return;}
+	attackSelectedKey_=id;
+	const size_t i=AttackKeyIndex();
+	if(i>=attackHitEdit_.track.keys.size())return;
+	const auto& key=attackHitEdit_.track.keys[i];
+	attackPreviewTime_=std::clamp(std::isfinite(key.time)?key.time:0.0f,0.0f,attackPreview_.GetDuration());attackPreviewPlaying_=false;
+	attackHitEdit_.values.offset=key.offset;attackHitEdit_.values.halfSize=key.halfSize;attackHitEdit_.values.radius=key.radius;
+	attackHitValid_.values=attackHitEdit_.values;
+	++attackHitSerial_;
+	attackInspector_=true;
+	if(attackPreviewToken_.prefab){showPrefabInspector_=true;prefabInspectorRevealRequested_=true;}else{showInspector_=true;revealInspectorRequested_=true;}
+}
+void ImGuiManager::QueueAttackHitCandidate() {
+	attackHitDirty_=true;attackPreviewPlaying_=false;
+	attackEditQueued_=true;attackQueuedEpoch_=attackDraftEpoch_;
+	attackQueuedEdit_=attackHitEdit_;attackQueuedIds_=attackKeyIds_;attackQueuedKey_=attackSelectedKey_;
+}
+void ImGuiManager::CommitAttackKeyGeometry() {
+	const size_t i=AttackKeyIndex();
+	if(attackHitEdit_.track.keys.empty() || i>=attackHitEdit_.track.keys.size())return;
+	auto& key=attackHitEdit_.track.keys[i];key.offset=attackHitEdit_.values.offset;key.halfSize=attackHitEdit_.values.halfSize;key.radius=attackHitEdit_.values.radius;
+	attackHitEdit_.fields &= ~(PlayerCombatEditor::HitOffset|PlayerCombatEditor::HitSize);
+	attackHitEdit_.fields |= PlayerCombatEditor::HitKeys;
+}
+void ImGuiManager::SetAttackPreviewViewResult(const PlayerCombatPreview::ViewResult& result) {
+	const auto& request=result.request;
+	if(!attackPreviewActive_ || !request.enabled || request.serial!=attackViewRequestSerial_ || request.cameraSerial!=attackCameraSerial_ ||
+		request.candidateSerial!=attackHitSerial_ || request.time!=attackPreviewTime_ || !PlayerCombatEditor::Matches(request.token,attackPreviewToken_))return;
+	if(result.valid){attackView_=result.state;attackRenderedCameraSerial_=request.cameraSerial;attackRenderedWidth_=result.width;attackRenderedHeight_=result.height;}
+	else if(attackFit_!=PlayerCombatPreview::Fit::None)WarnAttackHitBox("視点を合わせられません。判定を選択し、有限の大きさと表示範囲を確認して再操作してください。","Cannot frame this view. Select a valid volume, check its size and display range, then retry.");
+	attackFit_=PlayerCombatPreview::Fit::None;
+}
+void ImGuiManager::UpdateAttackCamera(float x,float y,float width,float height) {
+	(void)x;(void)y;(void)width;
+	if(ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId) || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)){
+		if(attackInput_==AttackInput::Orbit||attackInput_==AttackInput::Pan)attackInput_=AttackInput::None;
+		return;
+	}
+	auto& io=ImGui::GetIO();
+	const bool hovered=ImGui::IsItemHovered();
+	if(!attackView_.initialized || attackRenderedWidth_!=prefabPreviewRequestedWidth_ || attackRenderedHeight_!=prefabPreviewRequestedHeight_ || attackFit_!=PlayerCombatPreview::Fit::None)return;
+	if(attackInput_==AttackInput::None && hovered && !ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing() && !io.WantTextInput){
+		if(ImGui::IsMouseClicked(ImGuiMouseButton_Middle)||ImGui::IsMouseClicked(ImGuiMouseButton_Right)){
+			attackCameraButton_=ImGui::IsMouseClicked(ImGuiMouseButton_Middle)?ImGuiMouseButton_Middle:ImGuiMouseButton_Right;
+			attackInput_=(attackCameraButton_==ImGuiMouseButton_Middle||io.KeyShift)?AttackInput::Pan:AttackInput::Orbit;
+			const auto world=Inverse(prefabPreviewViewMatrix_);
+			attackPanRight_={world.m[0][0],world.m[0][1],world.m[0][2]};attackPanUp_={world.m[1][0],world.m[1][1],world.m[1][2]};
+			attackPanScale_=2*attackView_.distance*std::tan(.35f)/(std::max)(height,1.0f);
+		}
+		ImGui::SetKeyOwner(ImGuiKey_MouseWheelY,ImGui::GetID("AttackWheel"),ImGuiInputFlags_LockThisFrame);
+		if(io.MouseWheel!=0){attackView_.distance=std::clamp(attackView_.distance*std::exp(-.1f*io.MouseWheel),.02f,5000.0f);++attackCameraSerial_;}
+	}
+	if(attackInput_==AttackInput::Orbit||attackInput_==AttackInput::Pan){
+		if(!ImGui::IsMouseDown(attackCameraButton_)){attackInput_=AttackInput::None;return;}
+		if(attackInput_==AttackInput::Orbit){attackView_.yaw+=io.MouseDelta.x*.01f;attackView_.pitch=std::clamp(attackView_.pitch+io.MouseDelta.y*.01f,-1.45f,1.45f);}
+		else{
+			const auto delta=Math::Add(Math::Multiply(attackPanRight_,-io.MouseDelta.x*attackPanScale_),Math::Multiply(attackPanUp_,io.MouseDelta.y*attackPanScale_));
+			const auto target=Math::Add(attackView_.target,delta);if(SpatialFinite(target))attackView_.target=target;
+		}
+		if(io.MouseDelta.x!=0||io.MouseDelta.y!=0)++attackCameraSerial_;
+	}
+}
+bool ImGuiManager::DrawAttackHitInspector(bool prefab) {
+	using namespace PlayerCombatEditor;
+	if(!attackInspector_ || !attackPreviewActive_ || prefab!=attackPreviewToken_.prefab)return false;
+	if(!RefreshPlayerAttackPreview())return false;
+	const auto text=[&](const char* ja,const char* en){return SelectEditorText(editorLanguage_,ja,en);};
+	// Inspectorを読み続けられるよう表示を残し、別の入力所有中は操作だけ無効化する。
+	struct DisabledScope { DisabledScope(bool disabled){ImGui::BeginDisabled(disabled);} ~DisabledScope(){ImGui::EndDisabled();} } scope(attackInput_!=AttackInput::None);
+	attackHitFocus_|=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+	ImGui::SeparatorText(text("攻撃プレビュー編集","Attack preview edit"));
+	DrawTimeInputReference();
+	ImGui::TextWrapped("%s / %s / %s",prefab?"Prefab":"Scene",attackPreviewToken_.key.c_str(),attackPreviewSubject_.attackName.c_str());
+	if(ImGui::Button(text("通常Inspectorへ","Normal Inspector")) && GuardAttackHitBoxDraft(prefab)){attackInspector_=false;return true;}
+	ImGui::SameLine();if(ImGui::Button(text("編集元を保存","Save source")))attackHitCommand_=1;
+	if(!attackHitSelected_){ImGui::TextWrapped("%s",text("時間軸から編集するWindowを選んでください。","Select a window in the timeline."));return true;}
+	ImGui::Text(text("区間 #%zu / %s","Window #%zu / %s"),attackHitEdit_.selection.window+1,attackHitModel_.selection.shape.c_str());
+	const auto& window=attackPreview_.GetWindows()[attackHitEdit_.selection.window];
+	ImGui::TextWrapped("%s",window.active?text("編集対象：区間有効","Editing: active window"):text("編集対象：区間外、または先行区間が優先。編集枠は実判定ではありません。","Editing: outside the interval or an earlier window has priority. The edit outline is not an active hit."));
+	if(!window.geometryIssue.japanese.empty())ImGui::TextWrapped("%s",text(window.geometryIssue.japanese.c_str(),window.geometryIssue.english.c_str()));
+	bool changed=false;
+	auto& edit=attackHitEdit_;
+	if(ImGui::Button(text("現在時刻にキー追加","Add key at current time"))){
+		if((edit.fields&(HitOffset|HitSize)) || !attackHitModel_.geometry){WarnAttackHitBox("キーを追加できません。基準値候補を適用・取消し、Legacyは移行してください。","Cannot add a key. Apply/cancel the base draft and migrate Legacy first.");}
+		else{
+			size_t found=edit.track.keys.size();for(size_t i=0;i<edit.track.keys.size();++i)if(edit.track.keys[i].time==attackPreviewTime_)found=i;
+			if(found<edit.track.keys.size())SelectAttackKey(attackKeyIds_[found]);
+			else{
+				SceneAttackHitGeometryKey key;key.time=attackPreviewTime_;key.offset=attackHitModel_.values.offset;key.halfSize=attackHitModel_.values.halfSize;key.radius=attackHitModel_.values.radius;
+				bool valid=true;
+				if(!edit.track.keys.empty()){
+					SceneAttackHitWindow sampleWindow;sampleWindow.geometryTrack=edit.track;
+					SceneAttackHitGeometryEvaluator::Issue issue;SceneAttackHitGeometryEvaluator::Sample sample;
+					valid=SceneAttackHitGeometryEvaluator::Validate(sampleWindow,attackHitModel_.duration,edit.selection.shape,issue)&&SceneAttackHitGeometryEvaluator::SampleTrack(edit.track,key.time,sample,issue);
+					if(valid){key.offset=sample.offset;key.halfSize=sample.halfSize;key.radius=sample.radius;}
+				}
+				if(!valid)WarnAttackHitBox("キーを追加できません。既存キーの不正値を先に修正してください。","Cannot add a key. Correct existing invalid keys first.");
+				else{
+					edit.track.shape=edit.selection.shape;
+					const auto p=std::lower_bound(edit.track.keys.begin(),edit.track.keys.end(),key.time,[](const auto& a,float t){return a.time<t;});
+					const size_t at=static_cast<size_t>(p-edit.track.keys.begin());const auto id=++attackNextKeyId_;
+					edit.track.keys.insert(p,key);attackKeyIds_.insert(attackKeyIds_.begin()+at,id);SelectAttackKey(id);edit.fields|=HitKeys;changed=true;
+				}
+			}
+		}
+	}
+	for(size_t i=0;i<edit.track.keys.size();++i){
+		ImGui::PushID(static_cast<int>(attackKeyIds_[i]));const auto& key=edit.track.keys[i];
+		if(ImGui::Selectable(("#"+std::to_string(i+1)+" / "+std::to_string(key.time)+" s").c_str(),attackSelectedKey_==attackKeyIds_[i]))SelectAttackKey(attackKeyIds_[i]);
+		ImGui::PopID();
+	}
+	size_t index=AttackKeyIndex();
+	const bool keyed=!edit.track.keys.empty();
+	if(keyed && index<edit.track.keys.size()){
+		auto& key=edit.track.keys[index];float time=key.time;
+		const auto& source = prefab ? prefabEditorSession_->GetDocument() : editorSession_->GetEditDocument();
+		if(DrawCommittedTimeInput(text("キー時刻（秒）","Key time (s)"), time, .001f, attackHitModel_.duration,
+			source, "hit-key/" + std::to_string(attackDraftEpoch_) + "/" + std::to_string(attackSelectedKey_))){
+			bool duplicate=false;for(size_t i=0;i<edit.track.keys.size();++i)if(i!=index && edit.track.keys[i].time==time)duplicate=true;
+			if(duplicate)WarnTimeInput(true);
+			else{key.time=time;attackPreviewTime_=std::clamp(std::isfinite(time)?time:0.0f,0.0f,attackHitModel_.duration);edit.fields|=HitKeys;changed=true;}
+		}
+		int interpolation=key.interpolation=="Linear"?0:key.interpolation=="Hold"?1:2;
+		const char* options[]={text("直線","Linear"),text("直前の値を保持","Hold"),text("不正な補間","Invalid interpolation")};
+		if(ImGui::Combo(text("次キーまでの補間","Interpolation to next key"),&interpolation,options,3)&&interpolation<2){key.interpolation=interpolation?"Hold":"Linear";edit.fields|=HitKeys;changed=true;}
+		if(index+1==edit.track.keys.size())ImGui::TextDisabled("%s",text("最後のキー：次キーがないため補間指定は未使用です。","Last key: interpolation is unused until another key follows."));
+		if(ImGui::Button(text("選択キーを削除","Delete selected key"))){
+			edit.track.keys.erase(edit.track.keys.begin()+index);attackKeyIds_.erase(attackKeyIds_.begin()+index);attackSelectedKey_=0;
+			edit.values=attackHitModel_.values;edit.fields|=HitKeys;changed=true;index=edit.track.keys.size();
+		}
+	}
+	const bool hasKeys=!edit.track.keys.empty();index=AttackKeyIndex();
+	const bool atKey=hasKeys && index<edit.track.keys.size() && edit.track.keys[index].time==attackPreviewTime_;
+	ImGui::TextWrapped("%s",hasKeys?text("キー値：このWindowだけに適用","Key geometry: this window only"):text("基準値：共有HitBox全体。箱は半サイズ、全幅は2倍です。","Base geometry: shared HitBox. Full box size is twice the half extents."));
+	if(!hasKeys)for(const auto& shared:attackHitModel_.shared)ImGui::TextWrapped("%s: %s",text("共有先","Shared reference"),shared.c_str());
+	if(hasKeys && !atKey){
+		PlayerCombatPreview::EditVolume volume;
+		if(attackPreview_.GetEditVolume(edit.selection.window,attackPreviewTime_,volume)){edit.values.offset=volume.offset;edit.values.halfSize=volume.halfSize;edit.values.radius=volume.radius;}
+		ImGui::TextWrapped("%s",text("補間結果の表示中です。キーを選ぶか、この時刻にキーを追加してください。","Showing sampled values. Select a key or add one at this time."));
+	}
+	if(atKey){const auto& key=edit.track.keys[index];edit.values.offset=key.offset;edit.values.halfSize=key.halfSize;edit.values.radius=key.radius;}
+	ImGui::BeginDisabled(!attackHitModel_.geometry || (hasKeys&&!atKey) || (!hasKeys && (edit.fields&HitKeys)) || attackPreviewPlaying_ || attackInput_!=AttackInput::None);
+	unsigned geometry=0;
+	if(ImGui::DragFloat3(text("位置（ローカル）","Position (local)"),&edit.values.offset.x,.01f))geometry|=HitOffset;
+	if(edit.selection.shape=="Sphere"){if(ImGui::DragFloat(text("半径","Radius"),&edit.values.radius,.01f))geometry|=HitSize;}
+	else if(ImGui::DragFloat3(text("大きさ（半サイズ）","Size (half extents)"),&edit.values.halfSize.x,.01f))geometry|=HitSize;
+	ImGui::RadioButton(text("位置ハンドル","Move handle"),&attackHitOperation_,0);ImGui::SameLine();
+	ImGui::BeginDisabled(edit.selection.shape!="Box");ImGui::RadioButton(text("サイズハンドル","Size handle"),&attackHitOperation_,1);ImGui::EndDisabled();
+	ImGui::EndDisabled();
+	if(geometry){edit.fields|=geometry;CommitAttackKeyGeometry();changed=true;}
+	if(ImGui::DragFloat(text("開始（秒）","Start (s)"),&edit.values.start,.001f)){edit.fields|=HitTime;changed=true;}
+	if(ImGui::DragFloat(text("終了（秒）","End (s)"),&edit.values.end,.001f)){edit.fields|=HitTime;changed=true;}
+	if(ImGui::Button(text("現在時刻を開始に設定","Set start to current time"))){edit.values.start=attackPreviewTime_;edit.fields|=HitTime;changed=true;}
+	if(ImGui::Button(text("現在時刻を終了に設定","Set end to current time"))){edit.values.end=attackPreviewTime_;edit.fields|=HitTime;changed=true;}
+	if(changed){
+		// 数値編集後はID付きで時刻順を戻す。重複は上で拒否し、未修正の不正値は保持。
+		for(size_t i=1;i<edit.track.keys.size();++i)for(size_t j=i;j>0 && edit.track.keys[j].time<edit.track.keys[j-1].time;--j){std::swap(edit.track.keys[j],edit.track.keys[j-1]);std::swap(attackKeyIds_[j],attackKeyIds_[j-1]);}
+		QueueAttackHitCandidate();
+	}
+	if(ImGui::IsAnyItemActive())attackPreviewPlaying_=false;
+	if(attackHitDirty_)ImGui::TextWrapped("%s",text("未適用候補。適用後に編集元を保存してください。","Unapplied draft. Apply, then save the source."));
+	if(!attackHitValidInput_)ImGui::TextWrapped("%s\n%s",text(attackHitErrorJa_.c_str(),attackHitErrorEn_.c_str()),text("最後の有効候補（ない場合は基準形状）を表示しています。","Showing the last valid draft, or the base shape if none exists."));
+	if((edit.fields&HitKeys)&&edit.track.keys.empty())ImGui::TextWrapped("%s",text("適用するとキーを削除し、共有Colliderの固定値へ戻ります。","Applying removes keys and restores shared Collider base geometry."));
+	if(ImGui::Button(text("適用###applyHitBox","Apply###applyHitBox")))attackHitApply_=true;
+	ImGui::SameLine();if(ImGui::Button(text("取消###cancelHitBox","Cancel###cancelHitBox")))ResetAttackHitBoxEdit();
+	ImGui::SameLine();if(ImGui::Button(text("元に戻す","Undo")))attackHitCommand_=2;ImGui::SameLine();if(ImGui::Button(text("やり直す","Redo")))attackHitCommand_=3;
+	return true;
+}
+
+void ImGuiManager::DrawAttackTimeline() {
+	const auto text=[&](const char* ja,const char* en){return SelectEditorText(editorLanguage_,ja,en);};
+	const float duration=attackPreview_.GetDuration();
+	ImGui::BeginChild("AttackTimeline",ImVec2(0,0),ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+	ImGui::BeginDisabled(attackInput_!=AttackInput::None || attackHitDragging_);
+	if(ImGui::Button(attackPreviewPlaying_?text("一時停止","Pause"):text("再生","Play"))){if(!attackPreviewPlaying_ && attackPreviewTime_>=duration)attackPreviewTime_=0;attackPreviewPlaying_=!attackPreviewPlaying_;}
+	ImGui::SameLine();if(ImGui::Button(text("先頭","Rewind"))){attackPreviewTime_=0;attackPreviewPlaying_=false;}
+	ImGui::SameLine();if(ImGui::Button(text("前キー","Previous key")) && attackHitSelected_){
+		for(size_t i=attackHitEdit_.track.keys.size();i>0;--i)if(attackHitEdit_.track.keys[i-1].time<attackPreviewTime_){SelectAttackKey(attackKeyIds_[i-1]);break;}
+	}
+	ImGui::SameLine();if(ImGui::Button(text("次キー","Next key")) && attackHitSelected_){
+		for(size_t i=0;i<attackHitEdit_.track.keys.size();++i)if(attackHitEdit_.track.keys[i].time>attackPreviewTime_){SelectAttackKey(attackKeyIds_[i]);break;}
+	}
+	float step=attackTimeStep_;ImGui::SetNextItemWidth(85);
+	if(ImGui::DragFloat(text("送り幅（秒）","Step (s)"),&step,.001f,0,0,"%.4f")){
+		if(std::isfinite(step)&&step>0)attackTimeStep_=step;
+		else WarnAttackHitBox("送り幅は0より大きい有限の秒数にしてください。","Time step must be finite and positive.");
+	}
+	ImGui::SameLine();if(ImGui::Button("<")){attackPreviewTime_=(std::max)(0.0f,attackPreviewTime_-attackTimeStep_);attackPreviewPlaying_=false;}
+	ImGui::SameLine();if(ImGui::Button(">")){attackPreviewTime_=(std::min)(duration,attackPreviewTime_+attackTimeStep_);attackPreviewPlaying_=false;}
+	ImGui::EndDisabled();
+	ImGui::SetNextItemWidth(-1);
+	ImGui::BeginDisabled(attackInput_!=AttackInput::None && attackInput_!=AttackInput::Playhead);
+	if(ImGui::SliderFloat(text("時刻（秒）###attackTime","Time (s)###attackTime"),&attackPreviewTime_,0,duration,"%.6f"))attackPreviewPlaying_=false;
+	if(ImGui::IsItemActivated())attackInput_=AttackInput::Playhead;
+	if(ImGui::IsItemDeactivated() && attackInput_==AttackInput::Playhead)attackInput_=AttackInput::None;
+	ImGui::EndDisabled();
+	const auto& attack=attackPreview_.GetAttack();
+	ImGui::Text("%s %.3f / %s %.3f / %s %.3f",text("構え","Windup"),attack.windup,text("動作","Action"),attack.activeTime,text("後隙","Recovery"),attack.recovery);
+	ImGui::BeginChild("AttackTimelineRows",ImVec2(0,0),ImGuiChildFlags_None);
+	for(size_t i=0;i<attackPreview_.GetWindows().size();++i){
+		const auto& window=attackPreview_.GetWindows()[i];ImGui::PushID(static_cast<int>(i));
+		const bool selected=attackHitSelected_&&attackHitEdit_.selection.window==i;
+		if(ImGui::Selectable(("#"+std::to_string(i+1)+" / "+window.name).c_str(),selected) && attackInput_==AttackInput::None)SelectAttackHitWindow(i);
+		const auto origin=ImGui::GetCursorScreenPos();const float width=(std::max)(ImGui::GetContentRegionAvail().x,1.0f);
+		ImGui::Dummy(ImVec2(width,12));auto* draw=ImGui::GetWindowDrawList();
+		draw->AddRectFilled(origin,ImVec2(origin.x+width,origin.y+8),IM_COL32(55,55,55,255));
+		if(duration>0){
+			draw->AddRectFilled(ImVec2(origin.x+width*std::clamp(window.start/duration,0.0f,1.0f),origin.y),ImVec2(origin.x+width*std::clamp(window.end/duration,0.0f,1.0f),origin.y+8),window.active?IM_COL32(230,80,80,255):IM_COL32(100,65,65,255));
+			const float px=origin.x+width*attackPreviewTime_/duration;draw->AddLine(ImVec2(px,origin.y),ImVec2(px,origin.y+10),IM_COL32_WHITE);
+		}
+		if(selected && duration>0){
+			const auto row=ImGui::GetCursorScreenPos();const float h=22;
+			const size_t count=attackHitEdit_.track.keys.size();
+			for(size_t k=0;k<count;++k){
+				const float time=attackHitEdit_.track.keys[k].time;if(!std::isfinite(time))continue;
+				const float px=row.x+width*std::clamp(time/duration,0.0f,1.0f);
+				draw->AddQuadFilled(ImVec2(px,row.y),ImVec2(px+5,row.y+6),ImVec2(px,row.y+12),ImVec2(px-5,row.y+6),attackSelectedKey_==attackKeyIds_[k]?IM_COL32(255,200,60,255):IM_COL32(160,170,200,255));
+			}
+			ImGui::InvisibleButton("keys",ImVec2(width,h));
+			if(ImGui::IsItemActivated() && attackInput_==AttackInput::None){
+				float closest=9;size_t at=count;
+				for(size_t k=0;k<count;++k){const float time=attackHitEdit_.track.keys[k].time;if(!std::isfinite(time))continue;const float d=std::abs(ImGui::GetIO().MousePos.x-(row.x+width*std::clamp(time/duration,0.0f,1.0f)));if(d<closest){closest=d;at=k;}}
+				if(at<count){SelectAttackKey(attackKeyIds_[at]);if(attackSelectedKey_==attackKeyIds_[at]){attackInput_=AttackInput::KeyTime;attackKeyDragMoved_=false;attackKeyDragTime_=attackHitEdit_.track.keys[at].time;attackKeyDragOrigin_=row.x;attackKeyDragWidth_=width;}}
+			}
+			if(attackInput_==AttackInput::KeyTime){
+				const size_t at=AttackKeyIndex();
+				if(at<count && ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)){
+					attackKeyDragMoved_=true;attackHitEdit_.track.keys[at].time=std::clamp((ImGui::GetIO().MousePos.x-attackKeyDragOrigin_)/attackKeyDragWidth_,0.0f,1.0f)*duration;
+					attackPreviewTime_=attackHitEdit_.track.keys[at].time;attackHitEdit_.fields|=PlayerCombatEditor::HitKeys;QueueAttackHitCandidate();
+				}
+				if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)){
+					if(at<count && attackKeyDragMoved_){
+						bool duplicate=false;for(size_t k=0;k<count;++k)if(k!=at && attackHitEdit_.track.keys[k].time==attackHitEdit_.track.keys[at].time)duplicate=true;
+						if(duplicate){attackHitEdit_.track.keys[at].time=attackKeyDragTime_;attackPreviewTime_=std::clamp(attackKeyDragTime_,0.0f,duration);WarnAttackHitBox("同時刻のキーがあるため移動を取り消しました。別の時刻へ動かしてください。","Key move cancelled because another key has that time. Choose a different time.");}
+						for(size_t k=1;k<count;++k)for(size_t j=k;j>0 && attackHitEdit_.track.keys[j].time<attackHitEdit_.track.keys[j-1].time;--j){std::swap(attackHitEdit_.track.keys[j],attackHitEdit_.track.keys[j-1]);std::swap(attackKeyIds_[j],attackKeyIds_[j-1]);}
+						attackHitEdit_.fields|=PlayerCombatEditor::HitKeys;QueueAttackHitCandidate();
+					}
+					attackInput_=AttackInput::None;
+				}
+			}
+		}
+		ImGui::PopID();
+	}
+	ImGui::EndChild();
+	ImGui::EndChild();
 }

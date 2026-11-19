@@ -3,10 +3,37 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
+#include <filesystem>
+#include <fstream>
 #include <utility>
+#include "../utility/EditableResourcePath.h"
+#include "../utility/StringUtility.h"
 
 namespace {
 	constexpr size_t kMaxPrefabUndoSnapshots = 100;
+
+	PrefabDiskToken ObserveDisk(const std::string& filePath) {
+		PrefabDiskToken result;
+		try {
+			std::error_code error;
+			const auto path = std::filesystem::absolute(EditableResourcePath::ResolveResource(
+				StringUtility::ToPath(filePath)), error).lexically_normal();
+			if (error) return result;
+			std::ifstream input(path, std::ios::binary);
+			if (!input) return result;
+			char buffer[4096];
+			while (input.read(buffer,sizeof(buffer)) || input.gcount())
+				result.contentBytes.append(buffer,static_cast<size_t>(input.gcount()));
+			if (!input.eof() || input.bad()) return {};
+			result.normalizedPath = StringUtility::ToUtf8(path);
+			result.valid = true;
+		} catch (const std::exception&) {
+			// 補助情報の失敗で、既存Open/Saveの成功を失敗へ変えない。
+			return {};
+		}
+		return result;
+	}
 
 	bool HasSingleRoot(const SceneDocument& document) {
 		return std::count_if(
@@ -28,6 +55,7 @@ bool PrefabEditorSession::Open(const std::string& filePath) {
 		return false;
 	}
 
+	const auto beforeLoad = ObserveDisk(filePath);
 	SceneDocument loaded;
 	if (!loaded.Load(filePath)) {
 		lastError_ = loaded.GetLastLoadError();
@@ -48,6 +76,11 @@ bool PrefabEditorSession::Open(const std::string& filePath) {
 	editFrameActive_ = false;
 	undoStack_.clear();
 	redoStack_.clear();
+	try { openBaseline_.emplace(document_); }
+	catch (const std::exception&) { openBaseline_.reset(); }
+	diskToken_ = ObserveDisk(filePath_);
+	if (!beforeLoad.valid || beforeLoad.normalizedPath != diskToken_.normalizedPath ||
+		beforeLoad.contentBytes != diskToken_.contentBytes) diskToken_.valid = false;
 	return true;
 }
 
@@ -77,6 +110,7 @@ bool PrefabEditorSession::Save() {
 	undoStack_.clear();
 	redoStack_.clear();
 	lastError_.clear();
+	diskToken_ = ObserveDisk(filePath_);
 	return true;
 }
 
@@ -87,6 +121,7 @@ bool PrefabEditorSession::Reload() {
 	const std::string path = filePath_;
 	document_.MarkClean();
 	open_ = false;
+	openBaseline_.reset(); diskToken_ = {};
 	return Open(path);
 }
 
@@ -101,6 +136,7 @@ bool PrefabEditorSession::Close(bool discardUnsavedChanges) {
 	document_.Clear();
 	menuOrderCache_.Adopt(document_);
 	frameStartDocument_.Clear();
+	openBaseline_.reset(); diskToken_ = {};
 	filePath_.clear();
 	lastError_.clear();
 	open_ = false;

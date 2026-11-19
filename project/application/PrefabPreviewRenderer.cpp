@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cfloat>
 #include <limits>
 #include <unordered_set>
 #include <utility>
@@ -138,9 +139,11 @@ void PrefabPreviewRenderer::Render(
 	float zoom,
 	uint64_t framingSerial,
 	const OverlayOptions& overlayOptions,
-    const SceneReplayFramingRequest* replayFraming
+    const SceneReplayFramingRequest* replayFraming, const PlayerCombatPreview::ViewRequest* attackView,
+    const PrefabAnimationGhost::Frame* animationGhost
 ) {
-	replayFramingValid_=false;
+	replayFramingValid_=false; attackViewResult_={};
+	animationGhostResult_ = {};
 	if (!renderTarget_ || !camera_ || !srvManager_) {
 		return;
 	}
@@ -172,6 +175,39 @@ void PrefabPreviewRenderer::Render(
 	camera_->SetOrbitDistance(
 		(std::max)(fitDistance_ * (std::max)(zoom, 0.02f), 0.02f)
 	);
+	// 攻撃PreviewだけはEditor所有の絶対orbitを採用。通常Prefabの内部Framingは維持。
+	if (attackView && attackView->enabled) {
+		attackViewResult_.request=*attackView;
+		auto state=attackView->state;
+		bool valid=true;
+		if (attackView->fit!=PlayerCombatPreview::Fit::None || !state.initialized) {
+			const auto oldTarget=orbitTarget_; const float oldDistance=fitDistance_;
+			UpdateFraming(document,overlayOptions);
+			Vector3 center=orbitTarget_;
+			float radius=fitDistance_*std::tan(.35f)/1.25f;
+			orbitTarget_=oldTarget;fitDistance_=oldDistance;
+			const auto& v=attackView->volume;
+			if(v.valid) {
+				Vector3 p{v.offset.x*v.world.m[0][0]+v.offset.y*v.world.m[1][0]+v.offset.z*v.world.m[2][0]+v.world.m[3][0],v.offset.x*v.world.m[0][1]+v.offset.y*v.world.m[1][1]+v.offset.z*v.world.m[2][1]+v.world.m[3][1],v.offset.x*v.world.m[0][2]+v.offset.y*v.world.m[1][2]+v.offset.z*v.world.m[2][2]+v.world.m[3][2]};
+				float lengths[3];for(int i=0;i<3;++i)lengths[i]=Math::Length({v.world.m[i][0],v.world.m[i][1],v.world.m[i][2]});
+				const float r=v.shape=="Sphere" ? v.radius*(std::max)({lengths[0],lengths[1],lengths[2]}) : Math::Length({v.halfSize.x*lengths[0],v.halfSize.y*lengths[1],v.halfSize.z*lengths[2]});
+				if(attackView->fit==PlayerCombatPreview::Fit::Selected){center=p;radius=r;}
+				else {
+					const auto delta=Math::Subtract(p,center);const float d=Math::Length(delta);
+					if(r>=d+radius){center=p;radius=r;}
+					else if(d+r>radius && d>0){const float combined=(d+r+radius)*.5f;center=Math::Add(center,Math::Multiply(delta,(combined-radius)/d));radius=combined;}
+				}
+			} else if(attackView->fit==PlayerCombatPreview::Fit::Selected) valid=false;
+			const float halfFov=(std::min)(.35f,std::atan(std::tan(.35f)*camera_->GetAspectRatio()));
+			const float distance=(std::max)(radius,.01f)/std::sin(halfFov)*1.25f;
+			valid &= std::isfinite(distance) && distance<=5000 && distance-radius>=.01f && distance+radius<=10000;
+			if(valid){state.target=center;state.distance=distance;state.initialized=true;}
+		}
+		valid &= std::isfinite(state.target.x)&&std::isfinite(state.target.y)&&std::isfinite(state.target.z)&&std::isfinite(state.distance)&&std::isfinite(state.yaw)&&std::isfinite(state.pitch);
+		const auto& applied=valid?state:attackView->state;
+		if(applied.initialized){camera_->SetOrbitTarget(applied.target);camera_->SetOrbitAngle(applied.yaw,applied.pitch);camera_->SetOrbitDistance(applied.distance);}
+		attackViewResult_.valid=valid;attackViewResult_.state=state;
+	}
 	camera_->UpdatePreviewMatrices();
     const Camera editorCamera=*camera_;
     if (replayFraming && replayFraming->generation==document.GetContentGeneration()) {
@@ -188,6 +224,9 @@ void PrefabPreviewRenderer::Render(
     }
 	viewMatrix_ = camera_->GetViewMatrix();
 	projectionMatrix_ = camera_->GetProjectionMatrix();
+	SyncAnimationGhostModels(!ghostDocument && !replayFraming && !attackView ? animationGhost : nullptr);
+	attackViewResult_.view=viewMatrix_;attackViewResult_.projection=projectionMatrix_;
+	attackViewResult_.width=renderTarget_->GetWidth();attackViewResult_.height=renderTarget_->GetHeight();
 
 	for (auto& [entityId, runtime] : models_) {
 		(void)entityId;
@@ -234,6 +273,7 @@ void PrefabPreviewRenderer::Render(
 		(void)entityId;
 		runtime.object->Draw();
 	}
+	DrawAnimationGhostModels();
 	DrawEditorOverlays(document, ghostDocument, overlayOptions);
 	uiObjects_->DrawSprites(uiDocument, 0);
 	uiTexts_->DrawScene2D(uiDocument, legacyWidth, legacyHeight);
@@ -255,6 +295,8 @@ void PrefabPreviewRenderer::Finalize() {
 	uiRenderer_.reset(); uiTexts_.reset(); uiObjects_.reset();
 	models_.clear();
 	ghostModels_.clear();
+	animationGhostModels_.clear(); animationGhostDraws_.clear();
+	animationGhostPoseSerial_ = 0; animationGhostResult_ = {};
 	delete camera_;
 	camera_ = nullptr;
 	delete renderTarget_;
@@ -344,6 +386,99 @@ void PrefabPreviewRenderer::SyncModels(const SceneDocument& document) {
 			++it;
 		}
 	}
+}
+
+void PrefabPreviewRenderer::SyncAnimationGhostModels(const PrefabAnimationGhost::Frame* frame) {
+    animationGhostDraws_.clear();
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+    using namespace PrefabAnimationGhost;
+    size_t meshCount = 0;
+    if (frame) for (const auto& pose : frame->poses) meshCount += pose.meshes.size();
+    if (!frame || !frame->poseSerial || frame->poses.size() > kPosesPerPage || meshCount > kMaxMeshes) {
+        animationGhostModels_.clear(); animationGhostPoseSerial_ = 0;
+        return;
+    }
+    // 一つのPreview Render/Frame。前FrameのPostDraw/platform Fenceが完了してから更新する。
+    if (animationGhostPoseSerial_ != frame->poseSerial) {
+        animationGhostModels_.clear();
+        animationGhostPoseSerial_ = frame->poseSerial;
+    }
+    animationGhostResult_.context = frame->context;
+    animationGhostResult_.poseSerial = frame->poseSerial;
+    animationGhostResult_.requestSerial = frame->requestSerial;
+    animationGhostResult_.view = viewMatrix_; animationGhostResult_.projection = projectionMatrix_;
+    animationGhostResult_.width = renderTarget_->GetWidth(); animationGhostResult_.height = renderTarget_->GetHeight();
+    const auto finite = [](const Vector3& p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z); };
+    std::map<std::pair<uint64_t, uint64_t>, bool> required;
+    for (const auto& pose : frame->poses) {
+        PoseResult result; result.id = pose.id; result.time = pose.time; result.origin = pose.origin;
+        for (const auto& mesh : pose.meshes) {
+            auto* manager = ModelManager::GetInstance();
+            manager->LoadModel(mesh.modelPath);
+            auto* model = manager->FindModel(mesh.modelPath);
+            if (!model || model->HasSkinning()) {
+                result.issue = model ? Issue::Skinning : Issue::MissingModel; result.subject = mesh.modelPath;
+                continue;
+            }
+            Vector3 localMin{}, localMax{};
+            Bounds bounds; bounds.entity = mesh.entity;
+            bounds.min = { FLT_MAX, FLT_MAX, FLT_MAX }; bounds.max = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+            bool valid = model->GetLocalBounds(localMin, localMax) && finite(localMin) && finite(localMax);
+            const auto world = Multiply(model->GetRootNodeLocalMatrix(), mesh.world);
+            for (int i = 0; valid && i < 8; ++i) {
+                const auto p = TransformPoint({ i & 1 ? localMax.x : localMin.x,
+                    i & 2 ? localMax.y : localMin.y, i & 4 ? localMax.z : localMin.z }, world);
+                valid = finite(p);
+                bounds.min = { (std::min)(bounds.min.x,p.x), (std::min)(bounds.min.y,p.y), (std::min)(bounds.min.z,p.z) };
+                bounds.max = { (std::max)(bounds.max.x,p.x), (std::max)(bounds.max.y,p.y), (std::max)(bounds.max.z,p.z) };
+            }
+            if (!valid) { result.issue = Issue::InvalidBounds; result.subject = mesh.modelPath; continue; }
+            result.bounds.push_back(bounds);
+            const auto key = std::make_pair(pose.id, mesh.entity);
+            required[key] = true;
+            auto& runtime = animationGhostModels_[key];
+            if (!runtime.object || runtime.modelPath != mesh.modelPath) {
+                runtime.object = std::make_unique<Object3d>();
+                runtime.object->Initialize(Object3dCommon::GetInstance());
+                runtime.object->SetModel(model); runtime.modelPath = mesh.modelPath;
+                runtime.object->SetEnableLighting(false); runtime.object->SetEnvironmentCoefficient(0);
+            }
+            auto& object = *runtime.object;
+            object.SetScale({1,1,1}); object.SetRotateQuaternion(MakeIdentityQuaternion()); object.SetTranslate({0,0,0});
+            object.SetParentMatrixOverride(mesh.world); object.SetCullMode(ResolveCullMode(mesh.cullMode));
+            std::vector<Object3d::MaterialOverride> materials;
+            for (const auto& material : mesh.materials) materials.push_back({ material.materialName, material.enabled,
+                material.colorOverrideEnabled, material.color, material.texturePath });
+            object.SetMaterialOverrides(materials);
+            const float alpha = std::isfinite(frame->opacity) ? std::clamp(frame->opacity,.05f,.60f) : .20f;
+            object.SetColor(pose.id == frame->selected ? Vector4{1,.65f,.2f,(std::min)(.80f,alpha*2)} : Vector4{.25f,.75f,1,alpha});
+            object.UpdateForCamera(camera_);
+            // 同時刻の実体は二重に塗らず、UIの枠と時刻だけ残す。
+            if (pose.time != frame->time) {
+                const Vector3 center{bounds.min.x*.5f+bounds.max.x*.5f,bounds.min.y*.5f+bounds.max.y*.5f,bounds.min.z*.5f+bounds.max.z*.5f};
+                const auto eyeSpace = TransformPoint(center, viewMatrix_);
+                const float distance = eyeSpace.x*eyeSpace.x + eyeSpace.y*eyeSpace.y + eyeSpace.z*eyeSpace.z;
+                if (std::isfinite(distance)) animationGhostDraws_.push_back({key,distance});
+            }
+        }
+        animationGhostResult_.poses.push_back(std::move(result));
+    }
+    for (auto it=animationGhostModels_.begin(); it!=animationGhostModels_.end();) {
+        if (!required.contains(it->first)) it=animationGhostModels_.erase(it); else ++it;
+    }
+    std::stable_sort(animationGhostDraws_.begin(),animationGhostDraws_.end(),[](const auto& a,const auto& b) {
+        return a.distance != b.distance ? a.distance > b.distance : a.key < b.key;
+    });
+#else
+    (void)frame;
+#endif
+}
+
+void PrefabPreviewRenderer::DrawAnimationGhostModels() {
+#if defined(_DEBUG) || defined(DEVELOPMENT)
+    for (const auto& draw : animationGhostDraws_) animationGhostModels_.at(draw.key).object->DrawEditorGhost();
+    if (!animationGhostDraws_.empty()) Object3dCommon::GetInstance()->SetCommonRenderState();
+#endif
 }
 
 void PrefabPreviewRenderer::SyncGhostModels(const SceneDocument* document) {
@@ -635,6 +770,18 @@ void PrefabPreviewRenderer::DrawEditorOverlays(
 		}
 	}
 
+	// 編集枠は実判定とは別の値。inactive/先行Windowを有効化しない。
+	const auto& edit=options.editVolume;
+	if(edit.valid && !edit.active){
+		const Vector4 color{1,.65f,.1f,1};
+		if(edit.shape=="Sphere"){
+			SphereCollider collider;collider.SetWorldMatrix(&edit.world);collider.SetOffset(edit.offset);collider.SetRadius(edit.radius);
+			debugRenderer->AddSphere(collider.GetWorldCenter(),collider.GetRadius(),color,24);
+		}else{
+			OBBCollider collider;collider.SetWorldMatrix(&edit.world);collider.SetOffset(edit.offset);collider.SetHalfSize(edit.halfSize);
+			const auto obb=collider.GetOBB();debugRenderer->AddOBB(obb.center,obb.axis,obb.halfSize,color);
+		}
+	}
 	debugRenderer->Draw(camera_);
 	debugRenderer->ClearGeometry();
 #else

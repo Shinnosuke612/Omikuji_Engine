@@ -21,6 +21,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <set>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -7044,6 +7045,313 @@ SceneDocument::CollectPrefabPropertyOverrides(uint64_t rootId) const {
 		overrides.push_back(std::move(overrideValue));
 	}
 	return overrides;
+}
+
+namespace {
+	using RefreshPlan = ScenePrefabValueRefresh::Plan;
+	using RefreshIssue = ScenePrefabValueRefresh::Issue;
+	using RefreshCode = ScenePrefabValueRefresh::IssueCode;
+	using RefreshProtection = ScenePrefabValueRefresh::Protection;
+	using RefreshClass = ScenePrefabValueRefresh::Classification;
+	using RefreshRow = ScenePrefabValueRefresh::Row;
+	using RefreshKey = ScenePrefabValueRefresh::RowKey;
+	using RefreshIndex = std::unordered_map<uint64_t, const SceneEntity*>;
+
+	bool RefreshIndexHierarchy(const SceneDocument& document, RefreshIndex& index) {
+		for (const auto& entity : document.GetEntities())
+			if (!entity.id || !index.emplace(entity.id, &entity).second) return false;
+		std::unordered_map<uint64_t, int> state;
+		for (const auto& entity : document.GetEntities()) {
+			std::vector<uint64_t> path;
+			uint64_t id = entity.id;
+			while (id && state[id] != 2) {
+				if (!index.contains(id) || state[id] == 1) return false;
+				state[id] = 1; path.push_back(id); id = index.at(id)->parentId;
+			}
+			for (auto visited : path) state[visited] = 2;
+		}
+		return true;
+	}
+
+	bool RefreshComponentIds(const SceneEntity& entity) {
+		std::unordered_set<uint64_t> ids;
+		for (const auto& component : entity.components)
+			if (!component.localId || !ids.insert(component.localId).second) return false;
+		return true;
+	}
+
+	json RefreshStructure(const SceneDocument& document) {
+		json result = json::array();
+		for (const auto& entity : document.GetEntities()) {
+			json components = json::array();
+			for (const auto& component : entity.components)
+				components.push_back({component.localId, component.type});
+			result.push_back({{"id",entity.id},{"parent",entity.parentId},{"name",entity.name},
+				{"runtimeOnly",entity.runtimeOnly},{"components",components}});
+		}
+		return result;
+	}
+
+	bool RefreshFinite(const json& value) {
+		if (value.is_number_float()) return std::isfinite(value.get<double>());
+		if (value.is_structured()) for (const auto& child : value) if (!RefreshFinite(child)) return false;
+		return true;
+	}
+
+	bool RefreshSupported(const std::string& type) {
+		return type == "PrefabAnimator" || type == "AttackSet" || type == "MeshRenderer" ||
+			type == "OBBCollider" || type == "SphereCollider";
+	}
+
+	// 名前だけの内部参照もここで一意に解決する。外部/曖昧な参照は0へ潰さず行を保護する。
+	bool RefreshReference(uint64_t& id, std::string& name, const RefreshIndex& source,
+		const std::unordered_map<uint64_t,uint64_t>& mapping, const SceneDocument& target) {
+		if (!id && name.empty()) return true; // 既存Owner fallbackを保持。
+		const SceneEntity* resolved = nullptr;
+		if (id) {
+			const auto found = source.find(id);
+			if (found == source.end() || !mapping.contains(id)) return false;
+			resolved = found->second;
+		} else {
+			for (const auto& [key, entity] : source) if (entity->name == name) {
+				if (resolved) return false;
+				resolved = entity;
+			}
+			if (!resolved || !mapping.contains(resolved->id)) return false;
+		}
+		const auto* destination = target.FindEntity(mapping.at(resolved->id));
+		if (!destination) return false;
+		id = resolved->id; name = destination->name;
+		return true;
+	}
+
+	RefreshProtection RefreshNormalizeComponent(SceneComponent& component, const RefreshIndex& source,
+		const std::unordered_map<uint64_t,uint64_t>& mapping, const SceneDocument& target) {
+		RefreshProtection protection = RefreshProtection::None;
+		const auto reference = [&](uint64_t& id, std::string& name) {
+			if (!RefreshReference(id,name,source,mapping,target)) protection = RefreshProtection::ExternalReference;
+		};
+		if (component.type == "PrefabAnimator") {
+			for (auto& clip : component.prefabAnimationClips) for (auto& track : clip.tracks) {
+				if (track.property != "LocalPosition" && track.property != "LocalRotation" &&
+					track.property != "LocalScale" && track.property != "Active") protection = RefreshProtection::UnsupportedTrack;
+				reference(track.targetEntityId,track.targetEntityName);
+			}
+		} else if (component.type == "AttackSet") {
+			for (auto& attack : component.attackDefinitions) {
+				reference(attack.animationTargetEntityId,attack.animationTargetEntityName);
+				reference(attack.hitBoxEntityId,attack.hitBoxEntityName);
+				reference(attack.facingTargetEntityId,attack.facingTargetEntityName);
+				for (auto& window : attack.hitWindows) reference(window.hitBoxEntityId,window.hitBoxEntityName);
+				for (auto& effect : attack.effectEvents) reference(effect.spawnEntityId,effect.spawnEntityName);
+			}
+		}
+		if (protection == RefreshProtection::None) RemapComponentEntityReferences(component,mapping);
+		return protection;
+	}
+
+	ScenePrefabValueRefresh::Value RefreshValue(const json* value) {
+		return value ? ScenePrefabValueRefresh::Value{true,value->dump()} : ScenePrefabValueRefresh::Value{};
+	}
+
+	void RefreshRows(RefreshPlan& plan, RefreshKey key, uint64_t entityId, const std::string& entityName,
+		const json* baseline, const json* prefab, const json* instance, RefreshProtection protection,
+		RefreshProtection referenceProtection = RefreshProtection::None) {
+		if (baseline && prefab && instance && baseline->is_object() && prefab->is_object() && instance->is_object()) {
+			std::set<std::string> keys;
+			for (const auto* value : {baseline,prefab,instance})
+				for (auto it=value->begin();it!=value->end();++it) keys.insert(it.key());
+			for (const auto& name : keys) {
+				auto childKey = key; childKey.propertyPath += "/"+EscapeJsonPointerToken(name);
+				const auto find = [&](const json* value) -> const json* {
+					const auto it=value->find(name); return it==value->end() ? nullptr : &*it;
+				};
+				auto childProtection = protection;
+				if (key.componentLocalId && key.propertyPath.empty() && (name=="localId" || name=="type"))
+					childProtection=RefreshProtection::Identity;
+				if (key.componentLocalId && (childKey.propertyPath=="/clips" || childKey.propertyPath=="/attacks") &&
+					referenceProtection!=RefreshProtection::None) childProtection=referenceProtection;
+				if (!key.componentLocalId && name!="active" && name!="transform" && key.propertyPath.empty())
+					childProtection=RefreshProtection::Placement;
+				RefreshRows(plan,childKey,entityId,entityName,find(baseline),find(prefab),find(instance),childProtection,referenceProtection);
+			}
+			return;
+		}
+		// 配列には降りない。キー追加/並べ替えをindex別のpatchに変換しないため。
+		if (!baseline || !prefab || !instance) protection=RefreshProtection::UnsupportedValue;
+		RefreshRow row;
+		row.key=std::move(key); row.instanceEntityId=entityId; row.entityName=entityName; row.protection=protection;
+		row.array=(baseline && baseline->is_array()) || (prefab && prefab->is_array()) || (instance && instance->is_array());
+		row.baseline=RefreshValue(baseline); row.prefab=RefreshValue(prefab); row.instance=RefreshValue(instance);
+		if (protection!=RefreshProtection::None) row.classification=RefreshClass::Protected;
+		else if (prefab && instance && *prefab==*instance) row.classification=RefreshClass::Same;
+		else if (baseline && instance && *baseline==*instance) row.classification=RefreshClass::SourceChanged;
+		else if (baseline && prefab && *baseline==*prefab) row.classification=RefreshClass::InstanceDifference;
+		else row.classification=RefreshClass::Conflict;
+		plan.rows.push_back(std::move(row));
+	}
+}
+
+ScenePrefabValueRefresh::Plan SceneDocument::InspectPrefabValueRefresh(
+	const SceneDocument& baseline, const SceneDocument& updated, uint64_t instanceRootId) const {
+	RefreshPlan plan;
+	plan.instanceRootId=instanceRootId; plan.targetGeneration=GetContentGeneration(); plan.targetRevision=GetRevision();
+	const auto fail = [&](RefreshCode code,uint64_t id,const std::string& detail) {
+		plan.issue={code,id,detail}; plan.rows.clear(); return plan;
+	};
+	if (!GetContentGeneration()) return fail(RefreshCode::InvalidInstance,instanceRootId,"Generation");
+	if (!baseline.GetContentGeneration() || !updated.GetContentGeneration()) return fail(RefreshCode::InvalidSource,0,"Generation");
+	if (baseline.IsPrefabVariant() || updated.IsPrefabVariant()) return fail(RefreshCode::UnsupportedStructure,0,"Variant");
+	if (baseline.GetAssetId().empty() || baseline.GetAssetId()!=updated.GetAssetId()) return fail(RefreshCode::InvalidSource,0,"AssetId");
+	RefreshIndex oldIndex,newIndex,targetIndex;
+	if (!RefreshIndexHierarchy(baseline,oldIndex) || !RefreshIndexHierarchy(updated,newIndex))
+		return fail(RefreshCode::InvalidSource,0,"Hierarchy");
+	if (!RefreshIndexHierarchy(*this,targetIndex)) return fail(RefreshCode::InvalidInstance,instanceRootId,"Hierarchy");
+	const SceneEntity* sourceRoot=nullptr;
+	for (const auto& entity : baseline.GetEntities()) {
+		if (!entity.parentId) { if (sourceRoot) return fail(RefreshCode::InvalidSource,entity.id,"Roots"); sourceRoot=&entity; }
+		if (!entity.prefabLinks.empty() || !RefreshComponentIds(entity)) return fail(RefreshCode::UnsupportedStructure,entity.id,"Links/LocalIds");
+	}
+	if (!sourceRoot) return fail(RefreshCode::InvalidSource,0,"Root");
+	for (const auto& entity : updated.GetEntities())
+		if (!entity.prefabLinks.empty() || !RefreshComponentIds(entity)) return fail(RefreshCode::UnsupportedStructure,entity.id,"Links/LocalIds");
+	const auto structure=RefreshStructure(baseline);
+	if (structure!=RefreshStructure(updated)) return fail(RefreshCode::UnsupportedStructure,0,"SourceStructure");
+	const auto* root=FindEntity(instanceRootId);
+	const auto* rootLink=root ? FindPrefabLink(*root,instanceRootId) : nullptr;
+	if (!rootLink || rootLink->assetId!=baseline.GetAssetId() || rootLink->localId!=sourceRoot->id)
+		return fail(RefreshCode::InvalidInstance,instanceRootId,"RootLink");
+	if (root->locked) return fail(RefreshCode::Locked,root->id,root->name);
+	std::unordered_map<uint64_t,uint64_t> mapping,identity;
+	std::unordered_map<uint64_t,const SceneEntity*> instances;
+	json targetStructure=json::array();
+	for (const auto& entity : GetEntities()) {
+		const auto* link=FindPrefabLink(entity,instanceRootId);
+		if (!link) continue;
+		if (std::count_if(entity.prefabLinks.begin(),entity.prefabLinks.end(),[&](const auto& item) {
+			return item.instanceRootId==instanceRootId;
+		})!=1) return fail(RefreshCode::InvalidInstance,entity.id,"DuplicateLink");
+		if (link->assetId!=rootLink->assetId || !oldIndex.contains(link->localId) || !mapping.emplace(link->localId,entity.id).second)
+			return fail(RefreshCode::InvalidInstance,entity.id,"InstanceLink");
+		if (FindPrefabLinkDepth(entity,instanceRootId)!=FindPrefabLinkDepth(*root,instanceRootId) ||
+			entity.prefabLinks.size()!=FindPrefabLinkDepth(entity,instanceRootId)+1)
+			return fail(RefreshCode::UnsupportedStructure,entity.id,"NestedInstance");
+		instances.emplace(link->localId,&entity); identity.emplace(entity.id,entity.id);
+		targetStructure.push_back({link->localId,entity.id,entity.parentId,link->sourcePath});
+	}
+	// 親が先に格納されているとは限らない。全local IDの存在確認後にだけ親対応を参照する。
+	for (const auto& source : baseline.GetEntities())
+		if (!mapping.contains(source.id)) return fail(RefreshCode::MissingTarget,source.id,source.name);
+	for (const auto& source : baseline.GetEntities()) {
+		const auto& instance=*instances.at(source.id);
+		if (source.parentId && instance.parentId!=mapping.at(source.parentId))
+			return fail(RefreshCode::UnsupportedStructure,instance.id,"TargetParent");
+		if (instance.locked) return fail(RefreshCode::Locked,instance.id,instance.name);
+		if (!RefreshComponentIds(instance)) return fail(RefreshCode::InvalidInstance,instance.id,"ComponentLocalIds");
+	}
+	plan.sourceAssetId=baseline.GetAssetId();
+	plan.sourceStructure=json{{"source",structure},{"target",targetStructure},{"depth",FindPrefabLinkDepth(*root,instanceRootId)}}.dump();
+	for (const auto& before : baseline.GetEntities()) {
+		const auto& after=*newIndex.at(before.id); const auto& instance=*instances.at(before.id);
+		auto oldEntity=before,newEntity=after;
+		oldEntity.parentId=before.parentId ? mapping.at(before.parentId) : 0;
+		newEntity.parentId=after.parentId ? mapping.at(after.parentId) : 0;
+		const auto b=EntityOverridePropertiesToJson(oldEntity,true,true), p=EntityOverridePropertiesToJson(newEntity,true,true), t=EntityOverridePropertiesToJson(instance,true,true);
+		if (!RefreshFinite(b) || !RefreshFinite(p) || !RefreshFinite(t)) return fail(RefreshCode::InvalidValue,before.id,"Transform");
+		RefreshRows(plan,{before.id,0,{},{}},instance.id,instance.name,&b,&p,&t,
+			before.id==sourceRoot->id ? RefreshProtection::Placement : RefreshProtection::None);
+		for (size_t ci=0;ci<before.components.size();++ci) {
+			auto oldComponent=before.components[ci],newComponent=after.components[ci];
+			const auto* current=FindComponentByLocalId(instance,oldComponent.localId);
+			if (!current || current->type!=oldComponent.type) return fail(RefreshCode::MissingTarget,instance.id,oldComponent.type);
+			auto instanceComponent=*current;
+			auto protection=RefreshSupported(oldComponent.type) ? RefreshProtection::None : RefreshProtection::UnsupportedComponent;
+			auto references=RefreshProtection::None;
+			if (protection==RefreshProtection::None) {
+				for (auto value : {RefreshNormalizeComponent(oldComponent,oldIndex,mapping,*this),
+					RefreshNormalizeComponent(newComponent,newIndex,mapping,*this),
+					RefreshNormalizeComponent(instanceComponent,targetIndex,identity,*this)})
+					if (value!=RefreshProtection::None) references=value;
+			}
+			const auto bc=ComponentToJson(oldComponent),pc=ComponentToJson(newComponent),tc=ComponentToJson(instanceComponent);
+			if (!RefreshFinite(bc) || !RefreshFinite(pc) || !RefreshFinite(tc)) return fail(RefreshCode::InvalidValue,before.id,oldComponent.type);
+			RefreshRows(plan,{before.id,oldComponent.localId,oldComponent.type,{}},instance.id,instance.name,&bc,&pc,&tc,protection,references);
+		}
+	}
+	return plan;
+}
+
+bool SceneDocument::CreatePrefabValueRefreshCandidate(const SceneDocument& baseline, const SceneDocument& updated,
+	uint64_t instanceRootId, const ScenePrefabValueRefresh::Plan& reviewedPlan,
+	const std::vector<ScenePrefabValueRefresh::Choice>& choices, SceneDocument& output,
+	bool& changed, ScenePrefabValueRefresh::Issue& issue) const {
+	using ScenePrefabValueRefresh::Selection;
+	changed=false; issue={};
+	if (&output==this || &output==&baseline || &output==&updated) { issue={RefreshCode::InvalidOutput,0,{}}; return false; }
+	const auto plan=InspectPrefabValueRefresh(baseline,updated,instanceRootId);
+	if (plan.issue.code!=RefreshCode::None) { issue=plan.issue; return false; }
+	if (plan!=reviewedPlan) { issue={RefreshCode::StalePlan,instanceRootId,{}}; return false; }
+	std::vector<Selection> selections;
+	for (const auto& row : plan.rows) selections.push_back(row.classification==RefreshClass::SourceChanged ? Selection::UsePrefab : Selection::KeepInstance);
+	std::unordered_set<size_t> explicitRows;
+	for (const auto& choice : choices) {
+		const auto found=std::find_if(plan.rows.begin(),plan.rows.end(),[&](const auto& row) { return row.key==choice.key; });
+		if (found==plan.rows.end() || (choice.selection!=Selection::UsePrefab && choice.selection!=Selection::KeepInstance)) {
+			issue={RefreshCode::InvalidChoice,choice.key.entityLocalId,choice.key.propertyPath}; return false;
+		}
+		const size_t index=static_cast<size_t>(found-plan.rows.begin());
+		if (!explicitRows.insert(index).second || (found->classification==RefreshClass::Protected && choice.selection==Selection::UsePrefab)) {
+			issue={RefreshCode::InvalidChoice,found->instanceEntityId,found->key.propertyPath}; return false;
+		}
+		selections[index]=choice.selection;
+	}
+	for (size_t i=0;i<plan.rows.size();++i) if (plan.rows[i].classification==RefreshClass::Conflict && !explicitRows.contains(i)) {
+		issue={RefreshCode::InvalidChoice,plan.rows[i].instanceEntityId,plan.rows[i].key.propertyPath}; return false;
+	}
+	SceneDocument candidate=*this;
+	std::unordered_set<uint64_t> meshEntities;
+	bool any=false;
+	for (size_t i=0;i<plan.rows.size();++i) {
+		const auto& row=plan.rows[i];
+		if (selections[i]!=Selection::UsePrefab || row.classification==RefreshClass::Same) continue;
+		if (!row.prefab.present || row.classification==RefreshClass::Protected) { issue={RefreshCode::InvalidChoice,row.instanceEntityId,row.key.propertyPath}; return false; }
+		auto* entity=candidate.FindEntity(row.instanceEntityId);
+		if (!entity) { issue={RefreshCode::MissingTarget,row.instanceEntityId,row.key.propertyPath}; return false; }
+		if (!row.key.componentLocalId) {
+			const auto* source=updated.FindEntity(row.key.entityLocalId);
+			if (!source) { issue={RefreshCode::MissingTarget,row.key.entityLocalId,row.key.propertyPath}; return false; }
+			// 値反映でQuaternionを再正規化しない。確認したPの値をそのまま採用する。
+			if (row.key.propertyPath=="/active") entity->active=source->active;
+			else if (row.key.propertyPath=="/transform/scale") entity->transform.scale=source->transform.scale;
+			else if (row.key.propertyPath=="/transform/rotation") entity->transform.rotate=source->transform.rotate;
+			else if (row.key.propertyPath=="/transform/translate") entity->transform.translate=source->transform.translate;
+			else { issue={RefreshCode::InvalidChoice,entity->id,row.key.propertyPath}; return false; }
+		} else {
+			auto* component=FindComponentByLocalId(*entity,row.key.componentLocalId);
+			if (!component) { issue={RefreshCode::MissingTarget,entity->id,row.key.propertyPath}; return false; }
+			try {
+				auto componentValue=ComponentToJson(*component);
+				componentValue.at(json::json_pointer(row.key.propertyPath))=json::parse(row.prefab.json);
+				SceneComponent replacement{};
+				if (!ComponentFromJson(componentValue,replacement) || replacement.localId!=component->localId ||
+					replacement.type!=component->type || ComponentToJson(replacement)!=componentValue) {
+					issue={RefreshCode::InvalidValue,entity->id,row.key.propertyPath}; return false;
+				}
+				*component=std::move(replacement);
+			} catch (const json::exception&) {
+				issue={RefreshCode::InvalidValue,entity->id,row.key.propertyPath}; return false;
+			}
+			if (row.key.componentType=="MeshRenderer") meshEntities.insert(entity->id);
+		}
+		any=true;
+	}
+	for (auto id : meshEntities) {
+		auto& entity=*candidate.FindEntity(id);
+		// 今回選択したComponentが正本。旧値のfallbackで空pathを戻したり、Spriteを更新しない。
+		if (const auto* mesh=FindComponent(entity,"MeshRenderer")) entity.modelPath=mesh->modelPath;
+	}
+	// 原本のDirty/Undoはここでは変えない。全ての検証/patchが成功してからだけ候補を公開する。
+	output=std::move(candidate); changed=any; return true;
 }
 
 bool SceneDocument::ApplyPrefabPropertyOverride(
