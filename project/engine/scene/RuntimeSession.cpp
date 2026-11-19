@@ -24,9 +24,14 @@ bool RuntimeSession::LoadRuntimeScene(
 		return false;
 	}
 	loadedDocument.MarkClean();
-	document_ = std::move(loadedDocument);
-	sceneId_ = sceneId;
-	sceneFilePath_ = sceneFilePath;
+	*runtime_->document = std::move(loadedDocument);
+	runtime_->sceneId = sceneId;
+	runtime_->filePath = sceneFilePath;
 	lastLoadError_.clear();
 	return true;
+}
+
+void RuntimeSession::ExchangePreparedRuntime(std::unique_ptr<SceneRuntimeDocumentState>& state) noexcept {
+	runtime_.swap(state);
+	lastLoadError_.clear();
 }

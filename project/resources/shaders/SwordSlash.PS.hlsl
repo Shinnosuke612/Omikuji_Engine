@@ -10,6 +10,8 @@ float4 main(ShatterOutput input, bool frontFace : SV_IsFrontFace) : SV_TARGET0
     {
         CutData cut = gCuts[i];
         float reveal = cut.revealGlowWidths.x;
+        // V2の進行中cutは時刻0でもglow=1を持つ。未表示線の点発光をV1と分けて抑える。
+        if (gFlashIntensity.y > 0 && reveal <= 0) continue;
         float2 a = HeightSpace(cut.segmentUV.xy);
         float2 end = HeightSpace(cut.segmentUV.zw);
         float2 head = lerp(a,end,reveal);
@@ -25,5 +27,5 @@ float4 main(ShatterOutput input, bool frontFace : SV_IsFrontFace) : SV_TARGET0
         float shape = max(headGlow,trail*progress);
         light += cut.glowColor.rgb * (shape*cut.revealGlowWidths.y*cut.intensityPadding.x*cut.glowColor.a);
     }
-    return float4(light,0);
+    return float4(light*gStyleCutCount.w,0);
 }

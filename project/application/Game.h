@@ -5,12 +5,14 @@
 #include "../engine/base/BloomRenderer.h"
 #include "../engine/scene/SceneDocument.h"
 #include "../engine/scene/SceneManager.h"
+#include "../engine/scene/ScenePreparation.h"
 #include "../engine/math/Vector3.h"
 #include "../engine/math/Vector4.h"
 #include "../engine/math/Matrix4x4.h"
 #include <filesystem>
 #include <string>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <d3d12.h>
 #include <wrl.h>
@@ -33,7 +35,11 @@ class ProjectRegistry;
 class ProjectCreationService;
 class ProjectSolutionGenerationService;
 class VisualStudioLocator;
+class SceneTextureCopy;
+class SceneTextureMipGenerator;
 struct ProjectLauncherView;
+struct DirectFrameResult;
+namespace SceneTransitionAsset { struct LoadLinkedAsset; }
 
 class Game : public Framework {
 public:
@@ -53,6 +59,12 @@ private:
 	void CancelPresentedTransition(const std::string& reason = {});
 	void UpdatePresentedTransitionBeforeScene(float delta, bool paused);
 	void UpdatePresentedTransitionAfterScene();
+	bool BeginLoadLinkedTransition(const PresentedTransitionRequest&,
+		std::shared_ptr<const SceneTransitionAsset::LoadLinkedAsset>,
+		const std::filesystem::path& resourcesRoot, std::string& issue);
+	void UpdateLoadLinkedTransitionBeforeScene(double delta, bool paused);
+	void UpdateLoadLinkedTransitionAfterScene();
+	void ResolveLoadLinkedFrame(uint64_t adoptedSrv, const DirectFrameResult&);
 	D3D12_GPU_DESCRIPTOR_HANDLE DrawPresentedTransition(D3D12_GPU_DESCRIPTOR_HANDLE source, uint32_t width, uint32_t height);
 	bool IsPresentedTransitionDrawable() const;
 	struct CameraSnapshot {

@@ -7,6 +7,7 @@
 #include "SceneDocument.h"
 #include "SceneMenuLayout.h"
 #include "SceneExecutionContext.h"
+#include "SceneRuntimeDocumentState.h"
 
 enum class EditorPlayState {
 	Edit,
@@ -31,6 +32,7 @@ public:
 		const std::string& sceneId,
 		const std::string& sceneFilePath
 	) override;
+	void ExchangePreparedRuntime(std::unique_ptr<SceneRuntimeDocumentState>& state) noexcept override;
 
 	void Play();
 	void Pause();
@@ -56,7 +58,7 @@ public:
 	SceneDocument& GetActiveDocument() override;
 	const SceneDocument& GetActiveDocument() const override;
 	const std::string& GetEditSceneId() const { return editSceneId_; }
-	const std::string& GetRuntimeSceneId() const { return runtimeSceneId_; }
+	const std::string& GetRuntimeSceneId() const { return runtime_->sceneId; }
 	const std::string& GetActiveSceneId() const override;
 	const std::string& GetSceneFilePath() const { return editSceneFilePath_; }
 	const std::string& GetActiveSceneFilePath() const override;
@@ -70,13 +72,12 @@ private:
 
 	uint64_t editSceneEpoch_ = 0;
 	SceneDocument editDocument_;
-	SceneDocument runtimeDocument_;
+	std::unique_ptr<SceneRuntimeDocumentState> runtime_ = std::unique_ptr<SceneRuntimeDocumentState>(
+		new SceneRuntimeDocumentState{std::make_unique<SceneDocument>(), {}, {}});
 	SceneDocument frameStartDocument_;
 	SceneMenuLayout::EditorOrderCache menuOrderCache_;
 	std::string editSceneId_;
 	std::string editSceneFilePath_;
-	std::string runtimeSceneId_;
-	std::string runtimeSceneFilePath_;
 	std::string lastLoadError_;
 	EditorPlayState state_ = EditorPlayState::Edit;
 	bool reloadRequested_ = false;

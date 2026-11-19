@@ -1,5 +1,8 @@
 // 役割: Direct3D12の初期化、フレーム開始、フレーム終了を実装する。
 #include "DirectXCommon.h"
+#include "../utility/Logger.h"
+#include "../utility/StringUtility.h"
+#include <DirectXTex.h>
 #include "../utility/EditableResourcePath.h"
 #include <cassert>
 #include "../../externals/DirectXTex/d3dx12.h"
@@ -7,7 +10,10 @@
 #pragma comment(lib,"dxgi.lib")
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 using namespace Microsoft::WRL;
 using namespace Logger;
@@ -18,6 +24,26 @@ std::wstring ResolveRuntimePath(const std::wstring& filePath) {
 		std::filesystem::path(filePath)
 	).wstring();
 }
+}
+
+DirectXCommon::~DirectXCommon() {
+	// Close失敗時もGame側より長く保持し、未提出の参照を先に捨てる。
+	commandList.Reset();
+	postDrawRetainedResource_.Reset();
+	postDrawRetainedObjects_.clear();
+}
+
+bool DirectXCommon::TryRetainResourceForNextPostDraw(ID3D12Resource* resource) noexcept {
+	if (!resource || postDrawRetainedResource_ || !postDrawRetainedObjects_.empty()) return false;
+	postDrawRetainedResource_ = resource;
+	return true;
+}
+
+bool DirectXCommon::TryRetainObjectsForNextPostDraw(std::vector<Microsoft::WRL::ComPtr<IUnknown>>& refs) noexcept {
+	if (refs.empty() || postDrawRetainedResource_ || !postDrawRetainedObjects_.empty()) return false;
+	for (const auto& object : refs) if (!object) return false;
+	postDrawRetainedObjects_.swap(refs);
+	return true;
 }
 
 void DirectXCommon::Initialize(WinApp* winApp){
@@ -127,52 +153,90 @@ void DirectXCommon::PreDraw(){
 	commandList->RSSetScissorRects(1, &scissorRect);     // Scissorを設定
 }
 
-void DirectXCommon::PostDraw(){
+DirectFrameResult DirectXCommon::PostDraw() {
+	constexpr auto removedFence = (std::numeric_limits<uint64_t>::max)();
+	DirectFrameResult result;
+	const auto fail = [&](HRESULT error, const char* operation) {
+		result.error = error;
+		result.failedOperation = operation;
+		return result;
+	};
+	const auto submittedFailure = [&](HRESULT error, const char* operation) {
+		if (FAILED(device->GetDeviceRemovedReason())) {
+			result.gpuState = DirectFrameGpuState::DeviceRemoved;
+		}
+		return fail(error, operation);
+	};
 
-
-	//バックバッファのインデックスを取得
-	UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
-
-	HRESULT hr;
-	// 画面に描く処理はすべて終わり、画面に映すので、状態を遷移
-			// 今回はRenderTargetからPresentにする
+	// UINT64_MAXはdevice除去の通知に使われるため、提出前にFence値を確認する。
+	if (fenceValue >= removedFence - 1) {
+		return fail(E_FAIL, "DIRECT fence value allocation");
+	}
+	const uint64_t submittedFence = fenceValue + 1;
 	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
 	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-	// TransitionBarrierを張る
 	commandList->ResourceBarrier(1, &barrier);
+	HRESULT hr = commandList->Close();
+	if (FAILED(hr)) return fail(hr, "DIRECT command list Close");
 
-	// コマンドリストの内容を確定させる。すべてのコマンドを積んでからCloseすること
-	hr = commandList->Close();
-	assert(SUCCEEDED(hr));
-
-	// GPUにコマンドリストの実行を行わせる
-	ID3D12CommandList* commandLists[] = { commandList.Get()};
+	ID3D12CommandList* commandLists[] = { commandList.Get() };
 	commandQueue->ExecuteCommandLists(1, commandLists);
+	result.gpuState = DirectFrameGpuState::Unconfirmed;
 
-	// GPUとOSに画面の交換を行うよう通知する
-	swapChain->Present(1, 0);
-
-	// Fenceの値を更新
-	fenceValue++;
-	// GPUがここまでたどり着いたときに、Fenceの値を指定した値に代入するようにSignalを送る
-	commandQueue->Signal(*&fence, fenceValue);
-
-	// Fenceの値が指定したSignal値にたどり着いているか確認する
-	 // GetCompletedValueの初期値はFence作成時に渡した初期値
-	if(fence->GetCompletedValue() < fenceValue){
-		// 指定したSignalにたどりついていないので、たどり着くまで待つようにイベントを設定する
-		fence->SetEventOnCompletion(fenceValue, fenceEvent);
-		// イベント待つ
-		WaitForSingleObject(fenceEvent, INFINITE);
+	const HRESULT presentResult = swapChain->Present(1, 0);
+	result.presentResult = presentResult;
+	if (FAILED(presentResult) && FAILED(device->GetDeviceRemovedReason())) {
+		result.gpuState = DirectFrameGpuState::DeviceRemoved;
+		return fail(presentResult, "Present");
 	}
 
-	// 次のフレーム用のコマンドリストを準備
+	hr = commandQueue->Signal(fence.Get(), submittedFence);
+	if (FAILED(hr)) return submittedFailure(hr, "DIRECT queue Signal");
+	fenceValue = submittedFence;
+	result.signaledFence = submittedFence;
+
+	const char* waitOperation = nullptr;
+	HRESULT waitError = S_OK;
+	uint64_t completed = fence->GetCompletedValue();
+	if (completed != removedFence && completed < submittedFence) {
+		hr = fence->SetEventOnCompletion(submittedFence, fenceEvent);
+		if (FAILED(hr)) {
+			waitError = hr;
+			waitOperation = "DIRECT fence SetEventOnCompletion";
+		} else {
+			const DWORD wait = WaitForSingleObject(fenceEvent, INFINITE);
+			if (wait != WAIT_OBJECT_0) {
+				const DWORD lastError = wait == WAIT_FAILED ? GetLastError() : 0;
+				waitError = lastError ? HRESULT_FROM_WIN32(lastError) : E_FAIL;
+				waitOperation = "DIRECT fence wait";
+			}
+		}
+		// イベントの結果とは別に、同じ提出のFence実値で完了を証明する。
+		completed = fence->GetCompletedValue();
+	}
+	if (completed == removedFence) {
+		result.gpuState = DirectFrameGpuState::DeviceRemoved;
+		return fail(DXGI_ERROR_DEVICE_REMOVED, "DIRECT fence GetCompletedValue");
+	}
+	if (completed < submittedFence) {
+		return submittedFailure(waitOperation ? waitError : E_FAIL,
+			waitOperation ? waitOperation : "DIRECT fence completion verification");
+	}
+	result.gpuState = DirectFrameGpuState::Completed;
+	result.completedFence = completed;
+	// Present/Reset失敗でも、同じ提出の完了確認後なら保持を解ける。
+	// 未提出・device除去・完了不明のreturnでは保持したまま終了する。
+	postDrawRetainedResource_.Reset();
+	postDrawRetainedObjects_.clear();
+
+	// ここからの失敗でも、この提出のGPU完了証跡は保持する。
+	if (FAILED(presentResult)) return fail(presentResult, "Present");
+	if (waitOperation) return fail(waitError, waitOperation);
 	hr = commandAllocator->Reset();
-	assert(SUCCEEDED(hr));
-
+	if (FAILED(hr)) return fail(hr, "DIRECT allocator Reset");
 	hr = commandList->Reset(commandAllocator, nullptr);
-	assert(SUCCEEDED(hr));
-
+	if (FAILED(hr)) return fail(hr, "DIRECT command list Reset");
+	return result;
 }
 
 void DirectXCommon::DeviceInitialize(){

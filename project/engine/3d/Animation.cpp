@@ -127,9 +127,10 @@ Animation ReadAnimation(const aiAnimation& source, size_t index) {
 
 } // namespace
 
-std::vector<Animation> LoadAnimationFiles(
-	const std::filesystem::path& requestedModelFilePath
+std::vector<Animation> ReadAnimationFiles(
+	const std::filesystem::path& requestedModelFilePath, std::string& diagnostic
 ) {
+	diagnostic.clear();
 	std::vector<Animation> animations;
 	Assimp::Importer importer;
 	const std::filesystem::path modelFilePath =
@@ -138,10 +139,8 @@ std::vector<Animation> LoadAnimationFiles(
 	importer.SetIOHandler(new AssimpUnicodeIOSystem(modelFilePath.parent_path()));
 	const aiScene* scene = importer.ReadFile(filePath.c_str(), 0);
 	if (!scene) {
-		Logger::Log(
-			"Failed to load model animations: " + filePath +
-			"\nAssimp: " + importer.GetErrorString() + "\n"
-		);
+		diagnostic = "Failed to load model animations: " + filePath +
+			"\nAssimp: " + importer.GetErrorString() + "\n";
 		return animations;
 	}
 	if (scene->mNumAnimations == 0) {
@@ -155,6 +154,13 @@ std::vector<Animation> LoadAnimationFiles(
 			animations.push_back(std::move(animation));
 		}
 	}
+	return animations;
+}
+
+std::vector<Animation> LoadAnimationFiles(const std::filesystem::path& modelFilePath) {
+	std::string diagnostic;
+	auto animations = ReadAnimationFiles(modelFilePath, diagnostic);
+	if (!diagnostic.empty()) Logger::Log(diagnostic);
 	return animations;
 }
 

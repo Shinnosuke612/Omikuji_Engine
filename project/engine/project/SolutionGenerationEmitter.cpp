@@ -85,7 +85,7 @@ namespace {
 		return stream.str();
 	}
 
-	bool IsJsonPchPath(const std::filesystem::path& path, const wchar_t* expected) {
+	bool IsProjectSourcePath(const std::filesystem::path& path, const wchar_t* expected) {
 		const std::wstring normalized = path.lexically_normal().generic_wstring();
 		return CompareStringOrdinal(normalized.c_str(), -1, expected, -1, TRUE) == CSTR_EQUAL;
 	}
@@ -94,10 +94,10 @@ namespace {
 		// PCH用ソースを持たない既存Engineモデルへ設定を持ち込まない。
 		if (target.kind != SolutionGenerationTargetKind::Engine) return false;
 		const bool hasCreator = std::any_of(target.sourceFiles.begin(), target.sourceFiles.end(), [](const SolutionGenerationSourceFile& file) {
-			return file.kind == SolutionGenerationFileKind::Compile && IsJsonPchPath(file.projectRelativePath, L"engine/pch/JsonPch.cpp");
+			return file.kind == SolutionGenerationFileKind::Compile && IsProjectSourcePath(file.projectRelativePath, L"engine/pch/JsonPch.cpp");
 		});
 		const bool hasHeader = std::any_of(target.sourceFiles.begin(), target.sourceFiles.end(), [](const SolutionGenerationSourceFile& file) {
-			return file.kind == SolutionGenerationFileKind::Include && IsJsonPchPath(file.projectRelativePath, L"engine/pch/JsonPch.h");
+			return file.kind == SolutionGenerationFileKind::Include && IsProjectSourcePath(file.projectRelativePath, L"engine/pch/JsonPch.h");
 		});
 		return hasCreator && hasHeader;
 	}
@@ -122,7 +122,7 @@ namespace {
 			L"engine/scene/SceneDocument.cpp",
 			L"engine/transition/SceneTransitionAsset.cpp"
 		}) {
-			if (IsJsonPchPath(path, consumer)) return true;
+			if (IsProjectSourcePath(path, consumer)) return true;
 		}
 		return false;
 	}
@@ -238,10 +238,14 @@ namespace {
 			}
 		}
 		for (const SolutionGenerationSourceFile& file : target.sourceFiles) if (file.kind == SolutionGenerationFileKind::Compile) {
-			const bool isJsonPchCreator = target.kind == SolutionGenerationTargetKind::Engine && IsJsonPchPath(file.projectRelativePath, L"engine/pch/JsonPch.cpp");
+			const bool isJsonPchCreator = target.kind == SolutionGenerationTargetKind::Engine && IsProjectSourcePath(file.projectRelativePath, L"engine/pch/JsonPch.cpp");
 			// 専用CPPを通常のordinalから外し、既存ソースのOBJ名を維持する。
 			const std::string objectFileName = isJsonPchCreator ? "$(IntDir)cg_json_pch.obj" : GeneratedObjectFileName(file.projectRelativePath, compileOrdinal++);
 			output << "    <ClCompile Include=\"" << MsBuildSourcePath(file.projectRelativePath) << "\"><ObjectFileName>" << objectFileName << "</ObjectFileName>";
+			// DebugのEditor UIは標準COFFのセクション上限を超えるため、この翻訳単位だけ拡張形式にする。
+			if (target.kind == SolutionGenerationTargetKind::Engine && IsProjectSourcePath(file.projectRelativePath, L"engine/base/ImGuiManager.cpp")) {
+				output << "<AdditionalOptions Condition=\"'$(Configuration)|$(Platform)'=='Debug|x64'\">/bigobj %(AdditionalOptions)</AdditionalOptions>";
+			}
 			if (hasJsonPchSources && (isJsonPchCreator || IsJsonPchConsumer(file.projectRelativePath))) {
 				if (isJsonPchCreator) output << "<ExcludedFromBuild>false</ExcludedFromBuild><ExcludedFromBuild Condition=\"'$(_CGJsonPchActive)'!='true'\">true</ExcludedFromBuild>";
 				WriteJsonPchMetadata(output, isJsonPchCreator ? "Create" : "Use");
@@ -393,7 +397,7 @@ bool SolutionGenerationEmitter::EmitPreview(const SolutionGenerationModel& model
 
 std::string SolutionGenerationEmitter::ComputeInputIdentity(const SolutionGenerationModel& model) const {
 	std::ostringstream input;
-	input << (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? "cg3.solution-generation/input/v11\nlayout=project-files-v2\n" : "cg3.solution-generation/input/v9\nlayout=grouped-v1\n");
+	input << (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2 ? "cg3.solution-generation/input/v12\nlayout=project-files-v2\n" : "cg3.solution-generation/input/v10\nlayout=grouped-v1\n");
 	if (model.outputLayout == SolutionGenerationLayout::ProjectFilesV2) input << "policy=" << kPolicyRevision << '\n';
 	std::error_code relativeError;
 	const std::filesystem::path artifactRelativeDirectory = std::filesystem::relative(model.artifactDirectory, model.projectRoot, relativeError).lexically_normal();

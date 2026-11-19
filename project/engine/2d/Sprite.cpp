@@ -1,5 +1,8 @@
 // 役割: スプライトの頂点更新と描画コマンド設定を実装する。
 #include "Sprite.h"
+#include <type_traits>
+#include <algorithm>
+#include <exception>
 #include <cstring>
 #include "SpriteCommon.h"
 #include "../base/DirectXCommon.h"
@@ -12,6 +15,92 @@ void Sprite::Initialize(SpriteCommon* spriteCommon, std::string textureFilePath)
 	MakeTransformationMatrixData();
 	this->textureFilePath_ = textureFilePath;
 	AdjustTextureSize();
+}
+
+bool Sprite::BeginPreparedInitialize(SpriteCommon& common, const std::string& key, std::string& diagnostic) {
+	auto& textures = *TextureManager::GetInstance();
+	if (spriteCommon_ || !common.GetDxCommon() || !textures.HasTexture(key) ||
+		!textures.GetSrvHandleGPU(key).ptr) {
+		diagnostic = "Sprite requires an unused instance, a device and a published texture key.";
+		return false;
+	}
+	try {
+		textureFilePath_ = key;
+	} catch (const std::exception&) {
+		diagnostic = "Failed to retain the prepared Sprite texture key.";
+		return false;
+	}
+	spriteCommon_ = &common;
+	transform = {{1,1,1},{0,0,0},{0,0,0}};
+	preparedStage_ = 1;
+	diagnostic.clear();
+	return true;
+}
+
+RuntimePrepareStep Sprite::StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	diagnostic.clear();
+	if (preparedStage_ == 5) return Step::Ready;
+	if (preparedStage_ <= 0) {
+		diagnostic = "Sprite preparation was not started or failed.";
+		return Step::Failed;
+	}
+	if (!remaining.maxCopyBytes) return Step::Pending;
+	// 確保後にcopy枠が尽きても、所有bufferとMapを次回へ持ち越す。
+	const auto prepare = [&](auto& resource, auto*& data, size_t bytes) {
+		if (!resource) {
+			if (!remaining.maxResourceCreates) return false;
+			--remaining.maxResourceCreates;
+			void* mapped = nullptr;
+			D3D12_RANGE readRange{0, 0};
+			if (!spriteCommon_->GetDxCommon()->TryCreateBufferResource(bytes, resource) || !resource ||
+				FAILED(resource->Map(0, &readRange, &mapped)) || !mapped) {
+				preparedStage_ = -1;
+				diagnostic = "Sprite upload buffer creation or mapping failed.";
+				return false;
+			}
+			data = static_cast<std::remove_reference_t<decltype(*data)>*>(mapped);
+		}
+		if (remaining.maxCopyBytes < bytes) return false;
+		remaining.maxCopyBytes -= bytes;
+		return true;
+	};
+	const auto pendingOrFailed = [&] { return preparedStage_ < 0 ? Step::Failed : Step::Pending; };
+	switch (preparedStage_) {
+	case 1: {
+		if (!prepare(preparedResources_[0], vertexData, sizeof(VertexData) * 6)) return pendingOrFailed();
+		vertexResource = preparedResources_[0].Get();
+		vertexBufferView = {vertexResource->GetGPUVirtualAddress(), sizeof(VertexData) * 6, sizeof(VertexData)};
+		std::fill_n(vertexData, 6, VertexData{});
+		break;
+	}
+	case 2: {
+		if (!prepare(preparedResources_[1], indexData, sizeof(uint32_t) * 6)) return pendingOrFailed();
+		indexResource = preparedResources_[1].Get();
+		indexBufferView = {indexResource->GetGPUVirtualAddress(), sizeof(uint32_t) * 6, DXGI_FORMAT_R32_UINT};
+		const uint32_t indices[] = {0,1,2,1,4,2};
+		std::memcpy(indexData, indices, sizeof(indices));
+		break;
+	}
+	case 3: {
+		if (!prepare(preparedResources_[2], materialData, sizeof(Material))) return pendingOrFailed();
+		materialResource = preparedResources_[2].Get();
+		*materialData = {};
+		materialData->color = {1,1,1,1};
+		materialData->uvTransform = MakeIdentity4x4();
+		break;
+	}
+	case 4: {
+		if (!prepare(preparedResources_[3], transformationMatrixData, sizeof(TransformationMatrix))) return pendingOrFailed();
+		transformationMatrixResource = preparedResources_[3].Get();
+		*transformationMatrixData = {MakeIdentity4x4(), MakeIdentity4x4()};
+		AdjustTextureSize();
+		break;
+	}
+	default: return Step::Failed;
+	}
+	++preparedStage_;
+	return preparedStage_ == 5 ? Step::Ready : Step::Pending;
 }
 
 void Sprite::Update(){

@@ -5,13 +5,18 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <optional>
 
 #include "../../../../engine/2d/TextSprite.h"
+#include "../../../../engine/scene/ScenePreparation.h"
+#include "../../../../engine/text/TextRasterizer.h"
 #include "../../../../engine/math/Vector2.h"
 #include "../../../../engine/math/Vector4.h"
 
 class DirectXCommon;
 class SceneDocument;
+struct SceneEntity;
+struct SceneComponent;
 class SceneStatSystem;
 
 class SceneTextRenderSystem {
@@ -32,6 +37,9 @@ public:
 	void ClearPresentationOverrides();
 	// statsは呼出し中だけ借用。nullは編集用initial/max、非nullはRuntime読取のみ。
 	void Sync(SceneDocument* document, const SceneStatSystem* stats = nullptr);
+	RuntimePrepareStep StepPreparedText(const SceneDocument&, const SceneRuntimePrepareBudget&, std::string&);
+	bool TryTakePreparedImage(PreparedSceneTextImage&);
+	bool AcceptPublishedImage(uint64_t, const std::string&, std::string&);
 	void DrawScene2D(const SceneDocument& document, uint32_t width, uint32_t height, bool editorView = false) const;
 	void DrawScreenOverlay(const SceneDocument& document, uint32_t width, uint32_t height, bool editorView = false) const;
 	bool HasScreenOverlay(const SceneDocument& document) const;
@@ -59,6 +67,12 @@ private:
 		Vector2 scaleMultiplier = { 1.0f, 1.0f };
 		float opacityMultiplier = 1.0f;
 	};
+	void ResolveRasterSettings(const SceneDocument*, const SceneEntity&, const SceneComponent*, const SceneStatSystem*,
+		bool, Vector2, TextRasterizer::Settings&, Vector2&, std::string&) const;
+	std::optional<PreparedSceneTextImage> preparedImage_;
+	uint64_t pendingPreparedEntity_ = 0;
+	bool imagePublished_ = false;
+	size_t preparedTextCursor_ = 0;
 
 	const PresentationOverride* FindPresentationOverride(
 		uint64_t entityId

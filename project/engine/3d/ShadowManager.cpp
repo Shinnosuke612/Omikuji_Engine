@@ -104,7 +104,77 @@ bool ShadowManager::TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, uint
     initialized_ = true; return true;
 }
 
+bool ShadowManager::BeginPreparedInitialize(DirectXCommon& dx, SrvManager& srv,
+	uint32_t shadowMapSize, std::string& diagnostic) {
+	if (dxCommon_ || !dx.GetDevice() || !srv.GetDescriptorHeap() ||
+		shadowMapSize != NormalizeShadowMapSize(shadowMapSize)) {
+		diagnostic = "ShadowManager requires an unused instance, device, SRV heap and normalized map size.";
+		return false;
+	}
+	dxCommon_ = &dx;
+	srvManager_ = &srv;
+	shadowMapSize_ = shadowMapSize;
+	prepareStage_ = PrepareStage::Constants;
+	diagnostic.clear();
+	return true;
+}
+
+RuntimePrepareStep ShadowManager::StepPreparedInitialize(
+	SceneRuntimePrepareBudget& remaining, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	diagnostic.clear();
+	if (prepareStage_ == PrepareStage::Ready) return Step::Ready;
+	const auto fail = [&](const char* reason) {
+		prepareStage_ = PrepareStage::Failed;
+		diagnostic = reason;
+		return Step::Failed;
+	};
+	if (prepareStage_ == PrepareStage::Failed || prepareStage_ == PrepareStage::Inactive)
+		return fail("ShadowManager preparation is unavailable.");
+	if (!remaining.maxCopyBytes) return Step::Pending;
+	try {
+		switch (prepareStage_) {
+		case PrepareStage::Constants: {
+			if (!shadowDataResource_) {
+				if (!remaining.maxResourceCreates) return Step::Pending;
+				--remaining.maxResourceCreates;
+				D3D12_RANGE readRange{0, 0};
+				if (!dxCommon_->TryCreateBufferResource(sizeof(ShadowForGPU), shadowDataResource_) ||
+					!shadowDataResource_ || FAILED(shadowDataResource_->Map(0, &readRange,
+						reinterpret_cast<void**>(&shadowData_))) || !shadowData_)
+					return fail("Failed to create or map prepared shadow constants.");
+			}
+			if (remaining.maxCopyBytes < sizeof(ShadowForGPU)) return Step::Pending;
+			remaining.maxCopyBytes -= sizeof(ShadowForGPU);
+			ResetShadowData();
+			prepareStage_ = PrepareStage::Map;
+			return Step::Pending;
+		}
+		case PrepareStage::Map:
+			if (!remaining.maxResourceCreates) return Step::Pending;
+			--remaining.maxResourceCreates;
+			if (!CreateResources()) return fail("Failed to create the prepared shadow map.");
+			prepareStage_ = PrepareStage::Views;
+			return Step::Pending;
+		case PrepareStage::Views:
+			// DSV heap creation takes one slot. SRV uses the existing shared descriptor heap.
+			if (!remaining.maxResourceCreates) return Step::Pending;
+			--remaining.maxResourceCreates;
+			if (!CreateDsv(true) || !CreateSrv()) return fail("Failed to prepare the shadow map views.");
+			prepareStage_ = PrepareStage::Ready;
+			initialized_ = true;
+			return Step::Ready;
+		default:
+			return fail("Invalid shadow preparation stage.");
+		}
+	} catch (const std::exception&) {
+		return fail("Failed to prepare the shadow map resources.");
+	}
+}
+
 void ShadowManager::SetShadowMapSize(uint32_t shadowMapSize) {
+	// 候補のmapとviewはBeginで確定した同一サイズで作る。
+	if (prepareStage_ != PrepareStage::Inactive && prepareStage_ != PrepareStage::Ready) return;
 	const uint32_t normalizedSize = NormalizeShadowMapSize(shadowMapSize);
 	if (shadowMapSize_ == normalizedSize) {
 		return;

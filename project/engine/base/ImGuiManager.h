@@ -273,8 +273,23 @@ public:
 		sceneUIEditorRenderedHeight_ = texture.ptr ? height : 0;
 	}
 	bool IsSceneViewRenderable() const { return sceneViewRenderable_; }
+	struct MainDockGameImageEvidence {
+		uint64_t frameSerial = 0, srv = 0;
+		uint32_t width = 0, height = 0, viewportId = 0, dockId = 0;
+		bool adoptedInMainDrawData = false;
+	};
+	enum class MainDockGameViewState { Ready, HiddenOrClipped, NotDockedInMain, Unavailable };
+	enum class MainDockTransitionIssue { DockRequired, ViewUnavailable, NotPlaying, TextUnsupported,
+		ContextChanged, PresentationFailed };
+	// 同一FrameのScene Imageをmain command listに記録した証拠。Present/Fenceの照合はGameが行う。
+	void RequireMainDockGameImage(uint64_t frameSerial, uint64_t expectedSrv) noexcept;
+	MainDockGameViewState GetMainDockGameViewState() const noexcept { return mainDockGameViewState_; }
+	bool TryGetMainDockGameImageEvidence(uint64_t frameSerial, uint64_t expectedSrv,
+		MainDockGameImageEvidence& out) const noexcept;
+	void ClearMainDockGameImageRequirement() noexcept;
+	void ReportMainDockTransitionIssue(MainDockTransitionIssue, const std::string& supplementaryDetail = {});
 	// Runtimeからの一時表示。Scene/Prefab/Editor設定へ保存しない。
-	void SetPresentedTransitionStatus(const std::string& status, bool active = false) {
+	void SetPresentedTransitionStatus(const std::string& status, bool active = false, bool requiresMainDock = false) {
 		// 失敗は既存の警告窓口へ一回だけ渡す。UI要求の診断も同じPopupで扱う。
 		if (!active && !status.empty() && (status != presentedTransitionStatus_ || presentedTransitionActive_)) {
 			spawnWarningRequested_ = true;
@@ -284,6 +299,7 @@ public:
 			spawnWarningDetail_ = status;
 		}
 		presentedTransitionStatus_ = status; presentedTransitionActive_ = active;
+		presentedTransitionRequiresMainDock_ = active && requiresMainDock;
 	}
 	bool ConsumePresentedTransitionStopRequest() {
 		const bool requested = presentedTransitionStopRequested_; presentedTransitionStopRequested_ = false; return requested;
@@ -405,6 +421,7 @@ public:
 private:
 	bool deferredPlatformWindows_ = false, sceneViewRenderable_ = false;
 	bool presentedTransitionActive_ = false, presentedTransitionStopRequested_ = false;
+	bool presentedTransitionRequiresMainDock_ = false;
 	std::string presentedTransitionStatus_;
     SceneReplayFramingRequest replayFramingRequest_;
     SceneReplayViewSettings replayFramingManualResult_, replayFramingResultSource_;
@@ -907,6 +924,16 @@ private:
 	uint32_t sceneViewHeight_ = 1;
 	bool sceneViewFixedAspect_ = true; // Editor設定だけに保存する16:9表示。
 	bool sceneViewHasImage_ = false; // 初期の仮矩形でcursor captureを開始しない。
+	MainDockGameViewState mainDockGameViewState_ = MainDockGameViewState::Unavailable;
+	MainDockGameImageEvidence mainDockEvidence_;
+	std::string mainDockTransitionIssueText_;
+	// Imageのdrawlist/index範囲は同一FrameのEndFrameまでだけ借用する。
+	struct MainDockImageRange {
+		const struct ImDrawList* list = nullptr;
+		unsigned first = 0, end = 0;
+		float left = 0, top = 0, right = 0, bottom = 0;
+	};
+	MainDockImageRange mainDockImageRange_;
 	bool gameInputOwned_ = false;
 	bool gameInputFocusRequested_ = false;
 	bool editorWasPlaying_ = false;

@@ -1,5 +1,7 @@
 // 役割: モデルリソースの読み込み、キャッシュ、取得を管理する。
 #pragma once
+#include "Model.h"
+#include "../base/PreparedResourceStatus.h"
 #include <map>
 #include <string>
 #include <memory>
@@ -34,6 +36,11 @@ public:
 	/// <param name="filePath">モデルファイルのパス</param>
 	void LoadModel(const std::string& filePath);
 	void ClearFailedModelCache();
+	// main専用。既存ModelCommonを渡し、準備処理の所有を呼出元へ返す。
+	bool TryBeginPrepared(Model::PreparedModelData&, std::unique_ptr<ModelBuild>&, std::string& diagnostic);
+	// Readyから取得したModelだけを公開。Publishedだけがinputを消費する。
+	PreparedPublishStatus TryPublishPreparedModel(const std::string& modelKey,
+		std::unique_ptr<Model>& input, std::string& diagnostic);
 
 	/// <summary>
 	/// モデルの検索

@@ -963,7 +963,7 @@
                   "targetEntityId": 0,
                   "targetEntityName": "",
                   "textMotionClipId": "",
-                  "transitionAssetPath": "resources/transitions/sword_shatter.transition.json",
+                  "transitionAssetPath": "resources/transitions/sword_shatter_load_linked.transition.json",
                   "type": "SceneTransition",
                   "value": 0.0
                 }

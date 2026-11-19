@@ -1,5 +1,6 @@
 // 役割: 環境CubeMapを使うSkyboxの描画状態を管理する。
 #pragma once
+#include "../scene/SceneRuntimePreparation.h"
 #include <string>
 #include <d3d12.h>
 #include "../math/Vector3.h"
@@ -23,6 +24,10 @@ private:
 	};
 
 public:
+	// main専用。公開済み資源を借用し、Readyまで描画しない。
+	bool BeginPreparedInitialize(Object3dCommon& common, Camera& candidateCamera, const std::string& publishedCubeKey,
+		std::string& diagnostic);
+	RuntimePrepareStep StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic);
 	void Initialize(Object3dCommon* object3dCommon, const std::string& textureFilePath);
     // 新規instance専用。cacheだけを参照し、全buffer/Map成功後に公開する。
     bool TryInitializeReplay(Object3dCommon* common, const std::string& textureKey);
@@ -47,6 +52,7 @@ private:
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> transformationMatrixResource_ = nullptr;
 	TransformationMatrix* transformationMatrixData_ = nullptr;
+	int preparedStage_ = 0;
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> materialResource_ = nullptr;
 	Material* materialData_ = nullptr;

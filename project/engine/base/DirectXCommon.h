@@ -7,25 +7,51 @@
 #include <dxcapi.h>
 #pragma comment(lib,"dxcompiler.lib")
 #include <wrl.h>
-#include "../utility/Logger.h"
-#include "../utility/StringUtility.h"
 #include "WinApp.h"
 #include <array>
-//imguiを使うためのinclude
-#include "../../externals/imgui/imgui.h"
-#include "../../externals/imgui/imgui_impl_dx12.h"
-#include "../../externals/imgui/imgui_impl_win32.h"
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-#include <DirectXTex.h>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// 参照引数の宣言に必要な型だけを示し、DirectXTexの完全な定義は実装側で読み込む。
+namespace DirectX {
+    struct TexMetadata;
+    class ScratchImage;
+}
+
+enum class DirectFrameGpuState { NotSubmitted, Completed, DeviceRemoved, Unconfirmed };
+
+// 同一のPostDraw提出に限った証跡。Signal未成功・完了未確認のFence値はそれぞれ0。
+// mainのV2表示進行は実PresentのS_OKとGPU完了を確認し、出力採用/可視条件をhostで照合する。
+struct DirectFrameResult {
+	DirectFrameGpuState gpuState = DirectFrameGpuState::NotSubmitted;
+	uint64_t signaledFence = 0;
+	uint64_t completedFence = 0;
+	HRESULT error = S_OK;
+	const char* failedOperation = nullptr;
+	HRESULT presentResult = E_PENDING; // 実Present未呼出し。occluded等の成功statusもそのまま保持する。
+
+	bool CanContinue() const noexcept {
+		return gpuState == DirectFrameGpuState::Completed && SUCCEEDED(error);
+	}
+};
 
 class DirectXCommon{
 public:
+	// 未提出listを破棄してから、そのlist用に保持した資源を解放する。
+	~DirectXCommon();
+	// main threadの通常Draw末尾専用。null/保持中なら拒否する。
+	// 成功後は次のPostDrawまで別提出を挟まない。GPU完了またはlist破棄までAddRefを保持する。
+	bool TryRetainResourceForNextPostDraw(ID3D12Resource* resource) noexcept;
+	// 同じslotへ全参照を原子的に受付。成功時だけrefsを消費し、完了またはlist破棄まで保持する。
+	bool TryRetainObjectsForNextPostDraw(std::vector<Microsoft::WRL::ComPtr<IUnknown>>& refs) noexcept;
 	//初期化
 	void Initialize(WinApp* winApp);
 	//描画前処理
 	void PreDraw();
-	// 描画後処理
-	void PostDraw();
+	// 通常描画を提出し、同じ提出のGPU完了と次Frameの描画可否を返す。
+	[[nodiscard]] DirectFrameResult PostDraw();
 	//デバイスの初期化
 	void DeviceInitialize();
 	//コマンド関連の初期化
@@ -94,6 +120,8 @@ public:
 	uint32_t GetClientHeight() const { return clientHeight_; }
 
 private:
+	Microsoft::WRL::ComPtr<ID3D12Resource> postDrawRetainedResource_;
+	std::vector<Microsoft::WRL::ComPtr<IUnknown>> postDrawRetainedObjects_;
 	//コマンド関連
 	ID3D12CommandQueue* commandQueue;//コマンドキュー
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;//コマンドリスト

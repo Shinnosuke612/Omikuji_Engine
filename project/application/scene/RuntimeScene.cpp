@@ -74,10 +74,15 @@ namespace {
 	}
 }
 
+bool RuntimeScene::IsPreparedDestinationDraw() const noexcept {
+	return sceneManager_ && GetSceneInstanceId() &&
+		sceneManager_->GetPreparedDestinationRenderInstance() == GetSceneInstanceId();
+}
+
 void RuntimeScene::ApplyRenderCamera(Camera* viewCamera) {
 	objectSystem_.ApplyRenderCamera(viewCamera);
 	environmentSystem_.ApplyRenderCamera(viewCamera);
-	ParticleManager::GetInstance()->SetCamera(viewCamera);
+	if (!IsPreparedDestinationDraw()) ParticleManager::GetInstance()->SetCamera(viewCamera);
 }
 
 Camera* RuntimeScene::GetSceneViewCamera() const {
@@ -227,7 +232,7 @@ void RuntimeScene::DrawPreparedSceneContentForView(
 		skipEntityId,
 		environmentSystem_,
 		objectSystem_,
-		!(sceneManager_ && sceneManager_->IsTransitionHeld())
+		!(sceneManager_ && sceneManager_->IsTransitionHeld()), !IsPreparedDestinationDraw()
 	);
 	if (document) {
 		DirectXCommon* dxCommon = Object3dCommon::GetInstance()->GetDxCommon();
@@ -250,6 +255,197 @@ bool RuntimeScene::ShouldHidePlayerModelForCamera(Camera* viewCamera) const {
 	return
 		viewCamera == camera_ &&
 		cameraSystem_.IsFirstPersonMode();
+}
+
+bool RuntimeScene::BeginPreparedRuntime() {
+	if (!GetSceneDocument() || camera_ || debugCamera_ ||
+		initialPreparationStage_ != InitialPreparationStage::Idle) return false;
+	initialPreparationStage_ = InitialPreparationStage::Cameras;
+	return true;
+}
+
+RuntimePrepareStep RuntimeScene::StepPreparedRuntime(
+	const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	if (initialPreparationStage_ == InitialPreparationStage::Idle) return RuntimePrepareStep::Unsupported;
+	if (!budget.maxItems || !budget.maxResourceCreates || !budget.maxCopyBytes) return RuntimePrepareStep::Pending;
+	if (std::chrono::steady_clock::now() >= budget.deadline) return RuntimePrepareStep::Pending;
+	// 一単位だけ進める。Gameの同一deadline内でProgressを再Pumpし、フレーム待ちにしない。
+	if (initialPreparationStage_ == InitialPreparationStage::Cameras) {
+		// 候補のcameraは局所所有。共有Object3d/Particleの既定cameraは変更しない。
+		auto camera = std::unique_ptr<Camera>(CreateOrbitCamera());
+		auto debugCamera = std::unique_ptr<Camera>(CreateOrbitCamera());
+		if (!camera || !debugCamera) {
+			diagnostic = "Destination camera preparation failed.";
+			return RuntimePrepareStep::Failed;
+		}
+		cameraSystem_.Reset();
+		postProcessProfileSystem_.Reset(GetSceneDocument());
+		debugSystem_.LoadSettings(GetSceneDocument());
+		camera_ = camera.release();
+		debugCamera_ = debugCamera.release();
+		objectSystem_.BeginPreparedModels(*camera_);
+		initialPreparationStage_ = InitialPreparationStage::Objects;
+		if (budget.metrics) budget.metrics->action = "camera_ready";
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Objects) {
+		const auto step = objectSystem_.StepPreparedModels(*GetSceneDocument(), physicsSystem_, budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		if (budget.metrics) budget.metrics->action = "objects_local_ready";
+		if (!budget.allowRuntimeFinalize) return RuntimePrepareStep::WaitingForAssets;
+		initialPreparationStage_ = InitialPreparationStage::ModelBindings;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::ModelBindings) {
+		const auto step = objectSystem_.StepPreparedModelBindings(*GetSceneDocument(), physicsSystem_, budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		initialPreparationStage_ = InitialPreparationStage::Player;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Player) {
+		InitializeScenePlayer(GetSceneDocument());
+		runtimeObjectBindings_.clear();
+		runtimeObjectBindings_.reserve(GetSceneDocument()->GetEntities().size());
+		initialBindingCursor_ = 0;
+		initialPreparationStage_ = InitialPreparationStage::BindingReferences;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::BindingReferences) {
+		auto& entities = GetSceneDocument()->GetEntities();
+		if (initialBindingCursor_ < entities.size()) {
+			auto& entity = entities[initialBindingCursor_++];
+			auto* runtime = objectSystem_.FindModelRuntime(entity.id);
+			if (!runtime || !runtime->object) { diagnostic = "Prepared binding object is missing."; return RuntimePrepareStep::Failed; }
+			runtimeObjectBindings_.push_back({entity.id,&entity,runtime->object.get(),runtime->hasCollider ? runtime->collider : nullptr,
+				runtime->hasPhysicsBody ? &runtime->physicsBody : nullptr});
+			if (budget.metrics) { ++budget.metrics->bound; budget.metrics->action = "binding";
+				budget.metrics->lastEntity = entity.id; budget.metrics->lastIndex = initialBindingCursor_-1; }
+		} else initialPreparationStage_ = InitialPreparationStage::InitialPhysics;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::InitialPhysics) {
+		auto* document = GetSceneDocument();
+		attachmentSystem_.Update(*document, objectSystem_, runtimeObjectBindings_);
+		cameraSystem_.UpdateTransitionHold(*document, camera_, player_, runtimeObjectBindings_);
+		initialPreparationStage_ = InitialPreparationStage::Environment;
+		if (budget.metrics) budget.metrics->action = "ordered_bindings_done";
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Environment) {
+		const auto step = environmentSystem_.StepPreparedSkybox(*GetSceneDocument(), *camera_,
+			runtimeObjectBindings_, budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		initialPreparationStage_ = InitialPreparationStage::Sprites;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Sprites) {
+		const auto step = objectSystem_.StepPreparedSprites(*GetSceneDocument(), budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		textRenderSystem_.Initialize(Object3dCommon::GetInstance()->GetDxCommon(),
+			GetSceneAssetId() + "_" + std::to_string(GetSceneInstanceId()));
+		PrepareGameFlowTextOverrides(false);
+		SyncMenuPresentationForOwnDocument();
+		initialPreparationStage_ = InitialPreparationStage::Text;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Text) {
+		const auto step = textRenderSystem_.StepPreparedText(*GetSceneDocument(), budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		initialPreparationStage_ = InitialPreparationStage::Lighting;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Lighting) {
+		const auto step = lightingSystem_.StepPrepared(*GetSceneDocument(), budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		monitorSystem_.Initialize(dx, SrvManager::GetInstance());
+		initialPreparationStage_ = InitialPreparationStage::GroundCracks;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::GroundCracks) {
+		auto* dx = Object3dCommon::GetInstance()->GetDxCommon();
+		const auto step = effectRenderSystem_.StepPreparedGroundCracks(*dx, budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		initialPreparationStage_ = InitialPreparationStage::Verify;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Verify) {
+		const auto& document = *GetSceneDocument();
+		for (const auto& entity : document.GetEntities()) {
+			if (!SceneEntityQuery::IsEntityActiveInHierarchy(document, entity)) continue;
+			if (const auto* water = SceneEntityQuery::FindEnabledComponent(entity, "WaterVolume");
+				water && water->waterSurfaceEnabled) {
+				diagnostic = "Destination water renderer preparation is unsupported.";
+				return RuntimePrepareStep::Unsupported;
+			}
+			if (SceneEntityQuery::FindEnabledComponent(entity, "MonitorRenderer")) {
+				diagnostic = "Destination monitor preparation is unsupported.";
+				return RuntimePrepareStep::Unsupported;
+			}
+		}
+		initialPreparationStage_ = InitialPreparationStage::Ready;
+		if (budget.metrics) budget.metrics->action = "runtime_ready";
+	}
+	return RuntimePrepareStep::Ready;
+}
+
+void RuntimeScene::CancelPreparedRuntime() noexcept {
+	// この段階では共有Runtime systemを開始していないため、通常Finalizeは行わない。
+	environmentSystem_.Finalize();
+	textRenderSystem_.Finalize();
+	lightingSystem_.Finalize();
+	effectRenderSystem_.Finalize();
+	monitorSystem_.Finalize();
+	physicsSystem_.Clear();
+	runtimeObjectBindings_.clear();
+	if (player_) {
+		player_->Finalize();
+		delete std::exchange(player_, nullptr);
+	}
+	objectSystem_.Finalize();
+	delete std::exchange(debugCamera_, nullptr);
+	delete std::exchange(camera_, nullptr);
+	initialPreparationStage_ = InitialPreparationStage::Idle;
+	initialBindingCursor_ = 0;
+}
+
+bool RuntimeScene::TryTakePreparedTextImage(PreparedSceneTextImage& out) {
+	return textRenderSystem_.TryTakePreparedImage(out);
+}
+
+bool RuntimeScene::AcceptPreparedTextImage(uint64_t id, const std::string& signature, std::string& diagnostic) {
+	return textRenderSystem_.AcceptPublishedImage(id, signature, diagnostic);
+}
+
+void RuntimeScene::ActivatePreparedRuntime() noexcept {
+	Object3dCommon::GetInstance()->SetDefaultCamera(camera_);
+	ParticleManager::GetInstance()->SetCamera(camera_);
+}
+
+void RuntimeScene::InitializeScenePlayer(SceneDocument* initialDocument) {
+	Vector3 target = GetSceneTransform(
+		initialDocument,
+		"Human",
+		Transform{
+			{ 1.0f, 1.0f, 1.0f },
+			{ 0.0f, 0.0f, 0.0f },
+			{ -2.0f, 0.0f, -2.0f }
+		}
+	).translate;
+	camera_->SetOrbitTarget(target);
+
+	player_ = new Player();
+	player_->Initialize(
+		objectSystem_.FindObjectByName(initialDocument, "Player")
+	);
+	player_->SetTransform(GetSceneTransform(
+		initialDocument,
+		"Player",
+		Transform{
+			{ 1.0f, 1.0f, 1.0f },
+			{ 0.0f, 0.0f, 0.0f },
+			{ 0.0f, 1.0f, -4.0f }
+		}
+	));
 }
 
 void RuntimeScene::Initialize()
@@ -280,30 +476,7 @@ void RuntimeScene::Initialize()
 		initialEditing
 	);
 
-	Vector3 target = GetSceneTransform(
-		initialDocument,
-		"Human",
-		Transform{
-			{ 1.0f, 1.0f, 1.0f },
-			{ 0.0f, 0.0f, 0.0f },
-			{ -2.0f, 0.0f, -2.0f }
-		}
-	).translate;
-	camera_->SetOrbitTarget(target);
-
-	player_ = new Player();
-	player_->Initialize(
-		objectSystem_.FindObjectByName(initialDocument, "Player")
-	);
-	player_->SetTransform(GetSceneTransform(
-		initialDocument,
-		"Player",
-		Transform{
-			{ 1.0f, 1.0f, 1.0f },
-			{ 0.0f, 0.0f, 0.0f },
-			{ 0.0f, 1.0f, -4.0f }
-		}
-	));
+	InitializeScenePlayer(initialDocument);
 
 	environmentSystem_.Initialize(
 		Object3dCommon::GetInstance()->GetDxCommon()
@@ -593,6 +766,11 @@ void RuntimeScene::SyncMenuPresentation() {
 	if (!document || !sceneManager_ || GetSceneInstanceId() != sceneManager_->GetActiveSceneInstanceId() || (context && context->IsEditing())) {
 		ClearUiRuntime(); textRenderSystem_.SetMenuColorOverrides({}); return;
 	}
+	SyncMenuPresentationForOwnDocument();
+}
+
+void RuntimeScene::SyncMenuPresentationForOwnDocument() {
+	const auto* document = GetSceneDocument();
 	// 通常Eventがactive/参照を変更した後、文字cache同期前に再検証する。キーは再評価しない。
 	menuSystem_.Sync(*document, GetSceneInstanceId());
 	textRenderSystem_.SetMenuColorOverrides(menuSystem_.GetFrame().textColors);
@@ -642,6 +820,11 @@ void RuntimeScene::ReportSceneRestartFailure(const std::string& detail) {
 void RuntimeScene::Update(float deltaTime)
 {
 	if (sceneManager_ && sceneManager_->IsGameExitPending()) return;
+	if (initialPreparationStage_ == InitialPreparationStage::Ready) {
+		// 設定変更時にログを確保するsetterは無割当のCommitから外す。
+		ParticleManager::GetInstance()->SetGpuParticleEnabled(true);
+		initialPreparationStage_ = InitialPreparationStage::Idle;
+	}
 	++replayUpdateSerial_;
 	ApplyPendingUiAudio();
 	// 成功時はこのRuntime自体が置換される。失敗時だけ生存側が結果を一回消費する。
@@ -1597,7 +1780,7 @@ void RuntimeScene::DrawForegroundEffectsWithCamera(Camera* viewCamera)
 		0,
 		environmentSystem_,
 		objectSystem_,
-		!(sceneManager_ && sceneManager_->IsTransitionHeld())
+		!(sceneManager_ && sceneManager_->IsTransitionHeld()), !IsPreparedDestinationDraw()
 	);
 }
 

@@ -1,5 +1,6 @@
 // 役割: SceneDocumentのJSON入出力、Hierarchy操作、Component検証を実装する。
 #include "SceneDocument.h"
+#include "SceneDocumentRead.h"
 #include "SceneEnemyChargeEvaluator.h"
 #include "PrefabAssetRegistry.h"
 #include "SceneDocumentMigrator.h"
@@ -9276,17 +9277,31 @@ const SceneEntity* SceneDocument::FindEntityByName(const std::string& name) cons
 }
 
 bool SceneDocument::LoadInternal(const std::string& filePath) {
-	// 失敗/部分読込でも旧Runtimeの退避値をこの内容へ復元させない。
+	// 読込失敗でも世代を更新する従来の順序を維持する。
 	contentGeneration_.Renew();
-	std::ifstream input(StringUtility::ToPath(filePath), std::ios::binary);
-	if (!input.is_open()) {
-		lastLoadError_ = "Scene file could not be opened: " + filePath;
+	std::unique_ptr<SceneDocumentRead> candidate;
+	bool invalidJson = false;
+	if (!SceneDocumentRead::Read(filePath, candidate, lastLoadError_, invalidJson)) {
+		if (invalidJson) {
+			assetId_.clear(); variantBaseAssetId_.clear(); variantBasePath_.clear();
+			variantBaseSnapshot_.reset(); entities_.clear(); teams_.clear();
+		}
 		return false;
 	}
+	return ApplyReadCandidate(*candidate);
+}
 
+bool SceneDocument::LoadReadCandidate(const SceneDocumentRead& candidate) {
+	lastLoadError_.clear();
+	contentGeneration_.Renew();
+	return ApplyReadCandidate(candidate);
+}
+
+bool SceneDocument::ApplyReadCandidate(const SceneDocumentRead& candidate) {
+	const std::string& filePath = candidate.SourcePath();
 	bool migrated = false;
 	try {
-		json root = json::parse(input);
+		json root = candidate.CopyRoot();
 		if (root.contains("variant")) {
 			// Baseを先に展開し、安定ID単位のOverrideだけを有効Documentへ重ねる。
 			if (!root.at("variant").is_object()) {

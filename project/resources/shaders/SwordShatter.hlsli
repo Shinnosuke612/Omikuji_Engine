@@ -27,9 +27,9 @@ cbuffer Globals : register(b0)
     float4 gViewportAspectPhase; // width/height/aspect/Collapse
     float4 gBackColor;
     float4 gEdgeColor;
-    float4 gStyleCutCount; // edgeWidth/AA下限/cutCount/unused
+    float4 gStyleCutCount; // edgeWidth/AA下限/cutCount/fragmentOpacity（V1は1）
     float4 gFlashColor;
-    float4 gFlashIntensity;
+    float4 gFlashIntensity; // x=flash intensity、y=V2 pass（V1は0）
 };
 struct ShatterOutput
 {

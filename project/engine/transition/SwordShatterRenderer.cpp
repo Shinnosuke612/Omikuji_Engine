@@ -69,10 +69,16 @@ struct Upload {
 // candidateの破棄だけで、途中確保したslot/RT/bufferを回収できるよう所有をまとめる。
 struct Prepared {
     SrvManager* manager = nullptr;
-    std::array<std::uint32_t,3> slots{SrvManager::kInvalidIndex, SrvManager::kInvalidIndex, SrvManager::kInvalidIndex};
+    std::array<std::uint32_t,5> slots{SrvManager::kInvalidIndex, SrvManager::kInvalidIndex,
+        SrvManager::kInvalidIndex, SrvManager::kInvalidIndex, SrvManager::kInvalidIndex};
     Upload vertices, indices, fragments, edges, cuts, globals;
+    Upload coverVertices, coverIndices, coverFragments, coverEdges;
     std::unique_ptr<SceneRenderTarget> capture, output;
     std::shared_ptr<const CompiledTransition> asset;
+    std::shared_ptr<const LoadLinkedGenerated> generated;
+    enum class Mode { None, V1, LoadLinked };
+    Mode mode = Mode::None;
+    std::size_t selectedPrefix = 0;
     ~Prepared() {
         if (manager) for (auto slot : slots) if (slot != SrvManager::kInvalidIndex) manager->Free(slot);
     }
@@ -82,10 +88,29 @@ struct Prepared {
         if (!vertices.Create(device, sizeof(Vertex)*MaxVertices) || !indices.Create(device, sizeof(std::uint32_t)*MaxIndices) ||
             !fragments.Create(device, sizeof(GpuFragment)*MaxFragments) || !edges.Create(device, sizeof(GpuEdge)*MaxVertices) ||
             !cuts.Create(device, sizeof(GpuCut)*MaxCuts) || !globals.Create(device, GlobalsBytes)) return false;
-        for (auto& slot : slots) if (!srv.TryAllocate(slot)) return false;
+        for (std::size_t i = 0; i < 3; ++i) if (!srv.TryAllocate(slots[i])) return false;
         return srv.CreateSRVforStructuredBuffer(slots[0], fragments.resource.Get(), static_cast<UINT>(MaxFragments), sizeof(GpuFragment)) &&
             srv.CreateSRVforStructuredBuffer(slots[1], cuts.resource.Get(), static_cast<UINT>(MaxCuts), sizeof(GpuCut)) &&
             srv.CreateSRVforStructuredBuffer(slots[2], edges.resource.Get(), static_cast<UINT>(MaxVertices), sizeof(GpuEdge));
+    }
+    bool CreateCover(DirectXCommon& dx, SrvManager& srv) {
+        auto* device = dx.GetDevice();
+        if (!coverVertices.Create(device, sizeof(Vertex)*4) ||
+            !coverIndices.Create(device, sizeof(std::uint32_t)*6) ||
+            !coverFragments.Create(device, sizeof(GpuFragment)) ||
+            !coverEdges.Create(device, sizeof(GpuEdge)*4) ||
+            !srv.TryAllocate(slots[3]) || !srv.TryAllocate(slots[4])) return false;
+        if (!srv.CreateSRVforStructuredBuffer(slots[3], coverFragments.resource.Get(), 1, sizeof(GpuFragment)) ||
+            !srv.CreateSRVforStructuredBuffer(slots[4], coverEdges.resource.Get(), 4, sizeof(GpuEdge))) return false;
+        const std::array<Vertex,4> quad{
+            Vertex{{0,0},0}, Vertex{{1,0},0}, Vertex{{1,1},0}, Vertex{{0,1},0}};
+        const std::array<std::uint32_t,6> triangles{0,1,2,0,2,3};
+        const std::array<GpuEdge,4> boundary{
+            GpuEdge{{0,0},{1,0}}, GpuEdge{{1,0},{1,1}}, GpuEdge{{1,1},{0,1}}, GpuEdge{{0,1},{0,0}}};
+        std::memcpy(coverVertices.mapped, quad.data(), sizeof(quad));
+        std::memcpy(coverIndices.mapped, triangles.data(), sizeof(triangles));
+        std::memcpy(coverEdges.mapped, boundary.data(), sizeof(boundary));
+        return true;
     }
 };
 
@@ -97,14 +122,18 @@ std::unique_ptr<SceneRenderTarget> CreateTarget(DirectXCommon& dx, SrvManager& s
     return target;
 }
 
-bool FillGeometry(const CompiledTransition& compiled, Prepared& prepared, Diagnostics& diagnostics) {
-    const auto& g = compiled.GetGeometry();
-    if (g.fragments.empty() || g.fragments.size() > MaxFragments || g.vertices.empty() || g.vertices.size() > MaxVertices ||
-        g.indices.empty() || g.indices.size() > MaxIndices || g.indices.size()%3 != 0 ||
-        g.cutSegments.size() != compiled.GetAsset().cuts.size() || g.cutSegments.size() > MaxCuts)
-        return Fail(diagnostics,"geometry","Geometryの容量/件数が不正です。");
+struct GeometryUpload {
     std::array<Vertex,MaxVertices> vertices{};
     std::array<GpuEdge,MaxVertices> edges{};
+    std::size_t edgeCount = 0;
+};
+
+// CPU検証とMap反映を分け、prefix選択失敗で旧Uploadを部分更新しない。
+bool BuildGeometryUpload(const Geometry& g, std::size_t cutCount, GeometryUpload& upload, Diagnostics& diagnostics) {
+    if (g.fragments.empty() || g.fragments.size() > MaxFragments || g.vertices.empty() || g.vertices.size() > MaxVertices ||
+        g.indices.empty() || g.indices.size() > MaxIndices || g.indices.size()%3 != 0 ||
+        g.cutSegments.size() != cutCount || g.cutSegments.size() > MaxCuts)
+        return Fail(diagnostics,"geometry","Geometryの容量/件数が不正です。");
     std::size_t vertexEnd = 0, indexEnd = 0, edgeEnd = 0;
     for (std::size_t i=0; i<g.fragments.size(); ++i) {
         const auto& f = g.fragments[i];
@@ -117,8 +146,8 @@ bool FillGeometry(const CompiledTransition& compiled, Prepared& prepared, Diagno
             const auto& v = g.vertices[vertexEnd+j];
             if (v.fragmentId != f.fragmentId || !Same(v.uv,f.polygon[j]) || !InRange(v.uv.x,0,1) || !InRange(v.uv.y,0,1))
                 return Fail(diagnostics,"geometry.vertices","断片の頂点対応が不正です。");
-            vertices[vertexEnd+j] = {v.uv, static_cast<std::uint32_t>(i)};
-            edges[edgeEnd+j] = {f.polygon[j],f.polygon[(j+1)%f.polygon.size()]};
+            upload.vertices[vertexEnd+j] = {v.uv, static_cast<std::uint32_t>(i)};
+            upload.edges[edgeEnd+j] = {f.polygon[j],f.polygon[(j+1)%f.polygon.size()]};
         }
         for (std::size_t j=0; j<f.indexCount; ++j) {
             const auto index = g.indices[indexEnd+j];
@@ -128,10 +157,21 @@ bool FillGeometry(const CompiledTransition& compiled, Prepared& prepared, Diagno
         vertexEnd += f.polygon.size(); indexEnd += f.indexCount; edgeEnd += f.polygon.size();
     }
     if (vertexEnd != g.vertices.size() || indexEnd != g.indices.size()) return Fail(diagnostics,"geometry","未対応の頂点/indexです。");
+    upload.edgeCount = edgeEnd;
+    return true;
+}
+
+void CommitGeometryUpload(const Geometry& g, const GeometryUpload& upload, Prepared& prepared) noexcept {
     // signed areaやfanを再生成せず、Assetの生成結果をそのままdense indexへ接続する。
-    std::memcpy(prepared.vertices.mapped,vertices.data(),g.vertices.size()*sizeof(Vertex));
+    std::memcpy(prepared.vertices.mapped,upload.vertices.data(),g.vertices.size()*sizeof(Vertex));
     std::memcpy(prepared.indices.mapped,g.indices.data(),g.indices.size()*sizeof(std::uint32_t));
-    std::memcpy(prepared.edges.mapped,edges.data(),edgeEnd*sizeof(GpuEdge));
+    std::memcpy(prepared.edges.mapped,upload.edges.data(),upload.edgeCount*sizeof(GpuEdge));
+}
+
+bool FillGeometry(const CompiledTransition& compiled, Prepared& prepared, Diagnostics& diagnostics) {
+    GeometryUpload upload;
+    if (!BuildGeometryUpload(compiled.GetGeometry(), compiled.GetAsset().cuts.size(), upload, diagnostics)) return false;
+    CommitGeometryUpload(compiled.GetGeometry(), upload, prepared);
     return true;
 }
 } // namespace
@@ -140,7 +180,7 @@ struct SwordShatterRenderer::Impl {
     DirectXCommon* dx = nullptr;
     SrvManager* srv = nullptr;
     ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3D12PipelineState> copy, mesh, slash, flash;
+    ComPtr<ID3D12PipelineState> copy, mesh, loadLinkedMesh, slash, flash;
     std::unique_ptr<Prepared> prepared;
     std::uint64_t generation = 0, frameSerial = 0;
     bool initialized = false, frameStarted = false, captureValid = false, outputValid = false;
@@ -248,6 +288,12 @@ bool SwordShatterRenderer::Impl::CreatePipelines(Diagnostics& diagnostics) {
     pso.DSVFormat = RenderFormats::kDepthDsvFormat;
     blend.BlendEnable = FALSE;
     if (!create(mesh,"mesh")) return false;
+    // V1のopaque PSOを残し、V2の破片だけを背景へalpha合成する。
+    blend.BlendEnable = TRUE;
+    blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    if (!create(loadLinkedMesh,"loadLinkedMesh")) return false;
     pso.PS = {shaders[4]->GetBufferPointer(),shaders[4]->GetBufferSize()};
     pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     blend.BlendEnable = TRUE;
@@ -291,14 +337,91 @@ bool SwordShatterRenderer::TryPrepare(std::shared_ptr<const CompiledTransition> 
     candidate->output = CreateTarget(*r.dx,*r.srv,w,h,true);
     if (!candidate->capture || !candidate->output) return Fail(diagnostics,"targets","Capture/Compose RT準備失敗。");
     candidate->asset = std::move(asset);
+    candidate->mode = Prepared::Mode::V1;
     r.prepared.swap(candidate);
     ++r.generation; r.captureValid = r.outputValid = false;
     return true;
 }
 
+bool SwordShatterRenderer::TryPrepareLoadLinked(std::shared_ptr<const LoadLinkedGenerated> generated,
+    std::uint32_t w, std::uint32_t h, Diagnostics& diagnostics) {
+    diagnostics.clear();
+    auto& r = *impl_;
+    if (!r.initialized || !r.Safe() || !generated || !ValidSize(w,h) ||
+        r.generation == (std::numeric_limits<std::uint64_t>::max)())
+        return Fail(diagnostics,"prepare","初期化/safe boundary/生成物/寸法/世代を確認してください。");
+    const auto& settings = generated->Settings();
+    const std::size_t minimum = settings.minimumCuts, maximum = settings.maximumCuts;
+    if (generated->RequestId() == 0 || !ValidSize(generated->CaptureWidth(),generated->CaptureHeight()) ||
+        minimum == 0 || minimum > maximum || maximum > MaxCuts ||
+        generated->Cuts().size() != maximum || generated->CutSegments().size() != maximum)
+        return Fail(diagnostics,"generated","生成物の識別/寸法/本数が不正です。");
+    for (std::size_t i = 0; i < maximum; ++i) {
+        const auto& segment = generated->CutSegments()[i];
+        const auto& cut = generated->Cuts()[i];
+        if (!InRange(segment.from.x,0,1) || !InRange(segment.from.y,0,1) ||
+            !InRange(segment.to.x,0,1) || !InRange(segment.to.y,0,1) ||
+            Same(segment.from,segment.to) || !Same(segment.from,cut.from) || !Same(segment.to,cut.to))
+            return Fail(diagnostics,"generated.cuts","確定cutとsegmentが一致しません。");
+    }
+    for (std::size_t count = minimum; count <= maximum; ++count) {
+        const auto* prefix = generated->FindPrefix(count);
+        GeometryUpload upload;
+        if (!prefix || prefix->count != count || prefix->geometry.binding.empty())
+            return Fail(diagnostics,"generated.prefix","必要なprefix/bindingがありません。");
+        if (!BuildGeometryUpload(prefix->geometry,count,upload,diagnostics)) return false;
+        if (prefix->motions.size() != prefix->geometry.fragments.size())
+            return Fail(diagnostics,"generated.prefix.motions","姿勢係数と断片の件数が一致しません。");
+        for (std::size_t i = 0; i < prefix->motions.size(); ++i)
+            if (prefix->motions[i].fragmentId != prefix->geometry.fragments[i].fragmentId)
+                return Fail(diagnostics,"generated.prefix.motions","姿勢係数と断片IDが一致しません。");
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto& a = prefix->geometry.cutSegments[i];
+            const auto& b = generated->CutSegments()[i];
+            if (!Same(a.from,b.from) || !Same(a.to,b.to))
+                return Fail(diagnostics,"generated.prefix.cuts","prefixが確定cut列と一致しません。");
+        }
+    }
+    auto candidate = std::make_unique<Prepared>();
+    if (!candidate->CreateBuffers(*r.dx,*r.srv) || !candidate->CreateCover(*r.dx,*r.srv))
+        return Fail(diagnostics,"buffers","V2 Upload/cover/SRV準備失敗。");
+    candidate->capture = CreateTarget(*r.dx,*r.srv,generated->CaptureWidth(),generated->CaptureHeight(),false);
+    candidate->output = CreateTarget(*r.dx,*r.srv,w,h,true);
+    if (!candidate->capture || !candidate->output) return Fail(diagnostics,"targets","V2 Capture/Compose RT準備失敗。");
+    candidate->mode = Prepared::Mode::LoadLinked;
+    candidate->generated = std::move(generated);
+    r.prepared.swap(candidate);
+    ++r.generation;
+    r.captureValid = r.outputValid = false;
+    return true;
+}
+
+bool SwordShatterRenderer::TrySelectLoadLinkedPrefix(std::size_t count, Diagnostics& diagnostics) {
+    diagnostics.clear();
+    auto& r = *impl_;
+    if (!r.initialized || !r.Safe() || !r.prepared ||
+        r.prepared->mode != Prepared::Mode::LoadLinked || !r.prepared->generated)
+        return Fail(diagnostics,"prefix","V2未準備、またはsafe boundary外です。");
+    auto& prepared = *r.prepared;
+    if (count == prepared.selectedPrefix) return true;
+    if (count == 0) {
+        prepared.selectedPrefix = 0;
+        return true;
+    }
+    const auto& settings = prepared.generated->Settings();
+    const auto* prefix = prepared.generated->FindPrefix(count);
+    if (count < settings.minimumCuts || count > settings.maximumCuts || !prefix || prefix->count != count)
+        return Fail(diagnostics,"prefix.count","選択本数は同じ生成物のminimum〜maximumが必要です。");
+    GeometryUpload upload;
+    if (!BuildGeometryUpload(prefix->geometry,count,upload,diagnostics)) return false;
+    CommitGeometryUpload(prefix->geometry,upload,prepared);
+    prepared.selectedPrefix = count;
+    return true;
+}
+
 bool SwordShatterRenderer::TryResizeOutput(std::uint32_t w, std::uint32_t h, Diagnostics& diagnostics) {
     diagnostics.clear(); auto& r = *impl_;
-    if (!r.initialized || !r.Safe() || !r.prepared || !r.prepared->asset || !ValidSize(w,h))
+    if (!r.initialized || !r.Safe() || !r.prepared || r.prepared->mode == Prepared::Mode::None || !ValidSize(w,h))
         return Fail(diagnostics,"resize","未準備、safe boundary外、または寸法が不正です。");
     auto& output = r.prepared->output;
     if (output->GetWidth() == w && output->GetHeight() == h) return true;
@@ -310,9 +433,13 @@ bool SwordShatterRenderer::TryResizeOutput(std::uint32_t w, std::uint32_t h, Dia
 
 bool SwordShatterRenderer::TryCapture(TextureView source, CaptureReceipt& receipt, Diagnostics& diagnostics) {
     diagnostics.clear(); auto& r = *impl_;
-    if (!r.initialized || !r.frameStarted || !r.prepared || !r.prepared->asset || r.captureValid || r.capturedThisFrame)
+    if (!r.initialized || !r.frameStarted || !r.prepared || r.prepared->mode == Prepared::Mode::None ||
+        r.captureValid || r.capturedThisFrame)
         return Fail(diagnostics,"capture","未準備、またはCapture済みです。再Captureにはsafe Prepareが必要です。");
     auto& p = *r.prepared;
+    if (p.mode == Prepared::Mode::LoadLinked &&
+        (source.width != p.capture->GetWidth() || source.height != p.capture->GetHeight()))
+        return Fail(diagnostics,"capture.regenerate","Capture前に寸法が変わりました。新しい寸法で生成/Prepareし直してください。");
     if (!ValidTexture(source,p.capture->GetWidth(),p.capture->GetHeight()) ||
         source.srv.ptr == p.capture->GetSrvGpuHandle().ptr || source.srv.ptr == p.output->GetSrvGpuHandle().ptr)
         return Fail(diagnostics,"capture.source","Display入力の寸法/format/null/aliasが不正です。");
@@ -328,7 +455,7 @@ bool SwordShatterRenderer::TryCompose(TextureView background, std::shared_ptr<co
     const FrameSample& sample, Diagnostics& diagnostics) {
     diagnostics.clear(); auto& r = *impl_;
     if (!r.initialized || !r.frameStarted || !r.captureValid || !r.prepared || !asset ||
-        asset.get() != r.prepared->asset.get() || r.composedThisFrame)
+        r.prepared->mode != Prepared::Mode::V1 || asset.get() != r.prepared->asset.get() || r.composedThisFrame)
         return Fail(diagnostics,"compose","未Capture、異なるsnapshot、または同Frame重複Composeです。");
     auto& p = *r.prepared;
     const auto w = p.output->GetWidth(), h = p.output->GetHeight();
@@ -381,7 +508,7 @@ bool SwordShatterRenderer::TryCompose(TextureView background, std::shared_ptr<co
         hasGlow |= c.glow > 0 && c.glowIntensity > 0 && c.glowColor.w > 0;
     }
     const Globals globals{{static_cast<float>(w),static_cast<float>(h),aspect,sample.phase == Phase::Collapse ? 1.0f : 0.0f},
-        BackColor,EdgeColor,{EdgeWidthPixels/static_cast<float>(h),1.0f/static_cast<float>(h),static_cast<float>(sample.cuts.size()),0},
+        BackColor,EdgeColor,{EdgeWidthPixels/static_cast<float>(h),1.0f/static_cast<float>(h),static_cast<float>(sample.cuts.size()),1},
         sample.flash.color,{sample.flash.intensity,0,0,0}};
 
     // 検証後は失敗する準備APIを呼ばない。全Passが同じupload値を読む。
@@ -406,6 +533,145 @@ bool SwordShatterRenderer::TryCompose(TextureView background, std::shared_ptr<co
     if (sample.flash.intensity > 0 && sample.flash.color.w > 0) {
         list->SetPipelineState(r.flash.Get());
         list->DrawInstanced(3,1,0,0);
+    }
+    p.output->End();
+    r.outputValid = r.composedThisFrame = r.recordedThisFrame = true;
+    return true;
+}
+
+bool SwordShatterRenderer::TryComposeLoadLinked(TextureView background,
+    const LoadLinkedFrameSample& sample, Diagnostics& diagnostics) {
+    diagnostics.clear();
+    auto& r = *impl_;
+    if (!r.initialized || !r.frameStarted || !r.captureValid || !r.prepared ||
+        r.prepared->mode != Prepared::Mode::LoadLinked || !sample.generated ||
+        sample.generated.get() != r.prepared->generated.get() || r.composedThisFrame)
+        return Fail(diagnostics,"compose","V2未Capture、異なる生成物、または同Frame重複Composeです。");
+    auto& p = *r.prepared;
+    const auto w = p.output->GetWidth(), h = p.output->GetHeight();
+    if (!ValidTexture(background,w,h) || background.srv.ptr == p.output->GetSrvGpuHandle().ptr)
+        return Fail(diagnostics,"compose.background","Display背景の寸法/format/null/aliasが不正です。");
+    using EvaluationPhase = LoadLinkedEvaluationPhase;
+    const auto& generated = *p.generated;
+    const auto& settings = generated.Settings();
+    const auto maximum = static_cast<std::size_t>(settings.maximumCuts);
+    const bool collapse = sample.phase == EvaluationPhase::Collapse;
+    const bool frozen = sample.phase == EvaluationPhase::Frozen;
+    if (sample.phase != EvaluationPhase::Cutting && sample.phase != EvaluationPhase::Interval &&
+        sample.phase != EvaluationPhase::Waiting && !frozen && !collapse)
+        return Fail(diagnostics,"sample.phase","未知のV2 phaseです。");
+    if (sample.completedCuts > maximum ||
+        (sample.phase == EvaluationPhase::Cutting && sample.completedCuts == maximum) ||
+        (sample.phase == EvaluationPhase::Interval && (sample.completedCuts == 0 || sample.completedCuts == maximum)) ||
+        (sample.phase == EvaluationPhase::Waiting && sample.completedCuts != maximum) ||
+        ((frozen || collapse) && sample.completedCuts < settings.minimumCuts))
+        return Fail(diagnostics,"sample.completedCuts","phaseと完了本数が一致しません。");
+    const auto expectedPrefix = frozen || collapse ? sample.completedCuts : 0;
+    if (sample.prefixCount != expectedPrefix || p.selectedPrefix != expectedPrefix ||
+        sample.drawMode != (collapse ? LoadLinkedDrawMode::Fragments : LoadLinkedDrawMode::CaptureCover))
+        return Fail(diagnostics,"sample.prefix","phase/描画mode/本数とsafe Updateの選択が一致しません。");
+    const double duration = collapse ? settings.collapse.duration :
+        (sample.phase == EvaluationPhase::Cutting ? settings.cutSweepDuration : 0);
+    if (!std::isfinite(sample.evaluatedLocalTime) || sample.evaluatedLocalTime < 0 ||
+        sample.evaluatedLocalTime > duration || !InRange(sample.fragmentOpacity,0,1) ||
+        (!collapse && sample.fragmentOpacity != 1) || !InRange(sample.textOpacity,0,1) ||
+        sample.cuts.size() != (collapse ? expectedPrefix : maximum))
+        return Fail(diagnostics,"sample","V2の時刻/opacity/cut件数が不正です。");
+    const auto* prefix = expectedPrefix ? generated.FindPrefix(expectedPrefix) : nullptr;
+    if (expectedPrefix && (!prefix || prefix->count != expectedPrefix))
+        return Fail(diagnostics,"sample.prefix","同じ生成物にprefixがありません。");
+    if ((!collapse && !sample.fragments.empty()) ||
+        (collapse && sample.fragments.size() != prefix->geometry.fragments.size()))
+        return Fail(diagnostics,"sample.fragments","描画modeと姿勢件数が一致しません。");
+
+    std::array<GpuFragment,MaxFragments> fragments{};
+    std::array<GpuCut,MaxCuts> cuts{};
+    const float aspect = static_cast<float>(w)/static_cast<float>(h);
+    const auto projection = MakePerspectiveFovMatrix(2*std::atan(.5f/CameraDistance),aspect,NearClip,FarClip);
+    const auto viewProjection = Multiply(MakeTranslateMatrix({0,0,CameraDistance}),projection);
+    constexpr float toRadians = 3.14159265358979323846f/180.0f;
+    std::uint32_t firstEdge = 0;
+    if (!collapse) {
+        // 空のEvaluator姿勢列を変更せず、全面Capture専用のidentity姿勢を使う。
+        fragments[0] = {viewProjection,{.5f,.5f},0,4};
+    } else {
+        for (std::size_t i = 0; i < sample.fragments.size(); ++i) {
+            const auto& pose = sample.fragments[i];
+            const auto& geometry = prefix->geometry.fragments[i];
+            if (pose.fragmentId != geometry.fragmentId || !InRange(pose.position,-10000,10000) ||
+                !InRange(pose.rotationEulerDegrees,-360000,360000) || !InRange(pose.scale,0,1000))
+                return Fail(diagnostics,"sample.fragments","N別Geometryと姿勢ID/TRS範囲が一致しません。");
+            const Vector3 rotation{std::remainder(pose.rotationEulerDegrees.x,360.0f)*toRadians,
+                std::remainder(pose.rotationEulerDegrees.y,360.0f)*toRadians,
+                std::remainder(pose.rotationEulerDegrees.z,360.0f)*toRadians};
+            const Vector3 center{(geometry.centroid.x-.5f)*aspect+pose.position.x,
+                .5f-geometry.centroid.y+pose.position.y,pose.position.z};
+            auto& record = fragments[i];
+            record.localToClip = Multiply(MakeAffineMatrix(pose.scale,rotation,center),viewProjection);
+            record.centroid = geometry.centroid;
+            record.firstEdge = firstEdge;
+            record.edgeCount = static_cast<std::uint32_t>(geometry.polygon.size());
+            firstEdge += record.edgeCount;
+        }
+    }
+    const auto fragmentCount = collapse ? sample.fragments.size() : 1;
+    for (std::size_t i = 0; i < fragmentCount; ++i)
+        for (const auto& row : fragments[i].localToClip.m)
+            for (float value : row)
+                if (!std::isfinite(value)) return Fail(diagnostics,"matrix","非有限のV2描画行列です。");
+    const auto& style = settings.cutStyle;
+    bool hasGlow = false;
+    for (std::size_t i = 0; i < sample.cuts.size(); ++i) {
+        const auto& cut = sample.cuts[i];
+        const auto& segment = generated.CutSegments()[i];
+        const bool active = sample.phase == EvaluationPhase::Cutting && i == sample.completedCuts;
+        const bool completed = i < sample.completedCuts;
+        if (!Same(cut.segment.from,segment.from) || !Same(cut.segment.to,segment.to) ||
+            !Color(cut.lineColor) || !Color(cut.glowColor) ||
+            !Same(cut.lineColor,style.lineColor) || !Same(cut.glowColor,style.glowColor) ||
+            cut.lineWidth != style.lineWidth || cut.glowWidth != style.glowWidth ||
+            cut.glowIntensity != style.glowIntensity || !InRange(cut.reveal,0,1) || !InRange(cut.glow,0,1) ||
+            !InRange(cut.lineWidth,0,1) || cut.lineWidth == 0 ||
+            !InRange(cut.glowWidth,0,1) || cut.glowWidth == 0 || !InRange(cut.glowIntensity,0,32) ||
+            (completed && cut.reveal != 1) || (!completed && !active && (cut.reveal != 0 || cut.glow != 0)) ||
+            (collapse && cut.glow != 0))
+            return Fail(diagnostics,"sample.cuts","V2のsegment/style/累積reveal/glowが生成物と一致しません。");
+        cuts[i] = {{cut.segment.from.x,cut.segment.from.y,cut.segment.to.x,cut.segment.to.y},
+            cut.lineColor,cut.glowColor,{cut.reveal,cut.glow,cut.lineWidth,cut.glowWidth},{cut.glowIntensity,0,0,0}};
+        hasGlow |= cut.reveal > 0 && cut.glow > 0 && cut.glowIntensity > 0 && cut.glowColor.w > 0;
+    }
+    const float opacity = collapse ? sample.fragmentOpacity : 1;
+    const Globals globals{{static_cast<float>(w),static_cast<float>(h),aspect,collapse ? 1.0f : 0.0f},
+        BackColor,EdgeColor,{EdgeWidthPixels/static_cast<float>(h),1.0f/static_cast<float>(h),
+            static_cast<float>(sample.cuts.size()),opacity},{},{0,1,0,0}};
+    // ここまでCPU検証のみ。prefix/cover meshはsafe Updateで準備済みで、Drawでは交換しない。
+    Upload& fragmentUpload = collapse ? p.fragments : p.coverFragments;
+    const Upload& vertices = collapse ? p.vertices : p.coverVertices;
+    const Upload& indices = collapse ? p.indices : p.coverIndices;
+    const auto vertexCount = collapse ? prefix->geometry.vertices.size() : 4;
+    const auto indexCount = collapse ? prefix->geometry.indices.size() : 6;
+    std::memcpy(fragmentUpload.mapped,fragments.data(),fragmentCount*sizeof(GpuFragment));
+    std::memcpy(p.cuts.mapped,cuts.data(),sample.cuts.size()*sizeof(GpuCut));
+    std::memcpy(p.globals.mapped,&globals,sizeof(globals));
+    p.output->Begin(false,true);
+    r.CopyTexture(background.srv);
+    auto* list = r.dx->GetCommandList();
+    list->SetGraphicsRootDescriptorTable(0,p.capture->GetSrvGpuHandle());
+    list->SetGraphicsRootDescriptorTable(1,r.srv->GetGPUDescriptorHandle(p.slots[collapse ? 0 : 3]));
+    list->SetGraphicsRootDescriptorTable(2,r.srv->GetGPUDescriptorHandle(p.slots[1]));
+    list->SetGraphicsRootDescriptorTable(3,r.srv->GetGPUDescriptorHandle(p.slots[collapse ? 2 : 4]));
+    list->SetGraphicsRootConstantBufferView(4,p.globals.resource->GetGPUVirtualAddress());
+    const D3D12_VERTEX_BUFFER_VIEW vb{vertices.resource->GetGPUVirtualAddress(),
+        static_cast<UINT>(vertexCount*sizeof(Vertex)),sizeof(Vertex)};
+    const D3D12_INDEX_BUFFER_VIEW ib{indices.resource->GetGPUVirtualAddress(),
+        static_cast<UINT>(indexCount*sizeof(std::uint32_t)),DXGI_FORMAT_R32_UINT};
+    list->IASetVertexBuffers(0,1,&vb);
+    list->IASetIndexBuffer(&ib);
+    list->SetPipelineState(collapse ? r.loadLinkedMesh.Get() : r.mesh.Get());
+    list->DrawIndexedInstanced(static_cast<UINT>(indexCount),1,0,0,0);
+    if (hasGlow) {
+        list->SetPipelineState(r.slash.Get());
+        list->DrawIndexedInstanced(static_cast<UINT>(indexCount),1,0,0,0);
     }
     p.output->End();
     r.outputValid = r.composedThisFrame = r.recordedThisFrame = true;

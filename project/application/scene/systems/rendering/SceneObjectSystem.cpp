@@ -65,6 +65,190 @@ SceneObjectSystem::~SceneObjectSystem() {
 	Finalize();
 }
 
+void SceneObjectSystem::BeginPreparedModels(Camera& camera) noexcept {
+	preparedCamera_ = &camera;
+	preparedModelCursor_ = 0;
+}
+
+RuntimePrepareStep SceneObjectSystem::StepPreparedModels(const SceneDocument& document,
+	ScenePhysicsSystem&, const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	if (!preparedCamera_) return Step::Unsupported;
+	if (!budget.maxItems || std::chrono::steady_clock::now() >= budget.deadline) return Step::Pending;
+	if (!preparedIndexed_) {
+		preparedDocumentGeneration_ = document.GetContentGeneration();
+		preparedEntityCount_ = document.GetEntities().size();
+		preparedModelStates_.resize(preparedEntityCount_, 0);
+		preparedScanRemaining_ = preparedEntityCount_;
+		preparedIndexed_ = true;
+		if (budget.metrics) budget.metrics->entities = preparedEntityCount_;
+		return Step::Progress;
+	}
+	if (document.GetContentGeneration() != preparedDocumentGeneration_ || document.GetEntities().size() != preparedEntityCount_) {
+		diagnostic = "Destination document changed during Object preparation."; return Step::Failed;
+	}
+	if (preparedLocalReady_ == preparedEntityCount_) return Step::Ready;
+	const auto waitForAsset = [&](const std::string& reason) {
+		if (budget.allowRuntimeFinalize) { diagnostic = reason; return Step::Failed; }
+		return Step::WaitingForAssets;
+	};
+	// 完了barrierへ入った時は一度最終再scanする。以後の依存欠落を無限待機にしない。
+	if (budget.allowRuntimeFinalize && !preparedFinalScan_) {
+		preparedFinalScan_ = true; preparedScanRemaining_ = preparedEntityCount_;
+	}
+	auto& textures = *TextureManager::GetInstance();
+	constexpr auto environment = "resources/rostock_laage_airport_4k.dds";
+	if (!textures.HasTexture(environment) || !textures.GetSrvHandleGPU(environment).ptr || !textures.GetMetaData(environment).IsCubemap()) {
+		if (budget.metrics) ++budget.metrics->waitEnvironment;
+		return waitForAsset("Published destination environment cube is missing or invalid.");
+	}
+	if (!preparedObject_) {
+		if (preparedAssetRevision_ != budget.assetRevision) {
+			preparedAssetRevision_ = budget.assetRevision;
+			preparedScanRemaining_ = preparedEntityCount_;
+		}
+		if (!preparedScanRemaining_) return waitForAsset("Destination object dependencies remain unavailable after the final asset scan.");
+		const size_t index = preparedModelCursor_;
+		--preparedScanRemaining_;
+		preparedModelCursor_ = (index + 1) % preparedEntityCount_;
+		if (preparedModelStates_[index] == 2) return Step::Progress;
+		const auto& entity = document.GetEntities()[index];
+		const auto* mesh = FindEnabledComponent(entity, "MeshRenderer");
+		const auto path = mesh ? mesh->modelPath : std::string{};
+		auto* model = path.empty() ? nullptr : ModelManager::GetInstance()->FindModel(path);
+		if (!path.empty() && !model) {
+			if (budget.metrics) ++budget.metrics->waitModel;
+			if (budget.allowRuntimeFinalize) return waitForAsset("Published destination model is missing: " + path);
+			return preparedScanRemaining_ ? Step::Progress : Step::WaitingForAssets;
+		}
+		if (model && model->HasSkinning()) { diagnostic = "Prepared destination model is skinned: " + path; return Step::Unsupported; }
+		// cache公開後の実slotだけを見る。未準備をnull Model/白画像で補わない。
+		bool missing = false;
+		if (model) for (const auto& slot : model->GetMaterialSlots()) {
+			if (!slot.textureFilePath.empty() && (!textures.HasTexture(slot.textureFilePath) || !textures.GetSrvHandleGPU(slot.textureFilePath).ptr)) missing = true;
+			if (mesh) {
+				const auto found = std::find_if(mesh->meshMaterialOverrides.begin(), mesh->meshMaterialOverrides.end(), [&](const auto& item) {
+					return item.enabled && !item.materialName.empty() && item.materialName == slot.name;
+				});
+				if (found != mesh->meshMaterialOverrides.end() && !found->texturePath.empty() &&
+					(!textures.HasTexture(found->texturePath) || !textures.GetSrvHandleGPU(found->texturePath).ptr)) missing = true;
+			}
+		}
+		if (missing) {
+			if (budget.metrics) ++budget.metrics->waitTexture;
+			if (budget.allowRuntimeFinalize) return waitForAsset("Published destination material texture is missing: " + path);
+			return preparedScanRemaining_ ? Step::Progress : Step::WaitingForAssets;
+		}
+		auto object = std::make_unique<Object3d>();
+		if (!object->BeginPreparedInitialize(*Object3dCommon::GetInstance(), *preparedCamera_, model, environment, diagnostic)) return Step::Failed;
+		preparedObject_ = std::move(object);
+		preparedModelCursor_ = index; // 作成途中は一件だけを専有し、同じ個体へ再Beginしない。
+		preparedModelStates_[index] = 1;
+		if (budget.metrics) {
+			++budget.metrics->localStarted;
+			if (std::find(preparedModelStates_.begin(), preparedModelStates_.begin() + index, uint8_t{0}) != preparedModelStates_.begin() + index) ++budget.metrics->skippedAhead;
+			budget.metrics->lastEntity = entity.id; budget.metrics->lastIndex = index; budget.metrics->action = "object_begin";
+		}
+		return Step::Progress;
+	}
+	auto remaining = budget;
+	const auto step = preparedObject_->StepPreparedInitialize(remaining, diagnostic);
+	if (step != Step::Ready) return step;
+	const size_t index = preparedModelCursor_;
+	const auto& entity = document.GetEntities()[index];
+	const auto* mesh = FindEnabledComponent(entity, "MeshRenderer");
+	auto& transform = preparedObject_->GetTransform();
+	transform.scale = entity.transform.scale;
+	transform.rotate = MakeEulerFromQuaternion(entity.transform.rotate);
+	transform.translate = entity.transform.translate;
+	transform.useQuaternionRotation = true; transform.quaternionRotate = entity.transform.rotate;
+	preparedObject_->SetCullMode(HasComponent(entity, "WaterVolume") ? Object3dCommon::CullMode::kNone : mesh ? ToObjectCullMode(mesh->meshCullMode) : Object3dCommon::CullMode::kBack);
+	std::vector<Object3d::MaterialOverride> overrides;
+	if (mesh) for (const auto& value : mesh->meshMaterialOverrides) overrides.push_back({value.materialName,value.enabled,value.colorOverrideEnabled,value.color,value.texturePath});
+	if (!preparedObject_->TrySetPreparedMaterialOverrides(overrides)) { diagnostic = "Prepared material override is unavailable."; return Step::Failed; }
+	auto [position, inserted] = models_.try_emplace(entity.id);
+	if (!inserted) { diagnostic = "Duplicate destination Runtime object."; return Step::Failed; }
+	auto& runtime = position->second;
+	runtime.object = std::move(preparedObject_);
+	runtime.modelPath = mesh ? mesh->modelPath : std::string{};
+	runtime.hasRenderer = !runtime.modelPath.empty();
+	runtime.materialOverrideSignature = mesh ? BuildMaterialOverrideSignature(mesh->meshMaterialOverrides) : BuildMaterialOverrideSignature({});
+	preparedModelStates_[index] = 2; ++preparedLocalReady_;
+	preparedModelCursor_ = (index + 1) % preparedEntityCount_;
+	if (budget.metrics) {
+		++budget.metrics->localReady;
+		budget.metrics->lastEntity = entity.id; budget.metrics->lastIndex = index; budget.metrics->action = "object_local_ready";
+	}
+	return Step::Progress;
+}
+
+RuntimePrepareStep SceneObjectSystem::StepPreparedModelBindings(SceneDocument& document,
+	ScenePhysicsSystem& physics, const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	if (!budget.allowRuntimeFinalize) return Step::WaitingForAssets;
+	if (!budget.maxItems || std::chrono::steady_clock::now() >= budget.deadline) return Step::Pending;
+	if (!preparedIndexed_ || preparedLocalReady_ != preparedEntityCount_ ||
+		document.GetContentGeneration() != preparedDocumentGeneration_ || document.GetEntities().size() != preparedEntityCount_) {
+		diagnostic = "Destination Objects or document are not ready for binding."; return Step::Failed;
+	}
+	const auto& entities = document.GetEntities();
+	if (preparedBindingStage_ == PreparedBindingStage::Ready) return Step::Ready;
+	if (preparedBindingStage_ == PreparedBindingStage::World) {
+		// 再帰のenter/exitを保持し、文書root順と親優先・循環打切りを従来どおり再現する。
+		if (preparedWorldStack_.empty()) {
+			if (preparedBindingCursor_ == entities.size()) {
+				preparedBindingStage_ = PreparedBindingStage::Ready;
+				return Step::Ready;
+			}
+			preparedWorldStack_.push_back({entities[preparedBindingCursor_++].id,false});
+			return Step::Progress;
+		}
+		auto& frame = preparedWorldStack_.back();
+		const uint64_t id = frame.first;
+		const auto* entity = document.FindEntity(id);
+		auto* object = id ? FindObject(id) : nullptr;
+		if (!frame.second) {
+			if (!entity || !object || preparedWorldDone_.contains(id) || preparedWorldVisiting_.contains(id)) {
+				preparedWorldStack_.pop_back(); return Step::Progress;
+			}
+			preparedWorldVisiting_.insert(id); frame.second = true;
+			if (entity->parentId && FindObject(entity->parentId)) preparedWorldStack_.push_back({entity->parentId,false});
+			return Step::Progress;
+		}
+		if (IsEntityActiveInHierarchy(document,*entity)) {
+			if (preparedInitialPose_.contains(id)) object->UpdateAnimation(0.0f);
+			object->Update();
+		}
+		preparedWorldVisiting_.erase(id); preparedWorldDone_.insert(id); preparedWorldStack_.pop_back();
+		return Step::Progress;
+	}
+	if (preparedBindingCursor_ == entities.size()) {
+		preparedBindingCursor_ = 0;
+		preparedBindingStage_ = preparedBindingStage_ == PreparedBindingStage::Verify ? PreparedBindingStage::Settings :
+			preparedBindingStage_ == PreparedBindingStage::Settings ? PreparedBindingStage::Parents : PreparedBindingStage::World;
+		return Step::Progress;
+	}
+	const size_t index = preparedBindingCursor_++;
+	const auto& entity = entities[index];
+	auto* runtime = FindModelRuntime(entity.id);
+	if (!runtime || !runtime->object) { diagnostic = "Prepared Runtime object is missing."; return Step::Failed; }
+	if (budget.metrics) { budget.metrics->lastEntity = entity.id; budget.metrics->lastIndex = index; }
+	if (preparedBindingStage_ == PreparedBindingStage::Verify) {
+		const auto* mesh = FindEnabledComponent(entity,"MeshRenderer");
+		if (runtime->modelPath != (mesh ? mesh->modelPath : std::string{}) ||
+			runtime->hasRenderer != !runtime->modelPath.empty() || runtime->materialOverrideSignature !=
+			(mesh ? BuildMaterialOverrideSignature(mesh->meshMaterialOverrides) : BuildMaterialOverrideSignature({}))) {
+			diagnostic = "Destination model or material signature changed."; return Step::Failed;
+		}
+	} else if (preparedBindingStage_ == PreparedBindingStage::Settings) {
+		// 身元の採番も文書順。先行構築の完了順に依存させない。
+		runtime->replayIncarnation = nextReplayIncarnation_++;
+		SyncModelSettings(&document,entity,*runtime,physics,true,false,false,preparedInitialPose_);
+	} else runtime->object->SetParent(entity.parentId ? FindObject(entity.parentId) : nullptr);
+	return Step::Progress;
+}
+
+
 void SceneObjectSystem::SyncModels(
 	SceneDocument* document,
 	ScenePhysicsSystem& physicsSystem,
@@ -80,6 +264,256 @@ void SceneObjectSystem::SyncModelsForTransition(
 ) {
 	// 許可flagの切替はPlayAnimationを再実行するため、Runtimeのtrueを保ち時計だけ止める。
 	SyncModelsInternal(document, physicsSystem, 0.0f, true, false, false);
+}
+
+void SceneObjectSystem::SyncModelSettings(SceneDocument* document, const SceneEntity& entity,
+	ModelRuntime& runtime, ScenePhysicsSystem& physicsSystem, bool allowAnimatorAutoPlay,
+	bool editing, bool advanceAnimation, std::unordered_set<uint64_t>& initialAnimationPoseIds) {
+	const auto* meshRenderer = FindEnabledComponent(entity, "MeshRenderer");
+	const SceneComponent* animator =
+		FindEnabledComponent(entity, "Animator");
+	// Pool再有効化は新しいclip時刻0から。停止中の通常Frameでは再生設定を切り替えない。
+	for (const auto& visual : spawnFrame_.visuals) {
+		uint64_t id = entity.id;
+		for (size_t depth = 0; id && depth <= document->GetEntities().size(); ++depth) {
+			if (id == visual.rootEntityId) {
+				if (runtime.spawnActivationSerial != visual.activationSerial) runtime.animatorInitialized = false;
+				runtime.spawnActivationSerial = visual.activationSerial;
+				break;
+			}
+			const auto* parent = document->FindEntity(id);
+			id = parent ? parent->parentId : 0;
+		}
+	}
+	const bool hasAnimator = animator && runtime.object->HasAnimation();
+	const size_t clipCount = runtime.object->GetAnimationClipCount();
+	const int defaultClip = clipCount > 0
+		? std::clamp(
+			animator ? animator->animatorDefaultClip : 0,
+			0,
+			static_cast<int>(clipCount - 1)
+		)
+		: 0;
+	const AnimationBlendCurve blendCurve =
+		animator && animator->animatorBlendCurve == "Linear"
+		? AnimationBlendCurve::Linear
+		: AnimationBlendCurve::SmoothStep;
+	const bool initializeAnimator = !runtime.animatorInitialized;
+	if (initializeAnimator) {
+		initialAnimationPoseIds.insert(entity.id);
+	}
+
+	// 継続中はAuthoring同期によるClip再開始を禁止する。
+	if (!deathContinuation_) {
+		if (
+			!runtime.animatorInitialized ||
+			(advanceAnimation && (runtime.hasAnimator != hasAnimator ||
+				runtime.animatorAutoPlayAllowed != allowAnimatorAutoPlay))
+		) {
+			runtime.object->SetAnimationEnabled(hasAnimator);
+			if (hasAnimator) {
+				runtime.object->SetAnimationLoop(animator->animatorLoop);
+				runtime.object->SetAnimationSpeed(animator->animatorSpeed);
+				runtime.object->SetAnimationBlendCurve(blendCurve);
+				runtime.object->PlayAnimation(
+					static_cast<size_t>(defaultClip),
+					0.0f,
+					true
+				);
+				runtime.object->SetAnimationPlaying(
+					allowAnimatorAutoPlay && animator->animatorPlayOnStart
+				);
+			}
+			runtime.animatorInitialized = true;
+			runtime.animatorAutoPlayAllowed = allowAnimatorAutoPlay;
+		} else if (hasAnimator && advanceAnimation) {
+			if (runtime.animatorPlayOnStart != animator->animatorPlayOnStart) {
+				runtime.object->SetAnimationPlaying(
+					allowAnimatorAutoPlay && animator->animatorPlayOnStart
+				);
+			}
+			if (runtime.animatorBlendCurve != animator->animatorBlendCurve) {
+				runtime.object->SetAnimationBlendCurve(blendCurve);
+			}
+			if (runtime.animatorLoop != animator->animatorLoop) {
+				runtime.object->SetAnimationLoop(animator->animatorLoop);
+			}
+			if (runtime.animatorSpeed != animator->animatorSpeed) {
+				runtime.object->SetAnimationSpeed(animator->animatorSpeed);
+			}
+			if (runtime.animatorDefaultClip != defaultClip) {
+				runtime.object->PlayAnimation(
+					static_cast<size_t>(defaultClip),
+					(std::max)(animator->animatorTransitionDuration, 0.0f),
+					true
+				);
+			}
+		}
+		if (advanceAnimation || initializeAnimator) {
+			runtime.hasAnimator = hasAnimator;
+		}
+		if (animator && (advanceAnimation || initializeAnimator)) {
+			runtime.animatorPlayOnStart = animator->animatorPlayOnStart;
+			runtime.animatorLoop = animator->animatorLoop;
+			runtime.animatorSpeed = animator->animatorSpeed;
+			runtime.animatorDefaultClip = defaultClip;
+			runtime.animatorTransitionDuration =
+				animator->animatorTransitionDuration;
+			runtime.animatorBlendCurve = animator->animatorBlendCurve;
+		}
+	} else if (!runtime.animatorInitialized) {
+		runtime.object->SetAnimationPlaying(false);
+		deathParticipants_.erase(entity.id);
+	}
+
+	Transform& runtimeTransform = runtime.object->GetTransform();
+	runtimeTransform.scale = entity.transform.scale;
+	runtimeTransform.rotate = MakeEulerFromQuaternion(entity.transform.rotate);
+	runtimeTransform.translate = entity.transform.translate;
+	runtimeTransform.useQuaternionRotation = true;
+	runtimeTransform.quaternionRotate = entity.transform.rotate;
+	const bool isWaterVolume = HasComponent(entity, "WaterVolume");
+	runtime.object->SetCullMode(
+		isWaterVolume
+			? Object3dCommon::CullMode::kNone
+			: (
+				meshRenderer
+					? ToObjectCullMode(meshRenderer->meshCullMode)
+					: Object3dCommon::CullMode::kBack
+			)
+	);
+	if (isWaterVolume) {
+		runtime.object->SetColor({ 0.08f, 0.48f, 0.95f, 0.34f });
+		runtime.object->SetEnableLighting(false);
+		runtime.object->SetEnvironmentCoefficient(0.0f);
+		runtime.object->SetEmissive(
+			0.18f,
+			{ 0.30f, 0.78f, 1.0f, 1.0f }
+		);
+	} else if (const SceneComponent* agentBehavior =
+		FindEnabledComponent(entity, "AgentBehavior")) {
+		const SceneComponent resolvedAgentBehavior =
+			ResolveAgentBehaviorSettings(
+				*document,
+				entity,
+				*agentBehavior
+			);
+		runtime.object->SetColor(
+			resolvedAgentBehavior.agentVisualColor
+		);
+		runtime.object->SetEnableLighting(
+			resolvedAgentBehavior.agentEnableLighting
+		);
+		runtime.object->SetEnvironmentCoefficient(0.05f);
+		runtime.object->SetEmissive(
+			resolvedAgentBehavior.agentEnableLighting ? 0.0f : 0.12f,
+			resolvedAgentBehavior.agentVisualColor
+		);
+	} else if (const SceneComponent* agentAttractor =
+		FindEnabledComponent(entity, "AgentAttractor")) {
+		runtime.object->SetColor(agentAttractor->attractorVisualColor);
+		runtime.object->SetEnableLighting(true);
+		runtime.object->SetEnvironmentCoefficient(0.08f);
+		runtime.object->SetEmissive(
+			0.05f,
+			agentAttractor->attractorVisualColor
+		);
+	} else if (HasComponent(entity, "MonitorRenderer")) {
+		runtime.object->SetColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+		runtime.object->SetEnableLighting(false);
+		runtime.object->SetEnvironmentCoefficient(0.0f);
+		runtime.object->SetEmissive(0.0f);
+	} else {
+		runtime.object->SetColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+		runtime.object->SetEnableLighting(true);
+		runtime.object->SetEmissive(0.0f);
+	}
+
+	const std::vector<SceneMeshMaterialOverride> emptyMaterialOverrides;
+	const std::vector<SceneMeshMaterialOverride>& materialOverrides =
+		meshRenderer
+			? meshRenderer->meshMaterialOverrides
+			: emptyMaterialOverrides;
+	const std::string materialOverrideSignature =
+		BuildMaterialOverrideSignature(materialOverrides);
+	if (runtime.materialOverrideSignature != materialOverrideSignature) {
+		std::vector<Object3d::MaterialOverride> objectOverrides;
+		objectOverrides.reserve(materialOverrides.size());
+		for (const SceneMeshMaterialOverride& override : materialOverrides) {
+			objectOverrides.push_back({
+				override.materialName,
+				override.enabled,
+				override.colorOverrideEnabled,
+				override.color,
+				override.texturePath
+			});
+		}
+		runtime.object->SetMaterialOverrides(objectOverrides);
+		runtime.materialOverrideSignature = materialOverrideSignature;
+	}
+	if (HasComponent(entity, "PlayerBehavior")) {
+		runtime.object->SetDissolve(0.0f);
+	}
+
+	const SceneComponent* obbCollider =
+		FindEnabledComponent(entity, "OBBCollider");
+	runtime.hasCollider = obbCollider != nullptr;
+	if (obbCollider) {
+		Collider* runtimeCollider = obbCollider->colliderShape == "Sphere"
+			? static_cast<Collider*>(&runtime.sphereCollider)
+			: static_cast<Collider*>(&runtime.boxCollider);
+		runtimeCollider->SetWorldMatrix(&runtime.object->GetWorldMatrix());
+		runtimeCollider->SetOffset(obbCollider->colliderOffset);
+		runtimeCollider->SetTrigger(obbCollider->colliderIsTrigger);
+		runtimeCollider->SetActive(obbCollider->colliderActive);
+		runtimeCollider->SetCollisionAttribute(obbCollider->colliderLayer);
+		runtimeCollider->SetCollisionMask(obbCollider->colliderMask);
+		if (obbCollider->colliderShape == "Sphere") {
+			runtime.sphereCollider.SetRadius(
+				(std::max)(obbCollider->colliderSphereRadius, 0.001f)
+			);
+		} else {
+			runtime.boxCollider.SetHalfSize({
+				(std::max)(
+					std::abs(obbCollider->colliderSizeMultiplier.x),
+					0.001f
+				),
+				(std::max)(
+					std::abs(obbCollider->colliderSizeMultiplier.y),
+					0.001f
+				),
+				(std::max)(
+					std::abs(obbCollider->colliderSizeMultiplier.z),
+					0.001f
+				)
+			});
+		}
+		runtime.collider = runtimeCollider;
+		runtime.colliderDebugColor = obbCollider->colliderDebugColor;
+		runtime.colliderDebugVisible = obbCollider->colliderDebugVisible;
+		runtime.colliderDebugDrawMode =
+			obbCollider->colliderDebugDrawMode;
+		runtime.colliderDebugSegments =
+			static_cast<uint32_t>(obbCollider->colliderDebugSegments);
+	} else {
+		runtime.collider = nullptr;
+	}
+
+	const SceneComponent* physicsBody =
+		FindEnabledComponent(entity, "PhysicsBody");
+	const bool wasPhysicsBody = runtime.hasPhysicsBody;
+	runtime.hasPhysicsBody = physicsBody != nullptr;
+	if (physicsBody) {
+		physicsSystem.ApplyBodyComponent(
+			runtime.physicsBody,
+			*physicsBody,
+			runtime.object.get(),
+			runtime.collider,
+			!wasPhysicsBody || editing
+		);
+	} else {
+		runtime.physicsBody.syncTransform = {};
+	}
 }
 
 void SceneObjectSystem::SyncModelsInternal(
@@ -134,251 +568,8 @@ void SceneObjectSystem::SyncModelsInternal(
 			found = models_.emplace(entity.id, std::move(runtime)).first;
 		}
 
-		const SceneComponent* animator =
-			FindEnabledComponent(entity, "Animator");
-		ModelRuntime& runtime = found->second;
-		// Pool再有効化は新しいclip時刻0から。停止中の通常Frameでは再生設定を切り替えない。
-		for (const auto& visual : spawnFrame_.visuals) {
-			uint64_t id = entity.id;
-			for (size_t depth = 0; id && depth <= document->GetEntities().size(); ++depth) {
-				if (id == visual.rootEntityId) {
-					if (runtime.spawnActivationSerial != visual.activationSerial) runtime.animatorInitialized = false;
-					runtime.spawnActivationSerial = visual.activationSerial;
-					break;
-				}
-				const auto* parent = document->FindEntity(id);
-				id = parent ? parent->parentId : 0;
-			}
-		}
-		const bool hasAnimator = animator && runtime.object->HasAnimation();
-		const size_t clipCount = runtime.object->GetAnimationClipCount();
-		const int defaultClip = clipCount > 0
-			? std::clamp(
-				animator ? animator->animatorDefaultClip : 0,
-				0,
-				static_cast<int>(clipCount - 1)
-			)
-			: 0;
-		const AnimationBlendCurve blendCurve =
-			animator && animator->animatorBlendCurve == "Linear"
-			? AnimationBlendCurve::Linear
-			: AnimationBlendCurve::SmoothStep;
-		const bool initializeAnimator = !runtime.animatorInitialized;
-		if (initializeAnimator) {
-			initialAnimationPoseIds.insert(entity.id);
-		}
-
-		// 継続中はAuthoring同期によるClip再開始を禁止する。
-		if (!deathContinuation_) {
-			if (
-				!runtime.animatorInitialized ||
-				(advanceAnimation && (runtime.hasAnimator != hasAnimator ||
-					runtime.animatorAutoPlayAllowed != allowAnimatorAutoPlay))
-			) {
-				runtime.object->SetAnimationEnabled(hasAnimator);
-				if (hasAnimator) {
-					runtime.object->SetAnimationLoop(animator->animatorLoop);
-					runtime.object->SetAnimationSpeed(animator->animatorSpeed);
-					runtime.object->SetAnimationBlendCurve(blendCurve);
-					runtime.object->PlayAnimation(
-						static_cast<size_t>(defaultClip),
-						0.0f,
-						true
-					);
-					runtime.object->SetAnimationPlaying(
-						allowAnimatorAutoPlay && animator->animatorPlayOnStart
-					);
-				}
-				runtime.animatorInitialized = true;
-				runtime.animatorAutoPlayAllowed = allowAnimatorAutoPlay;
-			} else if (hasAnimator && advanceAnimation) {
-				if (runtime.animatorPlayOnStart != animator->animatorPlayOnStart) {
-					runtime.object->SetAnimationPlaying(
-						allowAnimatorAutoPlay && animator->animatorPlayOnStart
-					);
-				}
-				if (runtime.animatorBlendCurve != animator->animatorBlendCurve) {
-					runtime.object->SetAnimationBlendCurve(blendCurve);
-				}
-				if (runtime.animatorLoop != animator->animatorLoop) {
-					runtime.object->SetAnimationLoop(animator->animatorLoop);
-				}
-				if (runtime.animatorSpeed != animator->animatorSpeed) {
-					runtime.object->SetAnimationSpeed(animator->animatorSpeed);
-				}
-				if (runtime.animatorDefaultClip != defaultClip) {
-					runtime.object->PlayAnimation(
-						static_cast<size_t>(defaultClip),
-						(std::max)(animator->animatorTransitionDuration, 0.0f),
-						true
-					);
-				}
-			}
-			if (advanceAnimation || initializeAnimator) {
-				runtime.hasAnimator = hasAnimator;
-			}
-			if (animator && (advanceAnimation || initializeAnimator)) {
-				runtime.animatorPlayOnStart = animator->animatorPlayOnStart;
-				runtime.animatorLoop = animator->animatorLoop;
-				runtime.animatorSpeed = animator->animatorSpeed;
-				runtime.animatorDefaultClip = defaultClip;
-				runtime.animatorTransitionDuration =
-					animator->animatorTransitionDuration;
-				runtime.animatorBlendCurve = animator->animatorBlendCurve;
-			}
-		} else if (!runtime.animatorInitialized) {
-			runtime.object->SetAnimationPlaying(false);
-			deathParticipants_.erase(entity.id);
-		}
-
-		Transform& runtimeTransform = runtime.object->GetTransform();
-		runtimeTransform.scale = entity.transform.scale;
-		runtimeTransform.rotate = MakeEulerFromQuaternion(entity.transform.rotate);
-		runtimeTransform.translate = entity.transform.translate;
-		runtimeTransform.useQuaternionRotation = true;
-		runtimeTransform.quaternionRotate = entity.transform.rotate;
-		const bool isWaterVolume = HasComponent(entity, "WaterVolume");
-		runtime.object->SetCullMode(
-			isWaterVolume
-				? Object3dCommon::CullMode::kNone
-				: (
-					meshRenderer
-						? ToObjectCullMode(meshRenderer->meshCullMode)
-						: Object3dCommon::CullMode::kBack
-				)
-		);
-		if (isWaterVolume) {
-			runtime.object->SetColor({ 0.08f, 0.48f, 0.95f, 0.34f });
-			runtime.object->SetEnableLighting(false);
-			runtime.object->SetEnvironmentCoefficient(0.0f);
-			runtime.object->SetEmissive(
-				0.18f,
-				{ 0.30f, 0.78f, 1.0f, 1.0f }
-			);
-		} else if (const SceneComponent* agentBehavior =
-			FindEnabledComponent(entity, "AgentBehavior")) {
-			const SceneComponent resolvedAgentBehavior =
-				ResolveAgentBehaviorSettings(
-					*document,
-					entity,
-					*agentBehavior
-				);
-			runtime.object->SetColor(
-				resolvedAgentBehavior.agentVisualColor
-			);
-			runtime.object->SetEnableLighting(
-				resolvedAgentBehavior.agentEnableLighting
-			);
-			runtime.object->SetEnvironmentCoefficient(0.05f);
-			runtime.object->SetEmissive(
-				resolvedAgentBehavior.agentEnableLighting ? 0.0f : 0.12f,
-				resolvedAgentBehavior.agentVisualColor
-			);
-		} else if (const SceneComponent* agentAttractor =
-			FindEnabledComponent(entity, "AgentAttractor")) {
-			runtime.object->SetColor(agentAttractor->attractorVisualColor);
-			runtime.object->SetEnableLighting(true);
-			runtime.object->SetEnvironmentCoefficient(0.08f);
-			runtime.object->SetEmissive(
-				0.05f,
-				agentAttractor->attractorVisualColor
-			);
-		} else if (HasComponent(entity, "MonitorRenderer")) {
-			runtime.object->SetColor({ 1.0f, 1.0f, 1.0f, 1.0f });
-			runtime.object->SetEnableLighting(false);
-			runtime.object->SetEnvironmentCoefficient(0.0f);
-			runtime.object->SetEmissive(0.0f);
-		} else {
-			runtime.object->SetColor({ 1.0f, 1.0f, 1.0f, 1.0f });
-			runtime.object->SetEnableLighting(true);
-			runtime.object->SetEmissive(0.0f);
-		}
-
-		const std::vector<SceneMeshMaterialOverride> emptyMaterialOverrides;
-		const std::vector<SceneMeshMaterialOverride>& materialOverrides =
-			meshRenderer
-				? meshRenderer->meshMaterialOverrides
-				: emptyMaterialOverrides;
-		const std::string materialOverrideSignature =
-			BuildMaterialOverrideSignature(materialOverrides);
-		if (runtime.materialOverrideSignature != materialOverrideSignature) {
-			std::vector<Object3d::MaterialOverride> objectOverrides;
-			objectOverrides.reserve(materialOverrides.size());
-			for (const SceneMeshMaterialOverride& override : materialOverrides) {
-				objectOverrides.push_back({
-					override.materialName,
-					override.enabled,
-					override.colorOverrideEnabled,
-					override.color,
-					override.texturePath
-				});
-			}
-			runtime.object->SetMaterialOverrides(objectOverrides);
-			runtime.materialOverrideSignature = materialOverrideSignature;
-		}
-		if (HasComponent(entity, "PlayerBehavior")) {
-			runtime.object->SetDissolve(0.0f);
-		}
-
-		const SceneComponent* obbCollider =
-			FindEnabledComponent(entity, "OBBCollider");
-		runtime.hasCollider = obbCollider != nullptr;
-		if (obbCollider) {
-			Collider* runtimeCollider = obbCollider->colliderShape == "Sphere"
-				? static_cast<Collider*>(&runtime.sphereCollider)
-				: static_cast<Collider*>(&runtime.boxCollider);
-			runtimeCollider->SetWorldMatrix(&runtime.object->GetWorldMatrix());
-			runtimeCollider->SetOffset(obbCollider->colliderOffset);
-			runtimeCollider->SetTrigger(obbCollider->colliderIsTrigger);
-			runtimeCollider->SetActive(obbCollider->colliderActive);
-			runtimeCollider->SetCollisionAttribute(obbCollider->colliderLayer);
-			runtimeCollider->SetCollisionMask(obbCollider->colliderMask);
-			if (obbCollider->colliderShape == "Sphere") {
-				runtime.sphereCollider.SetRadius(
-					(std::max)(obbCollider->colliderSphereRadius, 0.001f)
-				);
-			} else {
-				runtime.boxCollider.SetHalfSize({
-					(std::max)(
-						std::abs(obbCollider->colliderSizeMultiplier.x),
-						0.001f
-					),
-					(std::max)(
-						std::abs(obbCollider->colliderSizeMultiplier.y),
-						0.001f
-					),
-					(std::max)(
-						std::abs(obbCollider->colliderSizeMultiplier.z),
-						0.001f
-					)
-				});
-			}
-			runtime.collider = runtimeCollider;
-			runtime.colliderDebugColor = obbCollider->colliderDebugColor;
-			runtime.colliderDebugVisible = obbCollider->colliderDebugVisible;
-			runtime.colliderDebugDrawMode =
-				obbCollider->colliderDebugDrawMode;
-			runtime.colliderDebugSegments =
-				static_cast<uint32_t>(obbCollider->colliderDebugSegments);
-		} else {
-			runtime.collider = nullptr;
-		}
-
-		const SceneComponent* physicsBody =
-			FindEnabledComponent(entity, "PhysicsBody");
-		const bool wasPhysicsBody = runtime.hasPhysicsBody;
-		runtime.hasPhysicsBody = physicsBody != nullptr;
-		if (physicsBody) {
-			physicsSystem.ApplyBodyComponent(
-				runtime.physicsBody,
-				*physicsBody,
-				runtime.object.get(),
-				runtime.collider,
-				!wasPhysicsBody || editing
-			);
-		} else {
-			runtime.physicsBody.syncTransform = {};
-		}
+		SyncModelSettings(document, entity, found->second, physicsSystem,
+			allowAnimatorAutoPlay, editing, advanceAnimation, initialAnimationPoseIds);
 	}
 
 	for (auto iterator = models_.begin(); iterator != models_.end();) {
@@ -429,6 +620,57 @@ void SceneObjectSystem::SyncModelsInternal(
 		updateEntity(entity.id);
 	}
 	ApplySpawnPresentation();
+}
+
+RuntimePrepareStep SceneObjectSystem::StepPreparedSprites(const SceneDocument& document,
+	const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	if (preparedSpriteCursor_ == document.GetEntities().size()) return RuntimePrepareStep::Ready;
+	if (!budget.maxItems) return RuntimePrepareStep::Pending;
+	while (preparedSpriteCursor_ < document.GetEntities().size()) {
+		const auto& entity = document.GetEntities()[preparedSpriteCursor_];
+		const auto* renderer = FindEnabledComponent(entity, "SpriteRenderer");
+		if (!renderer || renderer->texturePath.empty()) {
+			++preparedSpriteCursor_;
+			continue;
+		}
+		if (!preparedSprite_) {
+			auto sprite = std::make_unique<Sprite>();
+			if (!sprite->BeginPreparedInitialize(*SpriteCommon::GetInstance(), renderer->texturePath, diagnostic)) {
+				return RuntimePrepareStep::Failed;
+			}
+			preparedSprite_ = std::move(sprite);
+		}
+		for (;;) {
+			auto remaining = budget;
+			const auto step = preparedSprite_->StepPreparedInitialize(remaining, diagnostic);
+			if (step == RuntimePrepareStep::Ready) break;
+			if (step != RuntimePrepareStep::Pending) return step;
+			// 同期資源作成/copyの進捗がある間だけ続行。未消費のPendingは待機点として戻す。
+			if (remaining.maxItems == budget.maxItems &&
+				remaining.maxResourceCreates == budget.maxResourceCreates &&
+				remaining.maxCopyBytes == budget.maxCopyBytes) return step;
+		}
+		const Transform transform = ResolveScene2DTransform(document, entity);
+		preparedSprite_->SetPosition({ transform.translate.x, transform.translate.y });
+		preparedSprite_->SetRotation(transform.rotate.z);
+		preparedSprite_->SetSize({ renderer->spriteSize.x * transform.scale.x, renderer->spriteSize.y * transform.scale.y });
+		preparedSprite_->SetAnchorPoint(renderer->spriteAnchor);
+		preparedSprite_->SetColor(renderer->spriteColor);
+		preparedSprite_->SetIsFlipX(renderer->spriteFlipX);
+		preparedSprite_->SetIsFlipY(renderer->spriteFlipY);
+		if (!SceneUILayout::IsUIEntity(document, entity) && IsEntityActiveInHierarchy(document, entity)) {
+			preparedSprite_->Update();
+		}
+		auto [position, inserted] = sprites_.try_emplace(entity.id);
+		if (!inserted) {
+			diagnostic = "Destination entity has a duplicate Runtime sprite.";
+			return RuntimePrepareStep::Failed;
+		}
+		position->second.texturePath = renderer->texturePath;
+		position->second.sprite = std::move(preparedSprite_);
+		++preparedSpriteCursor_;
+	}
+	return RuntimePrepareStep::Ready;
 }
 
 void SceneObjectSystem::SyncSprites(const SceneDocument* document) {
@@ -729,6 +971,13 @@ const SceneObjectSystem::ModelRuntime* SceneObjectSystem::FindModelRuntime(
 }
 
 void SceneObjectSystem::ClearModels() {
+	preparedObject_.reset();
+	preparedCamera_ = nullptr;
+	preparedModelCursor_ = 0;
+	preparedModelStates_.clear(); preparedDocumentGeneration_ = preparedAssetRevision_ = 0;
+	preparedEntityCount_ = preparedLocalReady_ = preparedScanRemaining_ = preparedBindingCursor_ = 0;
+	preparedIndexed_ = preparedFinalScan_ = false; preparedBindingStage_ = PreparedBindingStage::Verify;
+	preparedWorldStack_.clear(); preparedWorldDone_.clear(); preparedWorldVisiting_.clear(); preparedInitialPose_.clear();
 	ClearDeathContinuation();
 	spawnFrame_ = {};
 	modelDocument_ = nullptr;
@@ -736,6 +985,8 @@ void SceneObjectSystem::ClearModels() {
 }
 
 void SceneObjectSystem::ClearSprites() {
+	preparedSprite_.reset();
+	preparedSpriteCursor_ = 0;
 	sprites_.clear();
 }
 

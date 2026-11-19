@@ -1,0 +1,70 @@
+{
+  "version": 2,
+  "effect": "SwordShatter",
+  "playback": "LoadLinked",
+  "displayName": "ロード連動の斬り込み",
+  "minimumCuts": 2,
+  "maximumCuts": 16,
+  "cutInterval": 0.05,
+  "cutSweepDuration": 0.005,
+  "cutStyle": {
+    "sweepEasing": "Linear",
+    "afterglowDuration": 0.8,
+    "lineColor": [0.04, 0.04, 0.04, 1],
+    "lineWidth": 0.003,
+    "glowColor": [0.25, 0.65, 1, 1],
+    "glowWidth": 0.025,
+    "glowIntensity": 3
+  },
+  "cutSource": {
+    "kind": "Authored",
+    "cuts": [
+      {"id": "slash_01", "from": [0, 0.18], "to": [1, 0.72]},
+      {"id": "slash_02", "from": [1, 0.11], "to": [0, 0.86]},
+      {"id": "slash_03", "from": [0.27, 0], "to": [0.68, 1]},
+      {"id": "slash_04", "from": [0.96, 1], "to": [0.12, 0]},
+      {"id": "slash_05", "from": [0, 0.61], "to": [1, 0.34]},
+      {"id": "slash_06", "from": [0.79, 0], "to": [0.23, 1]},
+      {"id": "slash_07", "from": [1, 0.91], "to": [0, 0.39]},
+      {"id": "slash_08", "from": [0.07, 1], "to": [0.51, 0]},
+      {"id": "slash_09", "from": [0, 0.07], "to": [1, 0.48]},
+      {"id": "slash_10", "from": [0.93, 0], "to": [0.58, 1]},
+      {"id": "slash_11", "from": [1, 0.63], "to": [0, 0.97]},
+      {"id": "slash_12", "from": [0.38, 1], "to": [0.09, 0]},
+      {"id": "slash_13", "from": [0, 0.77], "to": [1, 0.16]},
+      {"id": "slash_14", "from": [0.46, 0], "to": [0.88, 1]},
+      {"id": "slash_15", "from": [1, 0.82], "to": [0, 0.29]},
+      {"id": "slash_16", "from": [0.73, 1], "to": [0.04, 0]}
+    ]
+  },
+  "motionSeed": {"mode": "Fixed", "value": 1},
+  "collapse": {
+    "duration": 0.5,
+    "launchSpeed": 3.2,
+    "directionMode": "Outward",
+    "direction": [0, 0, 1],
+    "fallAcceleration": 0.6,
+    "angularVelocity": [0, 0, 45],
+    "speedVariation": 0,
+    "directionVariationDegrees": 0,
+    "rotationVariation": [0, 0, 0],
+    "endFadeDuration": 0.3
+  },
+  "loadingText": {
+    "enabled": false,
+    "text": "読み込み中…",
+    "referenceSize": [1280, 720],
+    "position": [640, 648],
+    "pivot": [0.5, 0.5],
+    "layoutSize": [480, 64],
+    "fontFamily": "Yu Gothic UI",
+    "fontSize": 32,
+    "color": [1, 1, 1, 1],
+    "outlineEnabled": true,
+    "outlineColor": [0, 0, 0, 1],
+    "outlineWidth": 2,
+    "motion": "Pulse",
+    "pulsePeriod": 1.2,
+    "minimumOpacity": 0.35
+  }
+}

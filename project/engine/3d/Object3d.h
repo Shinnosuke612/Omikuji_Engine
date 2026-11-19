@@ -1,5 +1,6 @@
 // 役割: モデルインスタンスのTransform、材質、Animation状態、描画を管理する。
 #pragma once
+#include "../scene/SceneRuntimePreparation.h"
 #include <cstdint>
 #include <string>
 #include <fstream>
@@ -112,6 +113,12 @@ public: //公開メンバ関数
 	bool TryInitializeReplay(Object3dCommon* common, const ReplayPose& pose);
 
 	//初期化
+	// main専用。公開済み資源を借用し、Readyまで描画しない。
+	bool BeginPreparedInitialize(Object3dCommon& common, Camera& candidateCamera, Model* preparedModel, const std::string& publishedEnvironmentKey,
+		std::string& diagnostic);
+	RuntimePrepareStep StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic);
+	bool TrySetPreparedEnvironmentMap(const std::string& publishedKey, float coefficient);
+	bool TrySetPreparedMaterialOverrides(const std::vector<MaterialOverride>& resolvedOverrides);
 	void Initialize(Object3dCommon* object3dCommon);
 	//更新
 	void Update();
@@ -242,6 +249,7 @@ private: //非公開メンバ関数
 	void CreateShadowTransformationMatrixResource();
 	void CreateMaterialResources();
 	void UpdateMaterialResources();
+	void UpdateMaterialResource(size_t index);
 	void UpdateAnimationPose();
 	void DispatchSkinningIfNeeded();
 	void UpdateInternal();
@@ -249,6 +257,9 @@ private://メンバ変数
 	// 通常Objectの既存所有契約には触れず、Replayのraw aliasだけを所有する。
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> replayResources_;
 	bool replayPoseActive_ = false;
+	int preparedStage_ = 0;
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> preparedResources_;
+	std::size_t preparedMaterialIndex_ = 0;
 	Transform transform;
 	Matrix4x4 objectWorldMatrix_ = MakeIdentity4x4();
 	Matrix4x4 renderWorldDelta_ = MakeIdentity4x4();

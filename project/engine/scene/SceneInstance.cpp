@@ -23,7 +23,7 @@ SceneInstance::~SceneInstance() {
 }
 
 void SceneInstance::Initialize(SceneManager* sceneManager) {
-	if (!scene_ || initialized_) {
+	if (!scene_ || initialized_ || preparing_) {
 		return;
 	}
 
@@ -33,7 +33,46 @@ void SceneInstance::Initialize(SceneManager* sceneManager) {
 	initialized_ = true;
 }
 
+bool SceneInstance::BeginPreparedRuntime(SceneManager* sceneManager) {
+	if (!scene_ || !document_ || initialized_ || preparing_) {
+		return false;
+	}
+	scene_->SetSceneManager(sceneManager);
+	scene_->SetSceneInstance(this);
+	// Beginが途中で失敗しても、派生Sceneに部分資源の回収機会を与える。
+	preparing_ = true;
+	try {
+		if (scene_->BeginPreparedRuntime()) {
+			return true;
+		}
+	} catch (...) {
+		Finalize();
+		throw;
+	}
+	Finalize();
+	return false;
+}
+
+RuntimePrepareStep SceneInstance::StepPreparedRuntime(
+	const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	if (!preparing_) {
+		return initialized_ ? RuntimePrepareStep::Ready : RuntimePrepareStep::Unsupported;
+	}
+	const auto step = scene_->StepPreparedRuntime(budget, diagnostic);
+	// Progress/素材待ちも部分所有のまま。全段Readyまで通常Finalizeへ切り替えない。
+	if (step == RuntimePrepareStep::Ready) {
+		preparing_ = false;
+		initialized_ = true;
+	}
+	return step;
+}
+
 void SceneInstance::Finalize() {
+	if (preparing_) {
+		preparing_ = false;
+		scene_->CancelPreparedRuntime();
+		return;
+	}
 	if (!scene_ || !initialized_) {
 		return;
 	}

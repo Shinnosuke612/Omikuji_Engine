@@ -2,6 +2,7 @@
 #pragma once
 
 #include "SceneTransitionAsset.h"
+#include "LoadLinkedEvaluation.h"
 #include "../base/RenderFormats.h"
 #include <d3d12.h>
 #include <memory>
@@ -40,6 +41,13 @@ public:
     // safe Update専用。失敗時snapshot/画像/世代は不変。成功でCapture/出力を無効化する。
     bool TryPrepare(std::shared_ptr<const SceneTransitionAsset::CompiledTransition>,
         std::uint32_t width, std::uint32_t height, SceneTransitionAsset::Diagnostics&);
+    // safe Update専用。全prefixを検査し、Captureは生成寸法、出力は指定寸法で確保する。
+    // 失敗では旧mode/owner/画像/世代を保持。成功時はV1準備を置換し、画像を無効化する。
+    bool TryPrepareLoadLinked(std::shared_ptr<const SceneTransitionAsset::LoadLinkedGenerated>,
+        std::uint32_t outputWidth, std::uint32_t outputHeight, SceneTransitionAsset::Diagnostics&);
+    // 最後のGPU使用完了後のsafe Update専用。0はcover、非0は同ownerのm〜M。
+    // 失敗で選択/Upload/Capture不変。成功でもCaptureを保持し、Compose中には転送しない。
+    bool TrySelectLoadLinkedPrefix(std::size_t count, SceneTransitionAsset::Diagnostics&);
     // safe Update専用。成功時もCapture内容/寸法/snapshotを維持し、出力だけ無効化する。
     bool TryResizeOutput(std::uint32_t width, std::uint32_t height, SceneTransitionAsset::Diagnostics&);
     // Draw専用。一度のPrepareにつき一回のCapture。false時receiptは不変。
@@ -51,6 +59,12 @@ public:
     bool TryCompose(TextureView background,
         std::shared_ptr<const SceneTransitionAsset::CompiledTransition> sourceAsset,
         const SceneTransitionAsset::FrameSample&, SceneTransitionAsset::Diagnostics&);
+    // Draw専用、一Frame一回。hostは表示世代/revisionとsafeなprefix選択を保証する。
+    // CaptureCoverでは空の姿勢列を許し、Fragmentsは選択NのIDと完全一致させる。
+    // 成功はcommand記録だけ。可視/提出完了receiptはhostが別途確認する。
+    // この入口はCapture/線/破片だけを描く。文字表示と有効化条件はhostの別ownerが担当する。
+    bool TryComposeLoadLinked(TextureView background,
+        const SceneTransitionAsset::LoadLinkedFrameSample&, SceneTransitionAsset::Diagnostics&);
 
     // 借用SRV。無効なら空。成功Prepare/Resize/Clearによる交換をGUI使用Frame内に行わない。
     TextureView GetCaptureView() const;

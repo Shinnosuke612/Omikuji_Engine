@@ -3,6 +3,7 @@
 
 #include "SceneDocument.h"
 #include "SceneExecutionContext.h"
+#include "SceneRuntimeDocumentState.h"
 
 class RuntimeSession final : public SceneExecutionContext {
 public:
@@ -15,11 +16,12 @@ public:
 		const std::string& sceneFilePath
 	) override;
 
-	SceneDocument& GetActiveDocument() override { return document_; }
-	const SceneDocument& GetActiveDocument() const override { return document_; }
-	const std::string& GetActiveSceneId() const override { return sceneId_; }
+	void ExchangePreparedRuntime(std::unique_ptr<SceneRuntimeDocumentState>& state) noexcept override;
+	SceneDocument& GetActiveDocument() override { return *runtime_->document; }
+	const SceneDocument& GetActiveDocument() const override { return *runtime_->document; }
+	const std::string& GetActiveSceneId() const override { return runtime_->sceneId; }
 	const std::string& GetActiveSceneFilePath() const override {
-		return sceneFilePath_;
+		return runtime_->filePath;
 	}
 	const std::string& GetLastLoadError() const { return lastLoadError_; }
 	bool IsEditing() const override { return false; }
@@ -27,8 +29,7 @@ public:
 	bool IsPaused() const override { return false; }
 
 private:
-	SceneDocument document_;
-	std::string sceneId_;
-	std::string sceneFilePath_;
+	std::unique_ptr<SceneRuntimeDocumentState> runtime_ = std::unique_ptr<SceneRuntimeDocumentState>(
+		new SceneRuntimeDocumentState{std::make_unique<SceneDocument>(), {}, {}});
 	std::string lastLoadError_;
 };

@@ -48,6 +48,65 @@ void SceneEnvironmentSystem::Initialize(DirectXCommon* dxCommon) {
 	waterSurfaceRenderer_->Initialize(dxCommon);
 }
 
+RuntimePrepareStep SceneEnvironmentSystem::StepPreparedSkybox(const SceneDocument& document, Camera& camera,
+	const std::vector<SceneRuntimeObjectBinding>& bindings, const SceneRuntimePrepareBudget& budget, std::string& error) {
+	const SceneComponent* environment = nullptr;
+	for (const auto& entity : document.GetEntities()) {
+		if (!SceneEntityQuery::IsEntityActiveInHierarchy(document, entity)) continue;
+		environment = SceneEntityQuery::FindEnabledComponent(entity, "Environment");
+		if (environment) break;
+	}
+	if (!environment || !environment->environmentSkyboxEnabled) return RuntimePrepareStep::Ready;
+	if (!skybox_) {
+		if (!preparingSkybox_) {
+			const auto requested = StringUtility::ToPath(environment->environmentSkyboxPath.empty() ?
+				"resources/rostock_laage_airport_4k.dds" : environment->environmentSkyboxPath);
+			environmentSourcePath_ = StringUtility::ToUtf8(requested.is_absolute() ?
+				EditableResourcePath::ToProjectRelative(requested) : requested);
+			auto extension = requested.extension().wstring();
+			const bool hdr = CompareStringOrdinal(extension.c_str(), -1, L".hdr", -1, TRUE) == CSTR_EQUAL;
+			environmentMapPath_ = hdr ? TextureManager::MakeEnvironmentTextureKey(environmentSourcePath_) : environmentSourcePath_;
+			auto skybox = std::make_unique<Skybox>();
+			if (!skybox->BeginPreparedInitialize(*Object3dCommon::GetInstance(), camera, environmentMapPath_, error)) {
+				return RuntimePrepareStep::Failed;
+			}
+			preparingSkybox_ = std::move(skybox);
+		}
+		for (;;) {
+			auto remaining = budget;
+			const auto result = preparingSkybox_->StepPreparedInitialize(remaining, error);
+			if (result == RuntimePrepareStep::Ready) break;
+			if (result != RuntimePrepareStep::Pending) return result;
+			// 下位で同期処理の進捗がある場合だけ次の段階を実行する。
+			if (remaining.maxItems == budget.maxItems &&
+				remaining.maxResourceCreates == budget.maxResourceCreates &&
+				remaining.maxCopyBytes == budget.maxCopyBytes) return result;
+		}
+		const float intensity = (std::max)(0.0f, environment->environmentSkyboxIntensity);
+		preparingSkybox_->SetScale({100.0f, 100.0f, 100.0f});
+		preparingSkybox_->SetColor({intensity, intensity, intensity, 1.0f});
+		skybox_ = std::move(preparingSkybox_);
+		reflectionIntensity_ = std::clamp(environment->environmentReflectionIntensity, 0.0f, 1.0f);
+	}
+	if (preparedBindingCursor_ == bindings.size()) return RuntimePrepareStep::Ready;
+	if (!budget.maxItems) return RuntimePrepareStep::Pending;
+	// bindingのカーソルが必ず進むため、cache済みcubemapの適用を一括で終える。
+	while (preparedBindingCursor_ < bindings.size()) {
+		const auto& binding = bindings[preparedBindingCursor_++];
+		if (binding.entity && binding.object) {
+			const bool monitor = SceneEntityQuery::HasComponent(*binding.entity, "MonitorRenderer");
+			const auto* mesh = SceneEntityQuery::FindEnabledComponent(*binding.entity, "MeshRenderer");
+			if (!binding.object->TrySetPreparedEnvironmentMap(environmentMapPath_,
+				monitor ? 0.0f : ResolveReflectionIntensity(mesh, reflectionIntensity_))) {
+				error = "Prepared environment cubemap is unavailable: " + environmentMapPath_;
+				return RuntimePrepareStep::Failed;
+			}
+			if (monitor) binding.object->SetEnableLighting(false);
+		}
+	}
+	return RuntimePrepareStep::Ready;
+}
+
 void SceneEnvironmentSystem::Sync(
 	const SceneDocument* document,
 	const std::vector<SceneRuntimeObjectBinding>& bindings
@@ -266,6 +325,8 @@ void SceneEnvironmentSystem::DrawEditor(SceneDocument& document) {
 }
 
 void SceneEnvironmentSystem::Finalize() {
+	preparingSkybox_.reset();
+	preparedBindingCursor_ = 0;
 	if (waterSurfaceRenderer_) {
 		waterSurfaceRenderer_->Finalize();
 		waterSurfaceRenderer_.reset();

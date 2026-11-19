@@ -1,9 +1,11 @@
 // 役割: Scene実行に必要なDocumentと実行状態をEditor/Runtime共通で公開する。
 #pragma once
 
+#include <memory>
 #include <string>
 
 class SceneDocument;
+struct SceneRuntimeDocumentState;
 
 class SceneExecutionContext {
 public:
@@ -20,4 +22,6 @@ public:
 		const std::string& sceneId,
 		const std::string& sceneFilePath
 	) = 0;
+	// mainのCommit専用。検証済み所有単位と交換し、旧Documentをcallerへ返す。
+	virtual void ExchangePreparedRuntime(std::unique_ptr<SceneRuntimeDocumentState>& state) noexcept = 0;
 };

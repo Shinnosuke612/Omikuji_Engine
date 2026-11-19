@@ -1,9 +1,12 @@
 // 役割: Text用のDepthなし2D Pipelineとquad描画を実装する。
 #include "TextSprite.h"
+#include <type_traits>
 #include <cstring>
 
 #include <algorithm>
 #include <cassert>
+#include <exception>
+#include <stdexcept>
 
 #include "TextureManager.h"
 #include "../base/DirectXCommon.h"
@@ -14,14 +17,35 @@ namespace {
 	class TextSpritePipeline {
 	public:
 		void Initialize(DirectXCommon* dxCommon) {
-			if (initialized_) {
-				return;
+			SceneRuntimePrepareBudget budget{0, 3, 0};
+			std::string diagnostic;
+			if (StepPrepared(*dxCommon, budget, diagnostic) != RuntimePrepareStep::Ready)
+				throw std::runtime_error(diagnostic);
+		}
+
+		RuntimePrepareStep StepPrepared(DirectXCommon& dx, SceneRuntimePrepareBudget& budget,
+			std::string& diagnostic) {
+			using Step = RuntimePrepareStep;
+			if (dxCommon_ && dxCommon_ != &dx) {
+				diagnostic = "TextSprite pipeline belongs to a different device.";
+				return Step::Failed;
 			}
-			dxCommon_ = dxCommon;
-			CreateRootSignature();
-			CreatePipeline(RenderFormats::kDisplayFormat, displayPipelineState_);
-			CreatePipeline(RenderFormats::kSceneHdrFormat, sceneHdrPipelineState_);
-			initialized_ = true;
+			dxCommon_ = &dx;
+			// root signatureと両描画形式のPSOはそれぞれ一回の作成として計上する。
+			while (!sceneHdrPipelineState_) {
+				if (!budget.maxResourceCreates) return Step::Pending;
+				--budget.maxResourceCreates;
+				bool created;
+				if (!rootSignature_) created = CreateRootSignature();
+				else if (!displayPipelineState_)
+					created = CreatePipeline(RenderFormats::kDisplayFormat, displayPipelineState_, diagnostic);
+				else created = CreatePipeline(RenderFormats::kSceneHdrFormat, sceneHdrPipelineState_, diagnostic);
+				if (!created) {
+					if (diagnostic.empty()) diagnostic = "TextSprite root signature or pipeline creation failed.";
+					return Step::Failed;
+				}
+			}
+			return Step::Ready;
 		}
 
 		void SetCommonRenderState(TextSprite::OutputTarget target) const {
@@ -37,7 +61,7 @@ namespace {
 		}
 
 	private:
-		void CreateRootSignature() {
+		bool CreateRootSignature() {
 			D3D12_DESCRIPTOR_RANGE descriptorRange{};
 			descriptorRange.BaseShaderRegister = 0;
 			descriptorRange.NumDescriptors = 1;
@@ -76,19 +100,20 @@ namespace {
 				&signature,
 				&error
 			);
-			assert(SUCCEEDED(result));
+			if (FAILED(result) || !signature) return false;
 			const HRESULT rootSignatureResult = dxCommon_->GetDevice()->CreateRootSignature(
 				0,
 				signature->GetBufferPointer(),
 				signature->GetBufferSize(),
 				IID_PPV_ARGS(&rootSignature_)
 			);
-			assert(SUCCEEDED(rootSignatureResult));
+			return SUCCEEDED(rootSignatureResult) && rootSignature_;
 		}
 
-		void CreatePipeline(
+		bool CreatePipeline(
 			DXGI_FORMAT format,
-			Microsoft::WRL::ComPtr<ID3D12PipelineState>& pipelineState
+			Microsoft::WRL::ComPtr<ID3D12PipelineState>& pipelineState,
+			std::string& diagnostic
 		) {
 			D3D12_INPUT_ELEMENT_DESC elements[3]{};
 			elements[0] = { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0,
@@ -98,13 +123,10 @@ namespace {
 			elements[2] = { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,
 				D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 };
 			D3D12_INPUT_LAYOUT_DESC inputLayout{ elements, _countof(elements) };
-			const auto vertexShader = dxCommon_->CompileShader(
-				L"resources/shaders/Sprite.VS.hlsl", L"vs_6_0"
-			);
-			const auto pixelShader = dxCommon_->CompileShader(
-				L"resources/shaders/Sprite.PS.hlsl", L"ps_6_0"
-			);
-			assert(vertexShader && pixelShader);
+			Microsoft::WRL::ComPtr<IDxcBlob> vertexShader, pixelShader;
+			if (!dxCommon_->TryCompileShader(L"resources/shaders/Sprite.VS.hlsl", L"vs_6_0", vertexShader, diagnostic) ||
+				!dxCommon_->TryCompileShader(L"resources/shaders/Sprite.PS.hlsl", L"ps_6_0", pixelShader, diagnostic))
+				return false;
 			D3D12_BLEND_DESC blend{};
 			blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 			blend.RenderTarget[0].BlendEnable = TRUE;
@@ -137,14 +159,13 @@ namespace {
 			const HRESULT pipelineResult = dxCommon_->GetDevice()->CreateGraphicsPipelineState(
 				&desc, IID_PPV_ARGS(&pipelineState)
 			);
-			assert(SUCCEEDED(pipelineResult));
+			return SUCCEEDED(pipelineResult) && pipelineState;
 		}
 
 		DirectXCommon* dxCommon_ = nullptr;
 		Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature_;
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> displayPipelineState_;
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> sceneHdrPipelineState_;
-		bool initialized_ = false;
 	};
 
 	TextSpritePipeline& GetPipeline() {
@@ -158,6 +179,97 @@ void TextSprite::Initialize(DirectXCommon* dxCommon, std::string textureKey) {
 	textureKey_ = std::move(textureKey);
 	GetPipeline().Initialize(dxCommon_);
 	CreateResources();
+}
+
+bool TextSprite::BeginPreparedInitialize(DirectXCommon& dx, const std::string& key, std::string& diagnostic) {
+	auto& textures = *TextureManager::GetInstance();
+	if (dxCommon_ || !dx.GetDevice() || !textures.HasTexture(key) ||
+		!textures.GetSrvHandleGPU(key).ptr) {
+		diagnostic = "TextSprite requires an unused instance, a device and a published texture key.";
+		return false;
+	}
+	try {
+		textureKey_ = key;
+	} catch (const std::exception&) {
+		diagnostic = "Failed to retain the prepared TextSprite texture key.";
+		return false;
+	}
+	dxCommon_ = &dx;
+	preparedStage_ = 1;
+	diagnostic.clear();
+	return true;
+}
+
+RuntimePrepareStep TextSprite::StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	diagnostic.clear();
+	if (preparedStage_ == 5) return Step::Ready;
+	if (preparedStage_ <= 0) {
+		diagnostic = "TextSprite preparation was not started or failed.";
+		return Step::Failed;
+	}
+	if (!remaining.maxCopyBytes) return Step::Pending;
+	RuntimePrepareStep pipeline;
+	try {
+		pipeline = GetPipeline().StepPrepared(*dxCommon_, remaining, diagnostic);
+	} catch (const std::exception&) {
+		preparedStage_ = -1;
+		diagnostic = "Failed to prepare the shared TextSprite pipeline.";
+		return Step::Failed;
+	}
+	if (pipeline != Step::Ready) {
+		if (pipeline == Step::Failed) preparedStage_ = -1;
+		return pipeline;
+	}
+	// 確保後にcopy枠が尽きても、所有bufferとMapを次回へ持ち越す。
+	const auto prepare = [&](auto& resource, auto*& data, size_t bytes) {
+		if (!resource) {
+			if (!remaining.maxResourceCreates) return false;
+			--remaining.maxResourceCreates;
+			void* mapped = nullptr;
+			D3D12_RANGE readRange{0, 0};
+			if (!dxCommon_->TryCreateBufferResource(bytes, resource) || !resource ||
+				FAILED(resource->Map(0, &readRange, &mapped)) || !mapped) {
+				preparedStage_ = -1;
+				diagnostic = "TextSprite upload buffer creation or mapping failed.";
+				return false;
+			}
+			data = static_cast<std::remove_reference_t<decltype(*data)>*>(mapped);
+		}
+		if (remaining.maxCopyBytes < bytes) return false;
+		remaining.maxCopyBytes -= bytes;
+		return true;
+	};
+	const auto pendingOrFailed = [&] { return preparedStage_ < 0 ? Step::Failed : Step::Pending; };
+	switch (preparedStage_) {
+	case 1: {
+		if (!prepare(vertexResource_, vertexData_, sizeof(VertexData) * 4)) return pendingOrFailed();
+		vertexBufferView_ = {vertexResource_->GetGPUVirtualAddress(), sizeof(VertexData) * 4, sizeof(VertexData)};
+		std::fill_n(vertexData_, 4, VertexData{});
+		break;
+	}
+	case 2: {
+		if (!prepare(indexResource_, indexData_, sizeof(uint32_t) * 6)) return pendingOrFailed();
+		indexBufferView_ = {indexResource_->GetGPUVirtualAddress(), sizeof(uint32_t) * 6, DXGI_FORMAT_R32_UINT};
+		const uint32_t quadIndices[] = {0,1,2,1,3,2};
+		std::memcpy(indexData_, quadIndices, sizeof(quadIndices));
+		break;
+	}
+	case 3: {
+		if (!prepare(materialResource_, materialData_, sizeof(Material))) return pendingOrFailed();
+		*materialData_ = {};
+		materialData_->uvTransform = MakeIdentity4x4();
+		break;
+	}
+	case 4: {
+		if (!prepare(transformationResource_, transformationData_, sizeof(TransformationMatrix))) return pendingOrFailed();
+		*transformationData_ = {MakeIdentity4x4(), MakeIdentity4x4()};
+		break;
+	}
+	default: return Step::Failed;
+	}
+	++preparedStage_;
+	return preparedStage_ == 5 ? Step::Ready : Step::Pending;
 }
 
 void TextSprite::CreateResources() {

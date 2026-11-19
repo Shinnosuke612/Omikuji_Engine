@@ -93,6 +93,11 @@ std::vector<Animation> LoadAnimationFiles(
 	const std::filesystem::path& modelFilePath
 );
 
+// CPU読込。クリップが無い場合は空配列、読込失敗の場合は診断も返す。
+std::vector<Animation> ReadAnimationFiles(
+	const std::filesystem::path& resolvedModelPath, std::string& diagnostic
+);
+
 Vector3 CalculateValue(
 	const AnimationCurve<Vector3>& curve,
 	float time,

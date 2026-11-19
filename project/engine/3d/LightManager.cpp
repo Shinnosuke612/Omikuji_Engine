@@ -99,6 +99,46 @@ void LightManager::Initialize(DirectXCommon* dxCommon, const std::string& jsonPa
 	SyncToGPU();
 }
 
+bool LightManager::BeginPreparedInitialize(DirectXCommon& dx, std::string& diagnostic) {
+	if (dxCommon_ || !dx.GetDevice()) {
+		diagnostic = "LightManager requires an unused instance and a device.";
+		return false;
+	}
+	Reset();
+	dxCommon_ = &dx;
+	preparedState_ = RuntimePrepareStep::Pending;
+	diagnostic.clear();
+	return true;
+}
+
+RuntimePrepareStep LightManager::StepPreparedInitialize(
+	SceneRuntimePrepareBudget& remaining, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	diagnostic.clear();
+	if (preparedState_ != Step::Pending) {
+		if (preparedState_ == Step::Failed) diagnostic = "LightManager preparation is unavailable.";
+		return preparedState_;
+	}
+	if (!remaining.maxCopyBytes) return Step::Pending;
+	if (!lightingResource_) {
+		if (!remaining.maxResourceCreates) return Step::Pending;
+		--remaining.maxResourceCreates;
+		D3D12_RANGE readRange{0, 0};
+		if (!dxCommon_->TryCreateBufferResource(sizeof(LightingForGPU), lightingResource_) ||
+			!lightingResource_ || FAILED(lightingResource_->Map(0, &readRange,
+				reinterpret_cast<void**>(&lightingData_))) || !lightingData_) {
+			preparedState_ = Step::Failed;
+			diagnostic = "Failed to create or map the prepared lighting buffer.";
+			return preparedState_;
+		}
+	}
+	if (remaining.maxCopyBytes < sizeof(LightingForGPU)) return Step::Pending;
+	remaining.maxCopyBytes -= sizeof(LightingForGPU);
+	SyncToGPU();
+	preparedState_ = Step::Ready;
+	return preparedState_;
+}
+
 bool LightManager::TryInitializeReplay(DirectXCommon* dx, const LightManager& source) {
     if (!dx || dxCommon_) return false;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource; LightingForGPU* data = nullptr;

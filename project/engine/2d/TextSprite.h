@@ -1,5 +1,6 @@
 // 役割: Runtime生成Text textureを2D quadとして描画する。
 #pragma once
+#include "../scene/SceneRuntimePreparation.h"
 
 #include <string>
 #include <utility>
@@ -18,6 +19,10 @@ class TextSprite {
 public:
 	enum class OutputTarget { Display, SceneHdr };
 
+	// main専用。公開済み資源を借用し、Readyまで描画しない。
+	bool BeginPreparedInitialize(DirectXCommon& dx, const std::string& publishedTextureKey,
+		std::string& diagnostic);
+	RuntimePrepareStep StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic);
 	void Initialize(DirectXCommon* dxCommon, std::string textureKey);
 	void SetTextureKey(std::string textureKey) { textureKey_ = std::move(textureKey); }
 	void Update(
@@ -66,6 +71,7 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Resource> materialResource_;
 	Microsoft::WRL::ComPtr<ID3D12Resource> transformationResource_;
 	VertexData* vertexData_ = nullptr;
+	int preparedStage_ = 0;
 	uint32_t* indexData_ = nullptr;
 	Material* materialData_ = nullptr;
 	TransformationMatrix* transformationData_ = nullptr;

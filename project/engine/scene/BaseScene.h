@@ -7,6 +7,7 @@
 
 #include "SceneEntityReference.h"
 #include "ScenePreparationDiagnostic.h"
+#include "SceneRuntimePreparation.h"
 #include "SceneMenuRuntime.h"
 #include "SceneReplayHistory.h"
 #include "SceneReplayPresentation.h"
@@ -16,6 +17,7 @@ class Object3d;
 class SceneDocument;
 class SceneInstance;
 class SceneManager;
+struct PreparedSceneTextImage;
 struct ScenePostProcessSettings;
 struct SceneUIEditorView;
 struct SceneEnemyPositioningStatus;
@@ -48,6 +50,15 @@ public:
 	// InitializeとFinalizeはScene切り替えごとに一度ずつ対で呼ばれる。
 	virtual void Initialize() = 0;
 	virtual void Finalize() = 0;
+	// mainの候補専用。非対応profileは同期Initializeへフォールバックしない。
+	virtual bool BeginPreparedRuntime() { return false; }
+	virtual RuntimePrepareStep StepPreparedRuntime(const SceneRuntimePrepareBudget&, std::string&) {
+		return RuntimePrepareStep::Unsupported;
+	}
+	virtual void CancelPreparedRuntime() noexcept {}
+	virtual bool TryTakePreparedTextImage(PreparedSceneTextImage&) { return false; }
+	virtual bool AcceptPreparedTextImage(uint64_t, const std::string&, std::string&) { return false; }
+	virtual void ActivatePreparedRuntime() noexcept {}
 	// Single Scene切替で旧Sceneを破棄する直前だけ呼ばれる任意hook。
 	virtual void PrepareForSceneTransition() {}
 
@@ -68,6 +79,8 @@ public:
 	virtual bool SupportsTransitionHold() const { return false; }
 	virtual void UpdateTransitionHold() {}
 
+	// 物理/演出の更新有無に関わらず、各描画フレームの開始を一度通知する。
+	virtual void BeginRenderFrame(uint64_t serial) { (void)serial; }
 	virtual void Draw() = 0;
 	// Additive描画ではActive SceneのCameraを全Instanceへ共有する。
 	virtual Camera* GetRenderCamera() const { return nullptr; }

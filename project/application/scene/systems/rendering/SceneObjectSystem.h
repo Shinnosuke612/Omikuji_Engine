@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <utility>
 
 #include "../../SceneRuntimeObjectBinding.h"
 #include "../../SceneSpawnPresentation.h"
@@ -16,6 +17,7 @@
 #include "../../../../engine/math/Matrix4x4.h"
 #include "../../../../engine/2d/SpriteCommon.h"
 #include "../../../../engine/physics/PhysicsBody.h"
+#include "../../../../engine/scene/SceneRuntimePreparation.h"
 
 class SceneReplayHistorySystem;
 struct SceneReplayFrame;
@@ -23,6 +25,7 @@ struct SceneReplayFramingBasis;
 class Camera;
 class Object3d;
 class SceneDocument;
+struct SceneEntity;
 class ScenePhysicsSystem;
 class Sprite;
 
@@ -61,6 +64,15 @@ public:
 
 	SceneObjectSystem();
 	~SceneObjectSystem();
+	void BeginPreparedModels(Camera& camera) noexcept;
+	// 全素材/全局所Object後だけ。元順の設定→全親設定→親優先worldを一単位ずつ確定する。
+	RuntimePrepareStep StepPreparedModelBindings(SceneDocument&, ScenePhysicsSystem&,
+		const SceneRuntimePrepareBudget&, std::string& diagnostic);
+	// 一単位だけ進め、公開済み依存の個体を選ぶ。素材完了前だけWaitingForAssetsを許す。
+	RuntimePrepareStep StepPreparedModels(const SceneDocument&, ScenePhysicsSystem&,
+		const SceneRuntimePrepareBudget&, std::string& diagnostic);
+	RuntimePrepareStep StepPreparedSprites(const SceneDocument&, const SceneRuntimePrepareBudget&,
+		std::string& diagnostic);
 
 	void SyncModels(
 		SceneDocument* document,
@@ -125,6 +137,10 @@ public:
 	void Finalize();
 
 private:
+	// 通常同期とPrepared確定で共有する個体設定。作成/モデル読込を担当しない。
+	void SyncModelSettings(SceneDocument*, const SceneEntity&, ModelRuntime&, ScenePhysicsSystem&,
+		bool allowAnimatorAutoPlay, bool editing, bool advanceAnimation,
+		std::unordered_set<uint64_t>& initialAnimationPoseIds);
 	void SyncModelsInternal(
 		SceneDocument* document,
 		ScenePhysicsSystem& physicsSystem,
@@ -144,6 +160,21 @@ private:
 
 	uint64_t nextReplayIncarnation_ = 1;
 	std::unordered_map<uint64_t, ModelRuntime> models_;
+	Camera* preparedCamera_ = nullptr;
+	size_t preparedModelCursor_ = 0;
+	// 候補だけのスロット。進捗順は最終binding/物理/描画順へ流用しない。
+	std::vector<uint8_t> preparedModelStates_;
+	uint64_t preparedDocumentGeneration_ = 0, preparedAssetRevision_ = 0;
+	size_t preparedEntityCount_ = 0, preparedLocalReady_ = 0, preparedScanRemaining_ = 0;
+	bool preparedIndexed_ = false, preparedFinalScan_ = false;
+	enum class PreparedBindingStage { Verify, Settings, Parents, World, Ready };
+	PreparedBindingStage preparedBindingStage_ = PreparedBindingStage::Verify;
+	size_t preparedBindingCursor_ = 0;
+	std::vector<std::pair<uint64_t, bool>> preparedWorldStack_;
+	std::unordered_set<uint64_t> preparedWorldDone_, preparedWorldVisiting_, preparedInitialPose_;
+	std::unique_ptr<Object3d> preparedObject_;
+	size_t preparedSpriteCursor_ = 0;
+	std::unique_ptr<Sprite> preparedSprite_;
 	std::unordered_map<uint64_t, SpriteRuntime> sprites_;
 	SceneSpawnFrame spawnFrame_;
 	bool deathContinuation_ = false;

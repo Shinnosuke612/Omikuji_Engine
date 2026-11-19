@@ -53,6 +53,12 @@ class RuntimeScene : public BaseScene
 public:
 	// BaseSceneのライフサイクル入口。個別機能は対応するSystemへ委譲する。
 	void Initialize() override;
+	bool BeginPreparedRuntime() override;
+	RuntimePrepareStep StepPreparedRuntime(const SceneRuntimePrepareBudget&, std::string& diagnostic) override;
+	void CancelPreparedRuntime() noexcept override;
+	bool TryTakePreparedTextImage(PreparedSceneTextImage&) override;
+	bool AcceptPreparedTextImage(uint64_t, const std::string&, std::string&) override;
+	void ActivatePreparedRuntime() noexcept override;
 	void Finalize() override;
 	void PrepareForSceneTransition() override;
 	void Update(float deltaTime) override;
@@ -122,8 +128,16 @@ public:
 	) const override;
 
 private:
+	enum class InitialPreparationStage {
+		Idle, Cameras, Objects, ModelBindings, Player, BindingReferences, InitialPhysics,
+		Environment, Sprites, Text, Lighting, GroundCracks, Verify, Ready
+	};
+	InitialPreparationStage initialPreparationStage_ = InitialPreparationStage::Idle;
+	size_t initialBindingCursor_ = 0;
+	void InitializeScenePlayer(SceneDocument* document);
 	const SceneUIEditorView* GetEditorUIView() const;
 	void SyncMenuPresentation();
+	void SyncMenuPresentationForOwnDocument();
 	void ClearUiRuntime();
 	void ApplyUiRequests(const SceneDocument& document, const std::vector<SceneUiActionRequest>& requests);
 	void ProcessMenuPulses(const SceneDocument& document, const std::vector<SceneMenuPulse>& pulses);
@@ -152,6 +166,7 @@ private:
 	);
 	bool ShouldHidePlayerModelForCamera(Camera* viewCamera) const;
 	void ApplyRenderCamera(Camera* viewCamera);
+	bool IsPreparedDestinationDraw() const noexcept;
 	Camera* GetSceneViewCamera() const;
 
 	Camera* camera_ = nullptr;

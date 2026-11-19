@@ -91,8 +91,30 @@ void SceneEffectRenderSystem::Initialize(DirectXCommon* dxCommon) {
 	groundCrackRenderer_->Initialize(dxCommon);
 }
 
+RuntimePrepareStep SceneEffectRenderSystem::StepPreparedGroundCracks(DirectXCommon& dx,
+	const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	if (!groundCrackRenderer_) {
+		auto renderer = std::make_unique<GroundCrackRenderer>();
+		if (!renderer->BeginPrepared(dx, diagnostic)) return RuntimePrepareStep::Failed;
+		groundCrackRenderer_ = std::move(renderer);
+	}
+	for (;;) {
+		auto remaining = budget;
+		const auto step = groundCrackRenderer_->StepPrepared(remaining, diagnostic);
+		if (step == RuntimePrepareStep::Ready) break;
+		if (step != RuntimePrepareStep::Pending) return step;
+		// 下位で同期処理の進捗がある場合だけ次の段階を実行する。
+		if (remaining.maxItems == budget.maxItems &&
+			remaining.maxResourceCreates == budget.maxResourceCreates &&
+			remaining.maxCopyBytes == budget.maxCopyBytes) return step;
+	}
+	return RuntimePrepareStep::Ready;
+}
+
 void SceneEffectRenderSystem::Update(float deltaTime) {
 	if (!lightningRenderer_) {
+		// 候補経由のSceneでも、発生したひびの寿命を進める。
+		if (groundCrackRenderer_) groundCrackRenderer_->Update(deltaTime);
 		return;
 	}
 
@@ -137,7 +159,7 @@ void SceneEffectRenderSystem::DrawScenePass(
 	uint64_t skipEntityId,
 	SceneEnvironmentSystem& environmentSystem,
 	SceneObjectSystem& objectSystem,
-	bool advanceGpuSimulation
+	bool advanceGpuSimulation, bool drawSharedParticles
 ) {
 	// 通常構成では水面を先に描き、前景分離時は合成Passへ描画を遅延する。
 	if (!deferForegroundEffects_ && document) {
@@ -154,9 +176,9 @@ void SceneEffectRenderSystem::DrawScenePass(
 	if (groundCrackRenderer_) { groundCrackRenderer_->Draw(camera); }
 
 	if (deferForegroundEffects_) {
-		DrawParticles(document, camera, false, advanceGpuSimulation);
+		if (drawSharedParticles) DrawParticles(document, camera, false, advanceGpuSimulation);
 	} else {
-		DrawParticles(document, camera, true, advanceGpuSimulation);
+		if (drawSharedParticles) DrawParticles(document, camera, true, advanceGpuSimulation);
 		if (camera && document) {
 			objectSystem.DrawSprites(*document, skipEntityId);
 		}
@@ -169,7 +191,7 @@ void SceneEffectRenderSystem::DrawForegroundPass(
 	uint64_t skipEntityId,
 	SceneEnvironmentSystem& environmentSystem,
 	SceneObjectSystem& objectSystem,
-	bool advanceGpuSimulation
+	bool advanceGpuSimulation, bool drawSharedParticles
 ) {
 	if (!camera) {
 		return;
@@ -182,7 +204,7 @@ void SceneEffectRenderSystem::DrawForegroundPass(
 			skipEntityId
 		);
 	}
-	DrawParticles(document, camera, true, advanceGpuSimulation);
+	if (drawSharedParticles) DrawParticles(document, camera, true, advanceGpuSimulation);
 	if (document) {
 		objectSystem.DrawSprites(*document, skipEntityId);
 	}

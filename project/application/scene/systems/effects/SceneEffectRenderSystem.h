@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "SceneRuntimeEffectSystem.h"
+#include "../../../../engine/scene/SceneRuntimePreparation.h"
 
 class Camera;
 class DirectXCommon;
@@ -23,6 +24,8 @@ public:
 	~SceneEffectRenderSystem();
 
 	void Initialize(DirectXCommon* dxCommon);
+	// 候補所有のRendererだけを進める。Ready前にSpawn/Drawへ出さない。
+	RuntimePrepareStep StepPreparedGroundCracks(DirectXCommon&, const SceneRuntimePrepareBudget&, std::string&);
 	void Update(float deltaTime);
 	void SpawnGroundCracks(const std::vector<SceneGroundCrackSpawnRequest>& requests);
 	void SetDeferForegroundEffects(bool defer) {
@@ -35,7 +38,7 @@ public:
 		uint64_t skipEntityId,
 		SceneEnvironmentSystem& environmentSystem,
 		SceneObjectSystem& objectSystem,
-		bool advanceGpuSimulation = true
+		bool advanceGpuSimulation = true, bool drawSharedParticles = true
 	);
 	void DrawForegroundPass(
 		SceneDocument* document,
@@ -43,7 +46,7 @@ public:
 		uint64_t skipEntityId,
 		SceneEnvironmentSystem& environmentSystem,
 		SceneObjectSystem& objectSystem,
-		bool advanceGpuSimulation = true
+		bool advanceGpuSimulation = true, bool drawSharedParticles = true
 	);
 	void Finalize();
 

@@ -11,6 +11,8 @@
 #include "../debug/DebugRenderer.h"
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -43,6 +45,115 @@ void Object3d::Initialize(Object3dCommon* object3dCommon){
 	//Transform変数を作る
 	transform = { {1.0f,1.0f,1.0f},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
 	this->camera = object3dCommon->GetDefaultCamera();
+}
+
+bool Object3d::BeginPreparedInitialize(Object3dCommon& common, Camera& candidateCamera,
+	Model* preparedModel, const std::string& key, std::string& diagnostic) {
+	auto& textures = *TextureManager::GetInstance();
+	if (object3dCommon || !common.GetDxCommon() || !textures.HasTexture(key) ||
+		!textures.GetSrvHandleGPU(key).ptr || !textures.GetMetaData(key).IsCubemap()) {
+		diagnostic = "Object3d requires an unused instance, a device and a published environment cube.";
+		return false;
+	}
+	if (preparedModel && preparedModel->HasSkinning()) {
+		preparedStage_ = -2;
+		diagnostic = "Prepared Object3d does not support skinned models.";
+		return false;
+	}
+	try {
+		const size_t count = preparedModel ? preparedModel->GetMaterialSlots().size() : 0;
+		preparedResources_.resize(3 + count);
+		materialSlots_.resize(count);
+		materialResourcesForDraw_.resize(count);
+		materialTexturesForDraw_.resize(count);
+		environmentTextureFilePath_ = key;
+	} catch (const std::exception&) {
+		preparedStage_ = -1;
+		diagnostic = "Failed to allocate prepared Object3d storage.";
+		return false;
+	}
+	object3dCommon = &common;
+	camera = &candidateCamera;
+	model = preparedModel;
+	transform = {{1,1,1},{0,0,0},{0,0,0}};
+	preparedStage_ = 1;
+	diagnostic.clear();
+	return true;
+}
+
+RuntimePrepareStep Object3d::StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic) {
+	using Step = RuntimePrepareStep;
+	diagnostic.clear();
+	if (preparedStage_ == 6) return Step::Ready;
+	if (preparedStage_ <= 0) {
+		diagnostic = "Object3d preparation was not started or failed.";
+		return preparedStage_ == -2 ? Step::Unsupported : Step::Failed;
+	}
+	if (!remaining.maxCopyBytes) return Step::Pending;
+	// preparedResources_ owns buffers; existing draw fields are borrowed aliases.
+	const auto prepare = [&](size_t slot, auto*& data, size_t bytes) {
+		auto& resource = preparedResources_[slot];
+		if (!resource) {
+			if (!remaining.maxResourceCreates) return false;
+			--remaining.maxResourceCreates;
+			void* mapped = nullptr;
+			D3D12_RANGE readRange{0, 0};
+			if (!object3dCommon->GetDxCommon()->TryCreateBufferResource(bytes, resource) || !resource ||
+				FAILED(resource->Map(0, &readRange, &mapped)) || !mapped) {
+				preparedStage_ = -1;
+				diagnostic = "Failed to create or map a prepared Object3d buffer.";
+				return false;
+			}
+			data = static_cast<std::remove_reference_t<decltype(*data)>*>(mapped);
+		}
+		if (remaining.maxCopyBytes < bytes) return false;
+		remaining.maxCopyBytes -= bytes;
+		return true;
+	};
+	const auto pendingOrFailed = [&] { return preparedStage_ < 0 ? Step::Failed : Step::Pending; };
+	switch (preparedStage_) {
+	case 1:
+		if (!prepare(0, transformationMatrixData, sizeof(TransformationMatrix))) return pendingOrFailed();
+		transformationMatrixResource = preparedResources_[0].Get();
+		*transformationMatrixData = {MakeIdentity4x4(), MakeIdentity4x4()};
+		break;
+	case 2:
+		if (!prepare(1, cameraData, sizeof(CameraForGPU))) return pendingOrFailed();
+		cameraResource = preparedResources_[1].Get();
+		*cameraData = {{0,0,-10}, 0};
+		break;
+	case 3:
+		if (!prepare(2, shadowTransformationMatrixData, sizeof(ShadowTransformationMatrix))) return pendingOrFailed();
+		shadowTransformationMatrixResource = preparedResources_[2].Get();
+		*shadowTransformationMatrixData = {MakeIdentity4x4()};
+		break;
+	case 4:
+		if (preparedMaterialIndex_ < materialSlots_.size()) {
+			const auto i = preparedMaterialIndex_;
+			auto& material = materialSlots_[i];
+			if (!prepare(3 + i, material.data, sizeof(Material))) return pendingOrFailed();
+			material.resource = preparedResources_[3 + i].Get();
+			material.modelColor = model->GetMaterialSlots()[i].baseColor;
+			UpdateMaterialResource(i);
+			if (++preparedMaterialIndex_ < materialSlots_.size()) return Step::Progress;
+		}
+		break;
+	case 5:
+		try {
+			animationPlayer_.SetAnimations(model ? &model->GetAnimations() : nullptr);
+			skeleton_ = model ? CreateSkeleton(model->GetRootNode()) : Skeleton{};
+		} catch (const std::exception&) {
+			preparedStage_ = -1;
+			diagnostic = "Failed to initialize the prepared Object3d animation state.";
+			return Step::Failed;
+		}
+		animationPoseDirty_ = true;
+		skinningDispatchPending_ = true;
+		break;
+	default: return Step::Failed;
+	}
+	++preparedStage_;
+	return preparedStage_ == 6 ? Step::Ready : Step::Progress;
 }
 
 void Object3d::Update(){
@@ -413,6 +524,52 @@ void Object3d::SetEnvironmentMap(const std::string& textureFilePath, float coeff
 	SetEnvironmentCoefficient(coefficient);
 }
 
+bool Object3d::TrySetPreparedEnvironmentMap(const std::string& key, float coefficient) {
+	auto& textures = *TextureManager::GetInstance();
+	if (preparedStage_ != 6 || !std::isfinite(coefficient) || !textures.HasTexture(key) ||
+		!textures.GetSrvHandleGPU(key).ptr || !textures.GetMetaData(key).IsCubemap()) return false;
+	try {
+		environmentTextureFilePath_ = key;
+	} catch (const std::exception&) {
+		return false;
+	}
+	SetEnvironmentCoefficient(coefficient);
+	return true;
+}
+
+bool Object3d::TrySetPreparedMaterialOverrides(const std::vector<MaterialOverride>& overrides) {
+	if (preparedStage_ != 6) return false;
+	auto& textures = *TextureManager::GetInstance();
+	try {
+		// 元slotを維持し、実際に選ぶ最初の有効な上書きだけをすべて検証する。
+		auto candidate = materialSlots_;
+		for (size_t i = 0; i < candidate.size(); ++i) {
+			auto& slot = candidate[i];
+			slot.colorOverrideEnabled = false;
+			slot.textureOverride = {};
+			slot.textureOverrideKey.clear();
+			const auto found = std::find_if(overrides.begin(), overrides.end(), [&](const auto& item) {
+				return item.enabled && !item.materialName.empty() &&
+					item.materialName == model->GetMaterialSlots()[i].name;
+			});
+			if (found == overrides.end()) continue;
+			slot.colorOverrideEnabled = found->colorOverrideEnabled;
+			slot.colorOverride = found->color;
+			if (!found->texturePath.empty()) {
+				if (!textures.HasTexture(found->texturePath)) return false;
+				slot.textureOverride = textures.GetSrvHandleGPU(found->texturePath);
+				if (!slot.textureOverride.ptr) return false;
+				slot.textureOverrideKey = found->texturePath;
+			}
+		}
+		materialSlots_.swap(candidate);
+	} catch (const std::exception&) {
+		return false;
+	}
+	UpdateMaterialResources();
+	return true;
+}
+
 void Object3d::SetEnvironmentCoefficient(float coefficient) {
 	cameraData->environmentCoefficient = std::clamp(coefficient, 0.0f, 1.0f);
 }
@@ -581,9 +738,14 @@ void Object3d::UpdateMaterialResources() {
 	materialResourcesForDraw_.resize(materialSlots_.size());
 	materialTexturesForDraw_.resize(materialSlots_.size());
 	for (size_t index = 0; index < materialSlots_.size(); ++index) {
+		UpdateMaterialResource(index);
+	}
+}
+
+void Object3d::UpdateMaterialResource(size_t index) {
 		MaterialSlotResource& materialSlot = materialSlots_[index];
 		if (!materialSlot.data) {
-			continue;
+			return;
 		}
 		const Vector4 baseColor = materialSlot.colorOverrideEnabled
 			? materialSlot.colorOverride
@@ -604,7 +766,6 @@ void Object3d::UpdateMaterialResources() {
 		materialTexturesForDraw_[index] = textureOverrideHandle_.ptr != 0
 			? textureOverrideHandle_
 			: materialSlot.textureOverride;
-	}
 }
 
 namespace {

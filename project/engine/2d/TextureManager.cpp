@@ -20,6 +20,11 @@
 #include <utility>
 
 namespace {
+	constexpr char kEnvironmentKeyPrefix[] = "runtime://environment-cubemap/v1/";
+
+	std::string EnvironmentKey(const std::filesystem::path& resolvedPath) {
+		return kEnvironmentKeyPrefix + StringUtility::ToUtf8(resolvedPath);
+	}
 
 	DirectX::TGA_FLAGS GetTgaFlags(
 		TextureManager::TextureColorSpace colorSpace,
@@ -221,40 +226,125 @@ namespace {
 			cube.GetMetadata(), DirectX::TEX_FILTER_DEFAULT, 0, mipChain);
 	}
 
+	bool TryBuildTextureMipChain(const DirectX::ScratchImage& source,
+		const DirectX::TexMetadata& metadata, DirectX::ScratchImage& mipChain) {
+		// 圧縮画像と既存のmip chainはそのまま使用する。
+		if (source.GetImageCount() == 0 || !source.GetImages() ||
+			DirectX::IsCompressed(metadata.format) || metadata.mipLevels > 1) {
+			return false;
+		}
+		const auto filter = DirectX::IsSRGB(metadata.format)
+			? DirectX::TEX_FILTER_SRGB
+			: DirectX::TEX_FILTER_DEFAULT;
+		return SUCCEEDED(DirectX::GenerateMipMaps(source.GetImages(), source.GetImageCount(),
+			source.GetMetadata(), filter, 0, mipChain));
+	}
+
 }
 
 TextureManager* TextureManager::instance = nullptr;
 
 uint32_t TextureManager::kSRVIndexTop = 1;
 
-bool TextureManager::LoadTexture(
-	const std::string& filePath,
-	TextureColorSpace colorSpace
+TextureManager::GrayscaleBaseColorDecodeStatus TextureManager::TryDecodeGrayscaleBaseColorPng(
+	const uint8_t* data, size_t size, DecodedTexture& out
 ) {
-
-	// 読み込み済みテクスチャを検索
-	if (textureDatas.contains(filePath)) {
-		return true;
+	if (!data || size == 0) return GrayscaleBaseColorDecodeStatus::Failed;
+	DirectX::ScratchImage gray;
+	if (FAILED(DirectX::LoadFromWICMemory(
+		data, size, DirectX::WIC_FLAGS_DEFAULT_SRGB, nullptr, gray))) {
+		return GrayscaleBaseColorDecodeStatus::Failed;
 	}
-	if (failedTextureKeys.contains(filePath)) {
+	const DirectX::Image* source = gray.GetImage(0, 0, 0);
+	if (!source) {
+		return GrayscaleBaseColorDecodeStatus::Failed;
+	}
+	const bool is16Bit = source->format == DXGI_FORMAT_R16_UNORM;
+	if (!is16Bit && source->format != DXGI_FORMAT_R8_UNORM) {
+		// WICが既に色や透過を展開している場合は既存の処理で保持する。
+		return GrayscaleBaseColorDecodeStatus::UseOriginalPng;
+	}
+	if (source->width > (std::numeric_limits<uint32_t>::max)() / 4 ||
+		source->height > (std::numeric_limits<uint32_t>::max)()) {
+		return GrayscaleBaseColorDecodeStatus::Failed;
+	}
+	constexpr auto format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+	DirectX::ScratchImage color;
+	if (FAILED(color.Initialize2D(format, source->width, source->height, 1, 1))) {
+		return GrayscaleBaseColorDecodeStatus::Failed;
+	}
+	const DirectX::Image* target = color.GetImage(0, 0, 0);
+	const size_t sourcePixelBytes = is16Bit ? 2 : 1;
+	if (!target || !target->pixels || !source->pixels ||
+		source->rowPitch < source->width * sourcePixelBytes ||
+		target->rowPitch != source->width * 4) {
+		return GrayscaleBaseColorDecodeStatus::Failed;
+	}
+
+	// 単一チャンネルを通常のSRVで読むとRだけになる。元の灰色値を三色へ複製する。
+	for (size_t y = 0; y < source->height; ++y) {
+		const uint8_t* in = source->pixels + y * source->rowPitch;
+		uint8_t* out = target->pixels + y * target->rowPitch;
+		for (size_t x = 0; x < source->width; ++x, in += sourcePixelBytes, out += 4) {
+			uint8_t value = *in;
+			if (is16Bit) {
+				uint16_t gray16;
+				std::memcpy(&gray16, in, sizeof(gray16));
+				value = static_cast<uint8_t>((gray16 + 128u) / 257u);
+			}
+			out[0] = out[1] = out[2] = value;
+			out[3] = 255;
+		}
+	}
+	const auto metadata = color.GetMetadata();
+	out = DecodedTexture{std::move(color), metadata};
+	return GrayscaleBaseColorDecodeStatus::Expanded;
+}
+
+bool TextureManager::TryGenerateTextureMipChain(const DecodedTexture& source, DecodedTexture& out) {
+	DirectX::ScratchImage mipChain;
+	if (!TryBuildTextureMipChain(source.image, source.metadata, mipChain)) {
 		return false;
 	}
+	const auto metadata = mipChain.GetMetadata();
+	out = DecodedTexture{std::move(mipChain), metadata};
+	return true;
+}
+
+bool TextureManager::TryPrepareHdrEnvironment(const std::filesystem::path& resolvedPath,
+	DecodedTexture& out, std::string& error) {
+	DirectX::ScratchImage panorama;
+	const HRESULT decodeResult = DirectX::LoadFromHDRFile(resolvedPath.c_str(), nullptr, panorama);
+	if (FAILED(decodeResult)) {
+		error = "HDR decode HRESULT " + FormatHResult(decodeResult);
+		return false;
+	}
+
+	DirectX::ScratchImage cube;
+	const HRESULT conversionResult = BuildEnvironmentCubemap(panorama, cube);
+	if (FAILED(conversionResult)) {
+		error = "2:1 HDR cubemap conversion HRESULT " + FormatHResult(conversionResult);
+		return false;
+	}
+	const auto metadata = cube.GetMetadata();
+	out = DecodedTexture{std::move(cube), metadata};
+	error.clear();
+	return true;
+}
+
+bool TextureManager::TryDecodeTextureFile(
+	const std::filesystem::path& resolvedPath,
+	TextureColorSpace colorSpace, DecodedTexture& out, std::string& error
+) {
+	const auto* format = TextureFormat::FindByPath(resolvedPath);
+	if (!format) {
+		error = "Unsupported texture format: " + StringUtility::ToUtf8(resolvedPath);
+		return false;
+	}
+	const std::wstring filePathW = resolvedPath.wstring();
 
 	DirectX::ScratchImage loadedImage{};
 	DirectX::TexMetadata metadata{};
-	const TextureFormat::Descriptor* format = TextureFormat::FindByPath(
-		StringUtility::ToPath(filePath)
-	);
-	if (format == nullptr) {
-		Logger::Log("Unsupported texture format: " + filePath + "\n");
-		failedTextureKeys.insert(filePath);
-		return false;
-	}
-
-	const std::filesystem::path resolvedPath =
-		EditableResourcePath::ResolveResource(StringUtility::ToPath(filePath));
-	const std::wstring filePathW = resolvedPath.wstring();
-
 	HRESULT hr = S_OK;
 	switch (format->decoder) {
 	case TextureFormat::Decoder::Dds:
@@ -291,16 +381,45 @@ bool TextureManager::LoadTexture(
 	}
 
 	if (FAILED(hr)) {
-		Logger::Log(
-			"Failed to load texture: " + filePath +
-			" (HRESULT " + FormatHResult(hr) + ")\n"
-		);
-		failedTextureKeys.insert(filePath);
+		error = "HRESULT " + FormatHResult(hr);
 		return false;
 	}
 
 	ApplyColorSpace(loadedImage, metadata, colorSpace, format->colorSpace);
-	const bool registered = RegisterTexture(filePath, loadedImage, metadata);
+	out = DecodedTexture{std::move(loadedImage), metadata};
+	error.clear();
+	return true;
+}
+
+bool TextureManager::LoadTexture(
+	const std::string& filePath,
+	TextureColorSpace colorSpace
+) {
+
+	// 読み込み済みテクスチャを検索
+	if (textureDatas.contains(filePath)) {
+		return true;
+	}
+	if (failedTextureKeys.contains(filePath)) {
+		return false;
+	}
+
+	const auto logicalPath = StringUtility::ToPath(filePath);
+	if (!TextureFormat::FindByPath(logicalPath)) {
+		Logger::Log("Unsupported texture format: " + filePath + "\n");
+		failedTextureKeys.insert(filePath);
+		return false;
+	}
+	const auto resolvedPath = EditableResourcePath::ResolveResource(logicalPath);
+	DecodedTexture decoded;
+	std::string error;
+	if (!TryDecodeTextureFile(resolvedPath, colorSpace, decoded, error)) {
+		Logger::Log("Failed to load texture: " + filePath + " (" + error + ")\n");
+		failedTextureKeys.insert(filePath);
+		return false;
+	}
+
+	const bool registered = RegisterTexture(filePath, decoded.image, decoded.metadata);
 	if (registered) {
 		failedTextureKeys.erase(filePath);
 	}
@@ -308,6 +427,16 @@ bool TextureManager::LoadTexture(
 		failedTextureKeys.insert(filePath);
 	}
 	return registered;
+}
+
+std::string TextureManager::MakeEnvironmentTextureKey(const std::string& sourcePath) {
+	if (sourcePath.empty()) return {};
+	const auto path = StringUtility::ToPath(sourcePath);
+	const auto* format = TextureFormat::FindByPath(path);
+	if (format && format->decoder == TextureFormat::Decoder::Dds) return sourcePath;
+	if (!format || format->decoder != TextureFormat::Decoder::Hdr) return {};
+	return EnvironmentKey(std::filesystem::absolute(
+		EditableResourcePath::ResolveResource(path)).lexically_normal());
 }
 
 bool TextureManager::LoadEnvironmentTexture(
@@ -318,8 +447,7 @@ bool TextureManager::LoadEnvironmentTexture(
 		return false;
 	}
 	// 解決失敗にも負のcacheを用意し、通常の2D keyを失敗扱いにしない。
-	const std::string prefix = "runtime://environment-cubemap/v1/";
-	std::string environmentKey = prefix + sourcePath;
+	std::string environmentKey = kEnvironmentKeyPrefix + sourcePath;
 	if (failedTextureKeys.contains(environmentKey)) {
 		return false;
 	}
@@ -333,7 +461,7 @@ bool TextureManager::LoadEnvironmentTexture(
 		const auto sourceFilePath = StringUtility::ToPath(sourcePath);
 		const auto resolvedPath = std::filesystem::absolute(
 			EditableResourcePath::ResolveResource(sourceFilePath)).lexically_normal();
-		environmentKey = prefix + StringUtility::ToUtf8(resolvedPath);
+		environmentKey = EnvironmentKey(resolvedPath);
 		if (failedTextureKeys.contains(environmentKey)) {
 			return false;
 		}
@@ -361,18 +489,13 @@ bool TextureManager::LoadEnvironmentTexture(
 			outTextureKey = environmentKey;
 			return true;
 		}
-		DirectX::ScratchImage panorama;
-		HRESULT hr = DirectX::LoadFromHDRFile(resolvedPath.c_str(), nullptr, panorama);
-		if (FAILED(hr)) {
-			return fail("HDR decode HRESULT " + FormatHResult(hr));
-		}
-		DirectX::ScratchImage cube;
-		hr = BuildEnvironmentCubemap(panorama, cube);
-		if (FAILED(hr)) {
-			return fail("2:1 HDR cubemap conversion HRESULT " + FormatHResult(hr));
+		DecodedTexture cube;
+		std::string error;
+		if (!TryPrepareHdrEnvironment(resolvedPath, cube, error)) {
+			return fail(error);
 		}
 		// 生成物は既存TextureManager寿命で共有し、Scene切替では解放しない。
-		if (!RegisterTexture(environmentKey, cube, cube.GetMetadata())) {
+		if (!RegisterTexture(environmentKey, cube.image, cube.metadata)) {
 			failedTextureKeys.insert(environmentKey);
 			return false;
 		}
@@ -392,22 +515,13 @@ bool TextureManager::ReloadTexture(
 	return LoadTexture(filePath, colorSpace);
 }
 
-bool TextureManager::LoadTextureFromMemory(
-	const std::string& textureKey,
-	const uint8_t* data,
-	size_t dataSize,
-	const std::string& formatHint,
-	TextureColorSpace colorSpace
+bool TextureManager::TryDecodeTextureMemory(
+	const uint8_t* data, size_t dataSize,
+	const std::string& formatHint, TextureColorSpace colorSpace,
+	DecodedTexture& out, std::string& error
 ) {
-	if (textureDatas.contains(textureKey)) {
-		return true;
-	}
-	if (failedTextureKeys.contains(textureKey)) {
-		return false;
-	}
 	if (data == nullptr || dataSize == 0) {
-		Logger::Log("Embedded texture data is empty: " + textureKey + "\n");
-		failedTextureKeys.insert(textureKey);
+		error = "Embedded texture data is empty";
 		return false;
 	}
 
@@ -462,16 +576,38 @@ bool TextureManager::LoadTextureFromMemory(
 	}
 
 	if (FAILED(hr)) {
-		Logger::Log(
-			"Failed to load embedded texture: " + textureKey +
-			" (HRESULT " + FormatHResult(hr) + ")\n"
-		);
-		failedTextureKeys.insert(textureKey);
+		error = "HRESULT " + FormatHResult(hr);
 		return false;
 	}
 
 	ApplyColorSpace(loadedImage, metadata, colorSpace, defaultColorSpace);
-	const bool registered = RegisterTexture(textureKey, loadedImage, metadata);
+	out = DecodedTexture{std::move(loadedImage), metadata};
+	error.clear();
+	return true;
+}
+
+bool TextureManager::LoadTextureFromMemory(
+	const std::string& textureKey,
+	const uint8_t* data,
+	size_t dataSize,
+	const std::string& formatHint,
+	TextureColorSpace colorSpace
+) {
+	if (textureDatas.contains(textureKey)) {
+		return true;
+	}
+	if (failedTextureKeys.contains(textureKey)) {
+		return false;
+	}
+	DecodedTexture decoded;
+	std::string error;
+	if (!TryDecodeTextureMemory(data, dataSize, formatHint, colorSpace, decoded, error)) {
+		Logger::Log("Failed to load embedded texture: " + textureKey + " (" + error + ")\n");
+		failedTextureKeys.insert(textureKey);
+		return false;
+	}
+
+	const bool registered = RegisterTexture(textureKey, decoded.image, decoded.metadata);
 	if (registered) {
 		failedTextureKeys.erase(textureKey);
 	}
@@ -479,6 +615,79 @@ bool TextureManager::LoadTextureFromMemory(
 		failedTextureKeys.insert(textureKey);
 	}
 	return registered;
+}
+
+PreparedPublishStatus TextureManager::TryPublishCompletedTexture(
+	CompletedTextureInput& input, std::string& diagnostic) {
+	using Status = PreparedPublishStatus;
+	const auto fail = [&](const char* reason) {
+		diagnostic = reason;
+		return Status::Failed;
+	};
+	diagnostic.clear();
+	if (input.textureKey.empty() || !input.resource || !dxCommon || !dxCommon->GetDevice() || !srvManager)
+		return fail("Completed texture input or manager is unavailable.");
+	const auto& metadata = input.metadata;
+	const auto desc = input.resource->GetDesc();
+	const bool gpuFamily = input.gpuSrgbMipsPrepared && metadata.width == kSceneGpuMipSize &&
+		metadata.height == kSceneGpuMipSize && metadata.arraySize == 1 && !metadata.IsCubemap() &&
+		metadata.mipLevels == kSceneGpuMipCount && metadata.format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB &&
+		desc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS && (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0;
+	const size_t slices = metadata.IsCubemap() ? 6 : 1;
+	if (metadata.dimension != DirectX::TEX_DIMENSION_TEXTURE2D || metadata.depth != 1 ||
+		metadata.width == 0 || metadata.height == 0 || metadata.mipLevels == 0 ||
+		metadata.arraySize != slices || (metadata.IsCubemap() && metadata.width != metadata.height) ||
+		desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.Width != metadata.width ||
+		desc.Height != metadata.height || desc.DepthOrArraySize != slices ||
+		desc.MipLevels != metadata.mipLevels ||
+		(input.gpuSrgbMipsPrepared ? !gpuFamily : desc.Format != metadata.format) ||
+		desc.SampleDesc.Count != 1 || (desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) != 0 ||
+		!DirectX::IsValid(metadata.format) || DirectX::IsTypeless(metadata.format) ||
+		DirectX::IsDepthStencil(metadata.format) || DirectX::IsPlanar(metadata.format))
+		return fail("Completed texture metadata does not match a sampleable 2D or cube resource.");
+	if (const auto existing = textureDatas.find(input.textureKey); existing != textureDatas.end()) {
+		const auto& cached = existing->second;
+		if (!cached.resource || !srvManager->IsAllocated(cached.srvIndex))
+			return fail("Existing texture cache entry is invalid.");
+		return Status::ReusedExisting;
+	}
+
+	uint32_t slot = SrvManager::kInvalidIndex;
+	try {
+		// nodeとbucketの確保を先に済ませ、SRV確保後の失敗では自分のslotだけを返す。
+		decltype(textureDatas) staging;
+		staging.try_emplace(input.textureKey);
+		auto node = staging.extract(staging.begin());
+		textureDatas.reserve(textureDatas.size() + 1);
+		if (!srvManager->TryAllocate(slot)) return fail("No SRV slot is available.");
+		auto& candidate = node.mapped();
+		candidate.metadata = metadata;
+		candidate.resource = input.resource;
+		candidate.srvIndex = slot;
+		candidate.srvHandleCPU = srvManager->GetCPUDescriptorHandle(slot);
+		candidate.srvHandleGPU = srvManager->GetGPUDescriptorHandle(slot);
+		D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+		view.Format = metadata.format;
+		view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		if (metadata.IsCubemap()) {
+			view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+			view.TextureCube.MipLevels = static_cast<UINT>(metadata.mipLevels);
+		} else {
+			view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			view.Texture2D.MipLevels = static_cast<UINT>(metadata.mipLevels);
+		}
+		dxCommon->GetDevice()->CreateShaderResourceView(candidate.resource.Get(), &view, candidate.srvHandleCPU);
+		if (textureDatas.insert(std::move(node)).inserted) {
+			failedTextureKeys.erase(input.textureKey);
+			input.resource.Reset();
+			return Status::Published;
+		}
+	} catch (const std::exception&) {
+		// inputは公開まで保持しているため、失敗処理での所有移動は不要。
+	}
+	if (slot != SrvManager::kInvalidIndex && !srvManager->Free(slot))
+		return fail("Failed to release the unpublished texture SRV slot.");
+	return fail("Failed to publish the completed texture.");
 }
 
 bool TextureManager::RegisterTexture(
@@ -499,26 +708,9 @@ bool TextureManager::RegisterTexture(
 	}
 
 	DirectX::ScratchImage mipImages{};
-	const DirectX::ScratchImage* uploadImage = &loadedImage;
-	HRESULT hr = S_OK;
-
-	// 圧縮フォーマットは DirectXTex の GenerateMipMaps が直接扱えないことがある
-	if (!DirectX::IsCompressed(metadata.format) && metadata.mipLevels <= 1) {
-		const DirectX::TEX_FILTER_FLAGS filter = DirectX::IsSRGB(metadata.format)
-			? DirectX::TEX_FILTER_SRGB
-			: DirectX::TEX_FILTER_DEFAULT;
-		hr = DirectX::GenerateMipMaps(
-			loadedImage.GetImages(),
-			loadedImage.GetImageCount(),
-			loadedImage.GetMetadata(),
-			filter,
-			0,
-			mipImages
-		);
-		if (SUCCEEDED(hr)) {
-			uploadImage = &mipImages;
-		}
-	}
+	const DirectX::ScratchImage* uploadImage = TryBuildTextureMipChain(loadedImage, metadata, mipImages)
+		? &mipImages
+		: &loadedImage;
 
 	TextureData candidate{};
 	candidate.metadata = uploadImage->GetMetadata();

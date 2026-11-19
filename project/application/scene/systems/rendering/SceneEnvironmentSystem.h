@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "../../../../engine/effect/WaterSurfaceRenderer.h"
+#include "../../../../engine/scene/SceneRuntimePreparation.h"
 
 #include "../../SceneRuntimeObjectBinding.h"
 #include "../../../../engine/3d/StarFieldGenerator.h"
@@ -23,6 +24,8 @@ public:
 	~SceneEnvironmentSystem();
 
 	void Initialize(DirectXCommon* dxCommon);
+	RuntimePrepareStep StepPreparedSkybox(const SceneDocument&, Camera&,
+		const std::vector<SceneRuntimeObjectBinding>&, const SceneRuntimePrepareBudget&, std::string&);
 	// Object生成後に呼び、Scene設定と各Materialの反射強度を同じ状態へ揃える。
 	void Sync(
 		const SceneDocument* document,
@@ -46,6 +49,8 @@ public:
 
 private:
 	std::unique_ptr<Skybox> skybox_;
+	std::unique_ptr<Skybox> preparingSkybox_;
+	size_t preparedBindingCursor_ = 0;
 	std::unique_ptr<WaterSurfaceRenderer> waterSurfaceRenderer_;
 	// 保存元pathと描画用keyを分離し、HDR変換cache keyをSceneへ保存しない。
 	std::string environmentSourcePath_;

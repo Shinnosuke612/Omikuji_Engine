@@ -2125,6 +2125,7 @@ void ImGuiManager::SynchronizeGameInput() {
 }
 
 void ImGuiManager::BeginFrame(){
+	ClearMainDockGameImageRequirement();
 	// NewFrameのnavigation/文字入力評価より前に、ゲームへの移管とEditor入力遮断を行う。
 	SynchronizeGameInput();
 	ApplyPendingEditorFont();
@@ -2672,9 +2673,108 @@ void ImGuiManager::ApplyPendingEditorFont() {
 	editorFontRebuildRequested_ = false;
 }
 
+void ImGuiManager::RequireMainDockGameImage(uint64_t frameSerial, uint64_t expectedSrv) noexcept {
+	ClearMainDockGameImageRequirement();
+	if (frameSerial && expectedSrv) {
+		mainDockEvidence_.frameSerial = frameSerial;
+		mainDockEvidence_.srv = expectedSrv;
+	}
+}
+
+bool ImGuiManager::TryGetMainDockGameImageEvidence(uint64_t frameSerial, uint64_t expectedSrv,
+	MainDockGameImageEvidence& out) const noexcept {
+	if (!mainDockEvidence_.adoptedInMainDrawData || mainDockEvidence_.frameSerial != frameSerial ||
+		mainDockEvidence_.srv != expectedSrv) return false;
+	out = mainDockEvidence_;
+	return true;
+}
+
+void ImGuiManager::ClearMainDockGameImageRequirement() noexcept {
+	mainDockEvidence_ = {};
+	mainDockImageRange_ = {};
+}
+
+void ImGuiManager::ReportMainDockTransitionIssue(MainDockTransitionIssue issue, const std::string& supplementaryDetail) {
+	const auto text = [this](const char* ja, const char* en) { return SelectEditorText(editorLanguage_, ja, en); };
+	const char* message;
+	switch (issue) {
+	case MainDockTransitionIssue::DockRequired:
+		message = text("演出を開始できません。Sceneタブをメインウィンドウへドックし、Play中に再操作してください。",
+			"Cannot start the transition. Dock the Scene tab in the main window and retry during Play."); break;
+	case MainDockTransitionIssue::ViewUnavailable:
+		message = text("演出を開始できません。Sceneタブを表示してから再操作してください。",
+			"Cannot start the transition. Show the Scene tab and retry."); break;
+	case MainDockTransitionIssue::NotPlaying:
+		message = text("演出を開始できません。Playを開始または再開し、再操作してください。",
+			"Cannot start the transition. Start or resume Play and retry."); break;
+	case MainDockTransitionIssue::TextUnsupported:
+		message = text("演出を開始できません。この経路ではロード文字を表示できません。文字を無効にした演出Assetを指定してください。",
+			"Cannot start the transition. This view cannot display loading text. Select an asset with loading text disabled."); break;
+	case MainDockTransitionIssue::ContextChanged:
+		message = text("演出を中止しました。実行中のProjectまたはSceneが変わりました。Playを確認して再操作してください。",
+			"Transition cancelled because the running project or scene changed. Check Play and retry."); break;
+	default:
+		message = text("演出を完了できませんでした。Sceneタブを表示し、診断内容を確認してください。",
+			"The transition could not finish. Show the Scene tab and check the diagnostic details."); break;
+	}
+	SetPresentedTransitionStatus(message);
+	mainDockTransitionIssueText_ = message;
+	spawnWarningRequested_ = true;
+	spawnWarningIssue_ = "SceneTransition:MainDock";
+	spawnWarningDetail_ = supplementaryDetail;
+}
+
 void ImGuiManager::EndFrame(bool deferPlatformWindows){
 	ImGui::Render();
-	ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), dxCommon_->GetCommandList());
+	ImDrawData* const mainData = ImGui::GetDrawData();
+	const auto range = std::exchange(mainDockImageRange_, MainDockImageRange{});
+	const auto texture = static_cast<ImTextureID>(mainDockEvidence_.srv);
+	const auto matchesTexture = [texture](const ImDrawCmd& command) {
+		// 管理テクスチャはbackendの更新前にはID未割当になり得る。
+		return command.TexRef.GetTexID() == texture;
+	};
+	bool foreignUse = false;
+	if (mainDockEvidence_.srv) {
+		for (const auto* viewport : ImGui::GetPlatformIO().Viewports) {
+			if (viewport == ImGui::GetMainViewport() || !viewport->DrawData) continue;
+			for (const auto* list : viewport->DrawData->CmdLists)
+				for (const auto& command : list->CmdBuffer)
+					if (!command.UserCallback && command.ElemCount && matchesTexture(command)) foreignUse = true;
+		}
+	}
+	bool covered = false;
+	if (!foreignUse && range.list && mainData && mainData->Valid && range.first < range.end) {
+		const auto overlaps = [&](const ImVec4& rect) {
+			if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.z) || !std::isfinite(rect.w)) return false;
+			const auto origin = mainData->DisplayPos, size = mainData->DisplaySize;
+			return (std::max)({range.left, rect.x, origin.x}) < (std::min)({range.right, rect.z, origin.x + size.x}) &&
+				(std::max)({range.top, rect.y, origin.y}) < (std::min)({range.bottom, rect.w, origin.y + size.y});
+		};
+		// 通常draw commandでImageの全index範囲を隙間なく被覆しているかを確認する。
+		for (const auto* list : mainData->CmdLists) {
+			if (list != range.list) continue;
+			unsigned next = range.first;
+			for (const auto& command : list->CmdBuffer) {
+				if (command.IdxOffset > next) break;
+				if (command.UserCallback && command.IdxOffset >= range.first) break;
+				const auto end = command.IdxOffset + command.ElemCount;
+				if (end <= next) continue;
+				if (command.UserCallback || !matchesTexture(command) || !overlaps(command.ClipRect)) break;
+				next = end;
+				if (next >= range.end) { covered = true; break; }
+			}
+			break;
+		}
+	}
+	ImGui_ImplDX12_RenderDrawData(mainData, dxCommon_->GetCommandList());
+	mainDockEvidence_.adoptedInMainDrawData = covered;
+	if (foreignUse) {
+		// このFrameの分離提出を止め、main Fenceの確認外へV2のSRVを送らない。
+		deferredPlatformWindows_ = false;
+		mainDockGameViewState_ = MainDockGameViewState::Unavailable;
+		ReportMainDockTransitionIssue(MainDockTransitionIssue::PresentationFailed);
+		return;
+	}
 	deferredPlatformWindows_ = deferPlatformWindows && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable);
 	if (!deferredPlatformWindows_ && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)) {
 		// Platform WindowはBackend側のSwapChainとCommand Queueで描画する。
@@ -2734,6 +2834,9 @@ void ImGuiManager::DrawEditorWorkspace(
 	);
 
 	sceneDockId_ = ImGui::GetWindowDockID();
+	const auto* sceneViewport = ImGui::GetWindowViewport();
+	const bool mainDock = sceneDockId_ != 0 && sceneViewport == ImGui::GetMainViewport() && ImGui::IsWindowDocked();
+	mainDockGameViewState_ = mainDock ? MainDockGameViewState::HiddenOrClipped : MainDockGameViewState::NotDockedInMain;
 	if (sceneVisible) {
     if (replayFramingRequest_.preview && !replayFramingRequest_.prefab &&
         ImGui::Button(SelectEditorText(editorLanguage_,"編集視点へ戻る##ReplaySceneReturn","Return to editing view##ReplaySceneReturn")))
@@ -2754,6 +2857,9 @@ void ImGuiManager::DrawEditorWorkspace(
 	if (editorSession_ && editorSession_->IsPlaying()) ImGui::TextWrapped("%s", gameInputOwned_
 		? SelectEditorText(editorLanguage_, "ゲーム操作中（Altを押している間はEditor操作）", "Game Input (hold Alt for Editor controls)")
 		: SelectEditorText(editorLanguage_, "Editor操作中", "Editor Input"));
+	if (mainDockEvidence_.srv && !mainDock)
+		ImGui::TextUnformatted(SelectEditorText(editorLanguage_, "演出を保留しています。Sceneタブをメインへドックしてください。",
+			"Transition suspended. Dock the Scene tab in the main window."));
 	const ImVec2 availableSize = ImGui::GetContentRegionAvail();
 	const ImVec2 areaOrigin = ImGui::GetCursorScreenPos();
 	uiSourceTextureWidth_=textureWidth; uiSourceTextureHeight_=textureHeight;
@@ -2781,7 +2887,11 @@ void ImGuiManager::DrawEditorWorkspace(
 
 	const ImTextureID textureId =
 		static_cast<ImTextureID>(sceneTexture.ptr);
-	ImGui::Image(
+	auto* const imageList = ImGui::GetWindowDrawList();
+	const auto firstIndex = static_cast<unsigned>(imageList->IdxBuffer.Size);
+	const bool protectedImage = sceneTexture.ptr != 0 && sceneTexture.ptr == mainDockEvidence_.srv;
+	if (protectedImage && !mainDock) ImGui::Dummy(imageSize);
+	else ImGui::Image(
 		ImTextureRef(textureId),
 		imageSize,
 		ImVec2(0.0f, 0.0f),
@@ -2790,6 +2900,19 @@ void ImGuiManager::DrawEditorWorkspace(
 	const bool sceneImageHovered = ImGui::IsItemHovered();
 	const ImVec2 sceneMin = ImGui::GetItemRectMin();
 	const ImVec2 sceneMax = ImGui::GetItemRectMax();
+	if (mainDock && ImGui::GetCurrentWindow()->DockTabIsVisible && sceneTexture.ptr && ImGui::IsItemVisible() &&
+		std::isfinite(sceneMin.x) && std::isfinite(sceneMin.y) && std::isfinite(sceneMax.x) &&
+		std::isfinite(sceneMax.y) && sceneMin.x < sceneMax.x && sceneMin.y < sceneMax.y) {
+		mainDockGameViewState_ = MainDockGameViewState::Ready;
+		if (protectedImage) {
+			mainDockEvidence_.width = textureWidth;
+			mainDockEvidence_.height = textureHeight;
+			mainDockEvidence_.viewportId = sceneViewport->ID;
+			mainDockEvidence_.dockId = sceneDockId_;
+			mainDockImageRange_ = {imageList, firstIndex, static_cast<unsigned>(imageList->IdxBuffer.Size),
+				sceneMin.x, sceneMin.y, sceneMax.x, sceneMax.y};
+		}
+	}
 	sceneViewMinX_ = sceneMin.x;
 	sceneViewMinY_ = sceneMin.y;
 	sceneViewMaxX_ = sceneMax.x;
@@ -3977,8 +4100,13 @@ void ImGuiManager::DrawTransitionReferenceWarning(const std::string& detail) {
 }
 
 void ImGuiManager::DrawPresentedTransitionStatus() {
-	if (presentedTransitionActive_)
-		ImGui::TextWrapped("%s", SelectEditorText(editorLanguage_, "Sceneの切替演出を再生中です。", "The scene transition is in progress."));
+	if (presentedTransitionActive_) {
+		const bool viewHidden = presentedTransitionRequiresMainDock_ && mainDockGameViewState_ != MainDockGameViewState::Ready;
+		ImGui::TextWrapped("%s", viewHidden ?
+			SelectEditorText(editorLanguage_, "演出を保留しています。Sceneタブをメインウィンドウに表示してください。",
+				"Transition suspended. Show the Scene tab in the main window.") :
+			SelectEditorText(editorLanguage_, "Sceneの切替演出を再生中です。", "The scene transition is in progress."));
+	}
 	if (presentedTransitionStatus_.empty() || presentedTransitionStatus_ == "Scene transition is active") return;
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.6f, 0.3f, 1));
 	ImGui::TextWrapped("%s", LocalizeTransitionFailure(presentedTransitionStatus_));
@@ -13028,7 +13156,7 @@ void ImGuiManager::DrawSpawnPreparationWarning() {
 		(spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "このSpawnerの出現処理を停止しました。", "Spawning has stopped for this spawner.") :
 		SelectEditorText(editorLanguage_, "出現設定を適用できません。入力前の値を維持しています。", "Spawn settings could not be applied. Previous values have been kept.")));
 	if (!transition) ImGui::Text("%s: %llu", SelectEditorText(editorLanguage_, "対象ID", "Entity ID"), static_cast<unsigned long long>(spawnWarningEntityId_));
-	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (death ? LocalizeDeathIssue(editorLanguage_,spawnWarningIssue_) : transition ? std::string(LocalizeTransitionFailure(spawnWarningDetail_)) : menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
+	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (death ? LocalizeDeathIssue(editorLanguage_,spawnWarningIssue_) : transition ? (spawnWarningIssue_ == "SceneTransition:MainDock" ? mainDockTransitionIssueText_ : std::string(LocalizeTransitionFailure(spawnWarningDetail_))) : menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
 	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) { ImGui::TextWrapped("%s", spawnWarningDetail_.c_str()); ImGui::TreePop(); }
 	ImGui::PopTextWrapPos();
 	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();

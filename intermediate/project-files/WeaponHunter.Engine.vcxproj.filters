@@ -2,6 +2,12 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup><Filter Include="Engine" /></ItemGroup>
   <ItemGroup>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\2d\SceneTextureCopy.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\2d\SceneTextureCopy.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\2d\SceneTextureMipGenerator.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\2d\SceneTextureMipGenerator.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\2d\SceneTexturePrepare.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\2d\SceneTexturePrepare.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\2d\Sprite.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\2d\Sprite.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\2d\SpriteCommon.cpp"><Filter>Engine</Filter></ClCompile>
@@ -80,7 +86,10 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\PlayerCombatEditor.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\PostProcessSettingsEditor.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\PostProcessSettingsEditor.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\base\PreparedResourceStatus.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\RenderFormats.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\base\SceneCopyBatch.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\base\SceneCopyBatch.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\SceneRenderTarget.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\base\SceneRenderTarget.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\base\WinApp.cpp"><Filter>Engine</Filter></ClCompile>
@@ -177,6 +186,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocument.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentRead.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentRead.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEnemyChargeEvaluator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneEnemyChargeEvaluator.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEntityQuery.cpp"><Filter>Engine</Filter></ClCompile>
@@ -192,9 +203,12 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneMenuRuntime.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePreparation.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePreparationDiagnostic.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneReplayHistory.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneReplayPresentation.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRuntimeDocumentState.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneRuntimePreparation.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneSettings.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.h"><Filter>Engine</Filter></ClInclude>
@@ -208,6 +222,10 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedEvaluation.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedEvaluation.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedGeneration.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedGeneration.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.cpp"><Filter>Engine</Filter></ClCompile>

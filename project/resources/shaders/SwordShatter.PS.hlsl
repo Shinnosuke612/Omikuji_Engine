@@ -1,4 +1,4 @@
-// 役割: 前面のCapture/裏面の板へ元UVの傷とCollapse限定の縁を重ね、opaque面を描く。
+// 役割: 前面Capture/裏面の板へ傷とCollapseの縁を重ね、破片のopacityをalphaへ出す。
 #include "SwordShatter.hlsli"
 float4 main(ShatterOutput input, bool frontFace : SV_IsFrontFace) : SV_TARGET0
 {
@@ -31,5 +31,5 @@ float4 main(ShatterOutput input, bool frontFace : SV_IsFrontFace) : SV_TARGET0
         float coverage = StrokeCoverage(distance,gStyleCutCount.x*2);
         color = lerp(color,gEdgeColor.rgb,coverage*gEdgeColor.a);
     }
-    return float4(color,1);
+    return float4(color,gStyleCutCount.w);
 }

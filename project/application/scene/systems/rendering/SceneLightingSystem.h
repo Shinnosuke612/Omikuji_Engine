@@ -2,8 +2,10 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <cstdint>
 #include <vector>
+#include "../../../../engine/scene/SceneRuntimePreparation.h"
 
 class DirectXCommon;
 class LightManager;
@@ -27,6 +29,7 @@ public:
     uint64_t EstimateReplayGpuBytes() const;
 	// ActiveなLight ComponentをHierarchy順で実行時ライトへ変換する。
 	void Sync(const SceneDocument* document);
+	RuntimePrepareStep StepPrepared(const SceneDocument&, const SceneRuntimePrepareBudget&, std::string&);
 	// Model描画前に、現在のLightとShadow MapをCommandListへ結び付ける。
 	void Bind();
 	void RenderShadows(const std::vector<Object3d*>& shadowCasters);
@@ -36,4 +39,6 @@ private:
 	DirectXCommon* dxCommon_ = nullptr;
 	std::unique_ptr<LightManager> lightManager_;
 	std::unique_ptr<ShadowManager> shadowManager_;
+	enum class PrepareStage { Light, Shadow, Sync, Ready };
+	PrepareStage prepareStage_ = PrepareStage::Light;
 };

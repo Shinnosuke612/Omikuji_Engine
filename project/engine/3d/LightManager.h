@@ -1,5 +1,6 @@
 // 役割: Directional、Point、Spot Lightの定数Bufferを管理する。
 #pragma once
+#include "../scene/SceneRuntimePreparation.h"
 
 #include <array>
 #include <cstdint>
@@ -74,6 +75,9 @@ public:
 
 public:
 	void Initialize(DirectXCommon* dxCommon, const std::string& jsonPath = "");
+	// main専用。新規候補の既定値を設定し、SceneがDocumentの照明値を反映する。
+	bool BeginPreparedInitialize(DirectXCommon&, std::string& diagnostic);
+	RuntimePrepareStep StepPreparedInitialize(SceneRuntimePrepareBudget&, std::string& diagnostic);
     // 新規instance専用。Scene/JSONを読み込まず固定したlight値をコピーする。
     bool TryInitializeReplay(DirectXCommon* dx, const LightManager& source);
 	void Reset();
@@ -130,6 +134,7 @@ private:
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> lightingResource_;
 	LightingForGPU* lightingData_ = nullptr;
+	RuntimePrepareStep preparedState_ = RuntimePrepareStep::Failed;
 
 	std::string jsonPath_;
 

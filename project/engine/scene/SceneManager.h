@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "SceneInstance.h"
@@ -24,6 +25,17 @@ struct SceneViewEffectClock;
 struct SceneDeathReplayStatus;
 struct SceneEnemyPositioningStatus;
 class SceneExecutionContext;
+struct ScenePrepareToken;
+struct ScenePrepareRequest;
+struct ScenePrepareStatus;
+struct SceneDestinationPresentation;
+struct ScenePrepareBudget;
+struct SceneTextureTransferKey;
+struct SceneTextureUploadLoan;
+struct SceneTextureUploadTicket;
+struct SceneTextureUploadCompletion;
+struct SceneTextureTransferObservation;
+enum class ScenePreparePumpResult;
 
 enum class SceneLoadMode {
 	Single,
@@ -34,6 +46,7 @@ enum class SceneLoadMode {
 class SceneManager
 {
 public:
+	SceneManager();
 	~SceneManager();
 
 	void Update(float deltaTime);
@@ -56,6 +69,37 @@ public:
 	bool ConsumePresentedTransitionRequest(PresentedTransitionRequest& out);
 	// 拒否/取消/完了を処理したGameだけがsafe Updateで占有を解除する。
 	void FinishPresentedTransitionRequest();
+
+	// main限定。準備中は現Sceneを保持し、表示証跡に対応する候補だけをCommitする。
+	bool SetScenePreparationProjectEpoch(uint64_t epoch);
+	bool BeginScenePreparation(const ScenePrepareRequest&, ScenePrepareToken& out);
+	bool PollScenePreparation(ScenePrepareToken, ScenePrepareStatus& out) const;
+	bool BeginPresentDestination(ScenePrepareToken);
+	bool CommitScenePreparation(ScenePrepareToken, const SceneDestinationPresentation&);
+	void CancelScenePreparation(ScenePrepareToken) noexcept;
+	void NotifyDestinationFrameRetired(ScenePrepareToken, uint64_t recordingSerial) noexcept;
+	SceneInstanceId GetPreparedDestinationRenderInstance() const noexcept;
+	// 描画対象のPostProcessを取得。候補取消後は旧Sceneへ戻り、Active照会を変えない。
+	bool TryGetRenderRuntimePostProcessSettings(ScenePostProcessSettings&, uint64_t& generation,
+		SceneInstanceId& instanceId) const;
+
+	// Gameの同一Update内で借用→受付→Commit。Busyなら借用元が所有を続ける。
+	ScenePreparePumpResult PumpScenePreparation(const ScenePrepareBudget&);
+	bool TryBorrowSceneTextureUpload(SceneTextureUploadLoan& out) noexcept;
+	// Aの全COPY完了とDIRECT移管をGameが確認したUpdate内だけ貸す。
+	bool TryBorrowMaterialCopyLookahead(const SceneTextureUploadTicket& head, SceneTextureUploadLoan& out) noexcept;
+	void CommitMaterialCopyLookahead(const SceneTextureUploadTicket& ticket, uint64_t decodedBytes) noexcept;
+	// Gameが未提出またはCOPY回収済みと確認してからBの予約を返す。
+	void RetireMaterialCopyLookahead(const SceneTextureUploadTicket&) noexcept;
+	// 通常依存処理がBに到達した後だけ、GameがDIRECTへ渡せる。
+	bool IsSceneTextureUploadHead(const SceneTextureUploadTicket&) const noexcept;
+	// TEMP: mainの診断専用。既存状態を観測するだけで、素材/搬送/Sceneの進行を変えない。
+	void ObserveSceneTextureTransfer(const SceneTextureTransferObservation&) noexcept;
+	void CommitSceneTextureUpload(const SceneTextureUploadTicket&) noexcept;
+	void RejectSceneTextureUpload(const SceneTextureTransferKey&, std::string_view reason) noexcept;
+	bool ShouldCancelSceneTextureUpload(const SceneTextureUploadTicket&) const noexcept;
+	void AcceptSceneTextureUpload(SceneTextureUploadCompletion&&) noexcept;
+	void RetireSceneTextureUploadForShutdown(const SceneTextureUploadTicket&) noexcept;
 	void UpdatePaused();
 	// Edit Mode/非対応Instanceでは失敗。既存Sceneの状態をResetせず全Instanceを保持する。
 	bool BeginTransitionHold();
@@ -72,6 +116,8 @@ public:
 	void DrawEditorUIView(const char* renderSpace, uint32_t width = 0, uint32_t height = 0);
 	bool IsDrawingEditorUIView() const { return drawingEditorUIView_; }
 	// Editor構図確認のCameraはこのDraw中だけ借用。通常呼出しの選択Cameraは維持。
+	// Scene描画を記録する前に、同フレームのserialを全描画対象へ渡す。
+	void BeginRenderFrame(uint64_t serial);
 	void Draw(Camera* editorCamera = nullptr);
 	void DrawForegroundEffects(Camera* editorCamera = nullptr);
 	bool HasScreenOverlay() const;
@@ -186,6 +232,23 @@ public:
 	) const;
 
 private:
+	struct PreparationTransaction;
+	std::unique_ptr<PreparationTransaction> preparation_;
+	uint64_t preparationEpoch_ = 0;
+	uint64_t nextPreparationGeneration_ = 0;
+	bool IsPreparationSourceLive() const noexcept;
+	BaseScene* GetPreparedRenderScene() const noexcept;
+	void FailPreparation(std::string_view reason) noexcept;
+	struct DocumentReadJob;
+	// main限定。要求識別は将来の準備要求口が発行し、workerは採番しない。
+	bool TryStartDocumentRead(SceneInstanceId instanceId, uint64_t generation, uint64_t projectEpoch,
+		const std::string& sceneId, const std::string& resolvedPath);
+	void PollDocumentRead();
+	void CancelDocumentRead() noexcept;
+	// callerの現要求と一致する終端だけ一回move。失敗時outは不変。
+	bool TryTakeDocumentRead(SceneInstanceId instanceId, uint64_t generation, uint64_t projectEpoch,
+		std::unique_ptr<SceneDocument>& out, bool& failed);
+	std::unique_ptr<DocumentReadJob> documentReadJob_;
 	void PrepareMenuInput(float deltaTime, bool allowed);
 	bool menuInputAllowed_ = false;
 	bool gameUpdatePrepared_ = false;

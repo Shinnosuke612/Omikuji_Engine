@@ -951,11 +951,16 @@ struct ScenePrefabPropertyOverride {
 	std::string label;
 };
 
+
+class SceneDocumentRead;
 class SceneDocument {
 public:
 	void Clear(const std::string& sceneName = {});
 
 	bool Load(const std::string& filePath);
+	// main限定、独立した次Documentへ適用する。backup/Context交換なし。
+	// 失敗時は部分変更し得るためcallerが候補Documentを破棄する。
+	bool LoadReadCandidate(const SceneDocumentRead& candidate);
 	bool Save(const std::string& filePath);
 
 	SceneEntity& CreateEntity(const std::string& name, uint64_t parentId = 0);
@@ -1087,6 +1092,7 @@ private:
 		uint64_t value = 0;
 	};
 	bool LoadInternal(const std::string& filePath);
+	bool ApplyReadCandidate(const SceneDocumentRead& candidate);
 	void RebuildNextId();
 	void ValidateHierarchy();
 

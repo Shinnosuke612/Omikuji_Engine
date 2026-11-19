@@ -2,12 +2,14 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 #include <d3d12.h>
 #include <wrl.h>
 #include "../math/Matrix4x4.h"
 #include "../math/Vector3.h"
 #include "../math/Vector4.h"
+#include "../scene/SceneRuntimePreparation.h"
 
 class Camera;
 class DirectXCommon;
@@ -21,6 +23,10 @@ public:
 		float surfaceOffset = 0.03f; uint32_t seed = 1;
 	};
 	void Initialize(DirectXCommon* dxCommon, uint32_t maxCracks = 16, uint32_t maxVertices = 65536);
+	// main専用。新規候補に設定を保持し、StepのReadyまでSpawn/Drawしない。
+	bool BeginPrepared(DirectXCommon&, std::string& diagnostic,
+		uint32_t maxCracks = 16, uint32_t maxVertices = 65536);
+	RuntimePrepareStep StepPrepared(SceneRuntimePrepareBudget& remaining, std::string& diagnostic);
 	void Finalize();
 	void Update(float deltaTime);
 	void Spawn(const SpawnRequest& request);
@@ -37,8 +43,12 @@ private:
 	struct Crack { std::vector<Segment> segments; float age = 0.0f; float lifetime = 1.0f; float width = 0.05f; Vector3 normal{}; };
 	struct CameraData { Matrix4x4 viewProjection; };
 	static float Random01(uint32_t& state);
-	bool CreatePipeline();
-	bool CreateResources(uint32_t maxVertices);
+	bool CreateRootSignature();
+	bool CreatePipeline(std::string& diagnostic);
+	bool CreateVertexBuffer();
+	bool CreateCameraBuffer();
+	enum class PrepareStage { Inactive, Root, Pipeline, Vertices, Cameras, Ready, Failed };
+	PrepareStage prepareStage_ = PrepareStage::Inactive;
 	void AddRibbon(const Segment& segment, const Vector3& normal, float width, const Vector4& color);
 	void BuildVertices();
 	DirectXCommon* dxCommon_ = nullptr;

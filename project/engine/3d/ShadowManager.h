@@ -50,6 +50,9 @@ public:
 	);
     // 新規instance専用。失敗したinstanceは描画せず破棄する（descriptorもdestructorで返却）。
     bool TryInitializeReplay(DirectXCommon* dx, SrvManager* srv, uint32_t size);
+	// main専用。SceneはLightManagerで正規化したDocumentのサイズを渡す。
+	bool BeginPreparedInitialize(DirectXCommon&, SrvManager&, uint32_t shadowMapSize, std::string& diagnostic);
+	RuntimePrepareStep StepPreparedInitialize(SceneRuntimePrepareBudget&, std::string& diagnostic);
 	void Render(const LightManager& lightManager, Object3d* const* objects, uint32_t objectCount);
 	void Bind(ID3D12GraphicsCommandList* commandList, UINT shadowTextureRootIndex, UINT shadowDataRootIndex);
 
@@ -80,6 +83,8 @@ private:
 	uint32_t shadowMapSize_ = 2048;
 	uint32_t srvIndex_ = UINT32_MAX;
 	bool initialized_ = false;
+	enum class PrepareStage { Inactive, Constants, Map, Views, Ready, Failed };
+	PrepareStage prepareStage_ = PrepareStage::Inactive;
 	bool hasRenderableShadow_ = false;
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> shadowMapResource_;

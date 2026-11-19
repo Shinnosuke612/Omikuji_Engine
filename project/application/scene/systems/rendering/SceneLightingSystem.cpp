@@ -1,5 +1,7 @@
 // 役割: LightとShadowの設定をGPUへ渡し、Shadow Passを実行する。
 #include "SceneLightingSystem.h"
+#include "../../../../engine/3d/Object3dCommon.h"
+#include "../../../../engine/3d/SrvManager.h"
 
 #include "../../../../engine/base/DirectXCommon.h"
 #include "../../../../engine/3d/LightManager.h"
@@ -71,6 +73,58 @@ void SceneLightingSystem::Initialize(
 		srvManager,
 		lightManager_->GetShadowMapSize()
 	);
+}
+
+RuntimePrepareStep SceneLightingSystem::StepPrepared(const SceneDocument& document,
+	const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	if (prepareStage_ == PrepareStage::Light) {
+		if (!lightManager_) {
+			dxCommon_ = Object3dCommon::GetInstance()->GetDxCommon();
+			lightManager_ = std::make_unique<LightManager>();
+			if (!dxCommon_ || !lightManager_->BeginPreparedInitialize(*dxCommon_, diagnostic)) return RuntimePrepareStep::Failed;
+		}
+		for (;;) {
+			auto remaining = budget;
+			const auto step = lightManager_->StepPreparedInitialize(remaining, diagnostic);
+			if (step == RuntimePrepareStep::Ready) break;
+			if (step != RuntimePrepareStep::Pending) return step;
+			// 下位で同期処理の進捗がある場合だけ次の段階を実行する。
+			if (remaining.maxItems == budget.maxItems &&
+				remaining.maxResourceCreates == budget.maxResourceCreates &&
+				remaining.maxCopyBytes == budget.maxCopyBytes) return step;
+		}
+		lightManager_->SetShadowMapSize(document.GetLightingSettings().shadowMapSize);
+		prepareStage_ = PrepareStage::Shadow;
+	}
+	if (prepareStage_ == PrepareStage::Shadow) {
+		if (!shadowManager_) {
+			shadowManager_ = std::make_unique<ShadowManager>();
+			if (!shadowManager_->BeginPreparedInitialize(*dxCommon_, *SrvManager::GetInstance(),
+				lightManager_->GetShadowMapSize(), diagnostic)) return RuntimePrepareStep::Failed;
+		}
+		for (;;) {
+			auto remaining = budget;
+			const auto step = shadowManager_->StepPreparedInitialize(remaining, diagnostic);
+			if (step == RuntimePrepareStep::Ready) break;
+			if (step != RuntimePrepareStep::Pending) return step;
+			// 下位で同期処理の進捗がある場合だけ次の段階を実行する。
+			if (remaining.maxItems == budget.maxItems &&
+				remaining.maxResourceCreates == budget.maxResourceCreates &&
+				remaining.maxCopyBytes == budget.maxCopyBytes) return step;
+		}
+		prepareStage_ = PrepareStage::Sync;
+	}
+	if (prepareStage_ == PrepareStage::Sync) {
+		// Syncは同サイズならShadow mapを再作成しない。
+		lightManager_->SetShadowMapSize(document.GetLightingSettings().shadowMapSize);
+		if (shadowManager_->GetShadowMapSize() != lightManager_->GetShadowMapSize()) {
+			diagnostic = "Destination shadow map size changed during preparation.";
+			return RuntimePrepareStep::Failed;
+		}
+		Sync(&document);
+		prepareStage_ = PrepareStage::Ready;
+	}
+	return RuntimePrepareStep::Ready;
 }
 
 void SceneLightingSystem::Sync(const SceneDocument* document) {
@@ -206,6 +260,7 @@ void SceneLightingSystem::RenderShadows(
 }
 
 void SceneLightingSystem::Finalize() {
+	prepareStage_ = PrepareStage::Light;
 	// ShadowManagerはLightManagerを参照するため、依存側から先に破棄する。
 	shadowManager_.reset();
 	lightManager_.reset();

@@ -10313,6 +10313,2041 @@
           0.0
         ]
       }
+    },
+    {
+      "active": true,
+      "components": [],
+      "folder": true,
+      "folderTeamEnabled": false,
+      "id": 110,
+      "locked": false,
+      "modelPath": "",
+      "name": "Alley Scenery",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        },
+        {
+          "active": true,
+          "debugColor": [
+            0.20000000298023224,
+            0.949999988079071,
+            0.699999988079071,
+            1
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": false,
+          "enabled": true,
+          "isTrigger": false,
+          "layer": 4294967295,
+          "localId": 2,
+          "mask": 4294967295,
+          "offset": [
+            -3.7075791358947754,
+            21.63302230834961,
+            -20.697052001953125
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            12.781492233276367,
+            21.641624450683594,
+            20.698444366455078
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 79,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | Modern Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          -33.689170837402344,
+          0.012324312701821327,
+          163.64697265625
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        },
+        {
+          "active": true,
+          "debugColor": [
+            0.20000000298023224,
+            0.949999988079071,
+            0.699999988079071,
+            1
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": false,
+          "enabled": true,
+          "isTrigger": false,
+          "layer": 4294967295,
+          "localId": 2,
+          "mask": 4294967295,
+          "offset": [
+            -27.42647933959961,
+            114.13346099853516,
+            -46.80682373046875
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            30.415281295776367,
+            105.99939727783203,
+            48.42546463012695
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 80,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | Atlanta Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          43.90212631225586,
+          -3.529898166656494,
+          151.31251525878906
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_office/modern_office_building.glb",
+          "type": "MeshRenderer"
+        },
+        {
+          "active": true,
+          "debugColor": [
+            0.20000000298023224,
+            0.949999988079071,
+            0.699999988079071,
+            1
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": false,
+          "enabled": true,
+          "isTrigger": false,
+          "layer": 4294967295,
+          "localId": 2,
+          "mask": 4294967295,
+          "offset": [
+            0,
+            0.20922425389289856,
+            0
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.17999999225139618,
+            0.20922425389289856,
+            0.17999999225139618
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 81,
+      "locked": false,
+      "modelPath": "alley/modern_office/modern_office_building.glb",
+      "name": "Alley | Office at Bend",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          105.15033721923828,
+          105.15033721923828,
+          105.15033721923828
+        ],
+        "translate": [
+          -85,
+          4.3777623094252895e-15,
+          128
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_office_2/modern_office_building_2.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 82,
+      "locked": false,
+      "modelPath": "alley/modern_office_2/modern_office_building_2.glb",
+      "name": "Alley | Distant Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          121.59081268310547,
+          121.59081268310547,
+          121.59081268310547
+        ],
+        "translate": [
+          9,
+          1.215908169746399,
+          188
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/vending_machine/jpn_vending_machine.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 83,
+      "locked": false,
+      "modelPath": "alley/vending_machine/jpn_vending_machine.glb",
+      "name": "Alley | Vending Machine",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          2.021857738494873,
+          2.021857738494873,
+          2.021857738494873
+        ],
+        "translate": [
+          26.994796752929688,
+          -0.007248080335557461,
+          108.94200897216797
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/recycle_bin/recycle-bin.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 84,
+      "locked": false,
+      "modelPath": "alley/recycle_bin/recycle-bin.glb",
+      "name": "Alley | Recycle Bin",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          514.975830078125,
+          514.975830078125,
+          514.975830078125
+        ],
+        "translate": [
+          29.23370361328125,
+          1.004202961921692,
+          107.16319274902344
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/air_conditioner/air_conditioner_11.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 85,
+      "locked": false,
+      "modelPath": "alley/air_conditioner/air_conditioner_11.glb",
+      "name": "Alley | Wall AC",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          1.5518962144851685,
+          1.5518962144851685,
+          1.5518962144851685
+        ],
+        "translate": [
+          -33.01131057739258,
+          0.49670863151550293,
+          103.70516967773438
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/traffic_cone/traffic_cone_3d_model__pbr_textured.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 86,
+      "locked": false,
+      "modelPath": "alley/traffic_cone/traffic_cone_3d_model__pbr_textured.glb",
+      "name": "Alley | Entrance Cones",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          2.047773838043213,
+          2.047773838043213,
+          2.047773838043213
+        ],
+        "translate": [
+          18.303123474121094,
+          0,
+          103.84785461425781
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "castsShadow": false,
+          "color": [
+            1,
+            0.9100000262260437,
+            0.7900000214576721,
+            1
+          ],
+          "decay": 1.600000023841858,
+          "enabled": true,
+          "innerAngle": 42.5,
+          "intensity": 1.149999976158142,
+          "lightType": "Point",
+          "localId": 1,
+          "outerAngle": 60,
+          "range": 20,
+          "shadow": {
+            "bias": 0.0024999999441206455,
+            "distance": 45,
+            "farClip": 120,
+            "nearClip": 0.10000000149011612,
+            "normalBias": 0.019999999552965164,
+            "orthographicSize": 40,
+            "strength": 0.550000011920929,
+            "texelSnap": true
+          },
+          "type": "Light"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 87,
+      "locked": false,
+      "modelPath": "",
+      "name": "Alley | Vending Area Fill",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          25,
+          7.199999809265137,
+          105
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "castsShadow": false,
+          "color": [
+            0.8600000143051147,
+            0.9200000166893005,
+            1,
+            1
+          ],
+          "decay": 1.600000023841858,
+          "enabled": true,
+          "innerAngle": 42.5,
+          "intensity": 1.2999999523162842,
+          "lightType": "Point",
+          "localId": 1,
+          "outerAngle": 60,
+          "range": 26,
+          "shadow": {
+            "bias": 0.0024999999441206455,
+            "distance": 45,
+            "farClip": 120,
+            "nearClip": 0.10000000149011612,
+            "normalBias": 0.019999999552965164,
+            "orthographicSize": 40,
+            "strength": 0.550000011920929,
+            "texelSnap": true
+          },
+          "type": "Light"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 88,
+      "locked": false,
+      "modelPath": "",
+      "name": "Alley | Bend Fill",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          -27,
+          9.600000381469727,
+          106
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 89,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | North Recessed Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          8.902125358581543,
+          -3.529898166656494,
+          161.31251525878906
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 90,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | North Corner Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          81.31082916259766,
+          0.012324312701821327,
+          168.64697265625
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_office/modern_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 91,
+      "locked": false,
+      "modelPath": "alley/modern_office/modern_office_building.glb",
+      "name": "Alley | East Outer Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          0.7071068286895752
+        ],
+        "scale": [
+          105.15033721923828,
+          105.15033721923828,
+          105.15033721923828
+        ],
+        "translate": [
+          128,
+          4.3777623094252895e-15,
+          81
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 92,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | East Modern Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          0.7071068286895752
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          163.64697265625,
+          0.012324312701821327,
+          33.689170837402344
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 93,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | East Recessed Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          0.7071068286895752
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          161.31251525878906,
+          -3.529898166656494,
+          -8.902125358581543
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 94,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | East Atlanta Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          0.7071068286895752
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          151.31251525878906,
+          -3.529898166656494,
+          -43.90212631225586
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 95,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | East Corner Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          0.7071068286895752
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          168.64697265625,
+          0.012324312701821327,
+          -81.31082916259766
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_office/modern_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 96,
+      "locked": false,
+      "modelPath": "alley/modern_office/modern_office_building.glb",
+      "name": "Alley | South Outer Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          105.15033721923828,
+          105.15033721923828,
+          105.15033721923828
+        ],
+        "translate": [
+          81,
+          4.3777623094252895e-15,
+          -128
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 97,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | South Modern Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          33.689170837402344,
+          0.012324312701821327,
+          -163.64697265625
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 98,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | South Recessed Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          -8.902125358581543,
+          -3.529898166656494,
+          -161.31251525878906
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 99,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | South Atlanta Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          -43.90212631225586,
+          -3.529898166656494,
+          -151.31251525878906
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 100,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | South Corner Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          1,
+          0,
+          6.123234262925839e-17
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          -81.31082916259766,
+          0.012324312701821327,
+          -168.64697265625
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_office/modern_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 101,
+      "locked": false,
+      "modelPath": "alley/modern_office/modern_office_building.glb",
+      "name": "Alley | West Outer Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          -0.7071068286895752
+        ],
+        "scale": [
+          105.15033721923828,
+          105.15033721923828,
+          105.15033721923828
+        ],
+        "translate": [
+          -128,
+          4.3777623094252895e-15,
+          -81
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 102,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | West Modern Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          -0.7071068286895752
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          -163.64697265625,
+          0.012324312701821327,
+          -33.689170837402344
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 103,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | West Recessed Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          -0.7071068286895752
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          -161.31251525878906,
+          -3.529898166656494,
+          8.902125358581543
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 104,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | West Atlanta Office",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          -0.7071068286895752
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          -151.31251525878906,
+          -3.529898166656494,
+          43.90212631225586
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 105,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | West Corner Building",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.7071068286895752,
+          0,
+          -0.7071068286895752
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          -168.64697265625,
+          0.012324312701821327,
+          81.31082916259766
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 106,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | NE Corner",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.3826834323650898,
+          0,
+          0.9238795325112867
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          154.77918754997543,
+          -3.529898025853677,
+          139.94704098314983
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 107,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | SE Corner",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.9238795325112867,
+          0,
+          0.38268343236508984
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          154.20825028951262,
+          0.012324312488942724,
+          -161.71889561651355
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 108,
+      "locked": false,
+      "modelPath": "alley/atlanta_office/free__atlanta_corperate_office_building.glb",
+      "name": "Alley | SW Corner",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.9238795325112867,
+          0,
+          -0.3826834323650897
+        ],
+        "scale": [
+          0.43396472930908203,
+          0.43396472930908203,
+          0.43396472930908203
+        ],
+        "translate": [
+          -154.77918754997543,
+          -3.529898025853677,
+          -139.94704098314983
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "alley/modern_building/source/mordern building.glb",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 109,
+      "locked": false,
+      "modelPath": "alley/modern_building/source/mordern building.glb",
+      "name": "Alley | NW Corner",
+      "parentId": 110,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0.3826834323650899,
+          0,
+          -0.9238795325112867
+        ],
+        "scale": [
+          1.432424783706665,
+          1.432424783706665,
+          1.432424783706665
+        ],
+        "translate": [
+          -158.20825028951262,
+          0.012324312488942724,
+          161.71889561651355
+        ]
+      }
     }
   ],
   "lighting": {

@@ -1,5 +1,6 @@
 // 役割: 2DスプライトのTransform、UV、色、描画情報を保持する。
 #pragma once
+#include "../scene/SceneRuntimePreparation.h"
 #include "../math/Vector2.h"
 #include "../math/Vector3.h"
 #include "../math/Vector4.h"
@@ -33,6 +34,10 @@ private://インナークラス
 	};
 public://公開メンバ関数
 	//初期化
+	// main専用。公開済み資源を借用し、Readyまで描画しない。
+	bool BeginPreparedInitialize(SpriteCommon& common, const std::string& publishedTextureKey,
+		std::string& diagnostic);
+	RuntimePrepareStep StepPreparedInitialize(SceneRuntimePrepareBudget& remaining, std::string& diagnostic);
 	void Initialize(SpriteCommon* spriteCommon,std::string textureFilePath);
 	//更新処理
 	void Update();
@@ -91,6 +96,8 @@ private://メンバ変数
 	ID3D12Resource* transformationMatrixResource;
 	//バッファリソース内のデータを指すポインタ
 	VertexData* vertexData = nullptr;
+	int preparedStage_ = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> preparedResources_[4];
 	uint32_t* indexData = nullptr;
 	Material* materialData = nullptr;
 	TransformationMatrix* transformationMatrixData = nullptr;

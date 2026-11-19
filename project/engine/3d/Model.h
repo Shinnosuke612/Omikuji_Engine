@@ -3,10 +3,9 @@
 #include <filesystem>
 #include <string>
 #include <vector>
-#include <fstream>
-#include <sstream>
-#include <cassert>
 #include <map>
+#include <memory>
+#include <wrl.h>
 #include "../math/Vector2.h"
 #include "../math/Vector3.h"
 #include "../math/Vector4.h"
@@ -16,6 +15,13 @@
 #include <d3d12.h> 
 class ModelCommon;
 class aiNode;
+class ModelManager;
+class ModelBuild;
+enum class PreparedBuildStep { Pending, Ready, Failed };
+struct ModelBuildBudget {
+	uint64_t maxCopyBytes = 0;
+	uint32_t maxResources = 0;
+};
 class Model{
 public:
 	struct Node {
@@ -58,7 +64,6 @@ public:
 		uint32_t materialIndex = 0;
 	};
 
-private://インナークラス
 	struct ModelData{
 		std::vector<VertexData> vertices;
 		std::vector<uint32_t> indices;
@@ -68,6 +73,37 @@ private://インナークラス
 		SkinClusterData skinClusterData;
 		bool hasSkinning = false;
 	};
+
+	struct EmbeddedTextureSource {
+		std::string key;
+		std::string formatHint;
+		std::vector<uint8_t> bytes;
+		bool expandGrayscaleBaseColor = false;
+	};
+	struct EmbeddedMaterialBinding {
+		size_t materialIndex;
+		size_t sourceIndex;
+	};
+	// Importerの寿命から独立したCPUの解析結果。画像の登録は同期入口で行う。
+	struct PreparedModelData {
+		ModelData model;
+		std::vector<Animation> animations;
+		std::vector<EmbeddedTextureSource> embeddedTextures;
+		std::vector<EmbeddedMaterialBinding> embeddedBindings;
+	};
+
+	// 解決済みパスを借用する。診断を更新し、成功時だけoutを置き換える。
+	static bool TryPrepareModelData(const std::filesystem::path& resolvedModelPath,
+		bool isAlleyResource, PreparedModelData& out, std::vector<std::string>& diagnostics);
+	// main専用。材質keyは公開済みであること。成功したBeginだけinputを消費する。
+	static bool TryBeginPrepared(ModelCommon*, PreparedModelData& input,
+		std::unique_ptr<ModelBuild>& out, std::string& diagnostic);
+	// 一回分の予算で進める。部分資源はbuildが所有し、GPU提出/待機は行わない。
+	static PreparedBuildStep StepPrepared(ModelBuild&, const ModelBuildBudget&, std::string& diagnostic);
+	// Ready後に一回だけ取得する。拒否時out不変。
+	static bool TryTakePrepared(ModelBuild&, std::unique_ptr<Model>& out) noexcept;
+
+private:
 	//マテリアルデータ
 	struct Material {
 		Vector4 color;
@@ -83,9 +119,10 @@ private://インナークラス
 	};
 private://非公開メンバ関数
 	// 内蔵PMXローダーまたはAssimp経由で基本モデルを読み取る。
-	bool LoadModelFile(
+	static bool TryParseModelFile(
 		const std::filesystem::path& modelFilePath,
-		ModelData& result
+		bool isAlleyResource, PreparedModelData& candidate,
+		std::vector<std::string>& diagnostics
 	);
 
 	//頂点リソース作成関数
@@ -93,8 +130,9 @@ private://非公開メンバ関数
 	void CreateIndexResource();
 	//マテリアルリソース作成関数
 	void CreateMaterialResource();
+	static Material MakeMaterial(const MaterialSlot&);
 
-	Node ReadNode(aiNode* aiNode);
+	static Node ReadNode(aiNode* aiNode);
 public://公開メンバ関数
 	//初期化
 	bool Initialize(
@@ -170,5 +208,23 @@ private:
 	std::vector<ID3D12Resource*> materialResources;
 	std::vector<Material*> materialDataList;
 	std::vector<Animation> animations_;
+	// 準備経路の資源所有。既存描画には同じraw viewを渡す。
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> preparedResources_;
+	bool preparedReady_ = false;
+	friend class ModelManager;
+	friend class ModelBuild;
+};
+
+// main専用。取消時はその時点の未公開Modelと資源を解放する。
+class ModelBuild final {
+public:
+	~ModelBuild();
+	ModelBuild(const ModelBuild&) = delete;
+	ModelBuild& operator=(const ModelBuild&) = delete;
+private:
+	ModelBuild();
+	struct Impl;
+	std::unique_ptr<Impl> impl_;
+	friend class Model;
 };
 

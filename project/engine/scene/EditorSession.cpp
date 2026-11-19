@@ -16,8 +16,8 @@ bool EditorSession::Initialize(
 	++editSceneEpoch_;
 	editSceneId_ = sceneId;
 	editSceneFilePath_ = sceneFilePath;
-	runtimeSceneId_.clear();
-	runtimeSceneFilePath_.clear();
+	runtime_->sceneId.clear();
+	runtime_->filePath.clear();
 	state_ = EditorPlayState::Edit;
 	reloadRequested_ = false;
 	editFrameActive_ = false;
@@ -91,11 +91,16 @@ bool EditorSession::LoadRuntimeScene(
 		return false;
 	}
 	loadedDocument.MarkClean();
-	runtimeDocument_ = std::move(loadedDocument);
-	runtimeSceneId_ = sceneId;
-	runtimeSceneFilePath_ = sceneFilePath;
+	*runtime_->document = std::move(loadedDocument);
+	runtime_->sceneId = sceneId;
+	runtime_->filePath = sceneFilePath;
 	lastLoadError_.clear();
 	return true;
+}
+
+void EditorSession::ExchangePreparedRuntime(std::unique_ptr<SceneRuntimeDocumentState>& state) noexcept {
+	runtime_.swap(state);
+	lastLoadError_.clear();
 }
 
 void EditorSession::Play() {
@@ -105,10 +110,10 @@ void EditorSession::Play() {
 	BeginEditFrame();
 	menuOrderCache_.Refresh(editDocument_, true);
 	EndEditFrame(true);
-	runtimeDocument_ = editDocument_;
-	runtimeDocument_.MarkClean();
-	runtimeSceneId_ = editSceneId_;
-	runtimeSceneFilePath_ = editSceneFilePath_;
+	*runtime_->document = editDocument_;
+	runtime_->document->MarkClean();
+	runtime_->sceneId = editSceneId_;
+	runtime_->filePath = editSceneFilePath_;
 	state_ = EditorPlayState::Playing;
 	reloadRequested_ = true;
 }
@@ -130,9 +135,9 @@ void EditorSession::Stop() {
 		return;
 	}
 	state_ = EditorPlayState::Edit;
-	runtimeDocument_.Clear();
-	runtimeSceneId_.clear();
-	runtimeSceneFilePath_.clear();
+	runtime_->document->Clear();
+	runtime_->sceneId.clear();
+	runtime_->filePath.clear();
 	reloadRequested_ = true;
 }
 
@@ -217,19 +222,19 @@ bool EditorSession::Redo() {
 }
 
 SceneDocument& EditorSession::GetActiveDocument() {
-	return IsEditing() ? editDocument_ : runtimeDocument_;
+	return IsEditing() ? editDocument_ : *runtime_->document;
 }
 
 const SceneDocument& EditorSession::GetActiveDocument() const {
-	return IsEditing() ? editDocument_ : runtimeDocument_;
+	return IsEditing() ? editDocument_ : *runtime_->document;
 }
 
 const std::string& EditorSession::GetActiveSceneId() const {
-	return IsEditing() ? editSceneId_ : runtimeSceneId_;
+	return IsEditing() ? editSceneId_ : runtime_->sceneId;
 }
 
 const std::string& EditorSession::GetActiveSceneFilePath() const {
-	return IsEditing() ? editSceneFilePath_ : runtimeSceneFilePath_;
+	return IsEditing() ? editSceneFilePath_ : runtime_->filePath;
 }
 
 bool EditorSession::ConsumeReloadRequest() {

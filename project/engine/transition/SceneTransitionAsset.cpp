@@ -3,6 +3,7 @@
 #include "../math/Math.h"
 #include "../utility/StringUtility.h"
 #include "../utility/EditableResourcePath.h"
+#include "../project/ProjectDescriptor.h"
 #include "../../externals/nlohmann/json.hpp"
 #include <Windows.h>
 #include <algorithm>
@@ -16,17 +17,22 @@
 #include <initializer_list>
 #include <limits>
 #include <locale>
+#include <new>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+#include <type_traits>
 
 namespace SceneTransitionAsset {
 namespace {
 using Json = nlohmann::json;
 namespace fs = std::filesystem;
 constexpr double DistanceTolerance = 1e-6, AreaTolerance = 1e-10, AreaSumTolerance = 1e-5;
-struct Failure { Diagnostic diagnostic; };
+struct Failure {
+    Diagnostic diagnostic;
+    GeometryBuildStatus geometryStatus = GeometryBuildStatus::InternalFailure;
+};
 [[noreturn]] void Fail(const std::string& field, const std::string& message) { throw Failure{{field, message}}; }
 void Require(bool condition, const std::string& field, const std::string& message) {
     if (!condition) Fail(field, message);
@@ -184,8 +190,23 @@ std::string Binding(const std::vector<Cut>& cuts) {
     }
     return out.str();
 }
+void RequireGeometry(bool condition, GeometryBuildStatus status,
+    const std::string& field, const std::string& message) {
+    if (!condition) throw Failure{{field, message}, status};
+}
+
+void GeometryId(const std::string& value, const std::string& field) {
+    try {
+        Id(value, field);
+    } catch (Failure& error) {
+        error.geometryStatus = GeometryBuildStatus::InvalidInput;
+        throw;
+    }
+}
+
 Geometry Build(const std::vector<Cut>& cuts) {
-    Require(!cuts.empty() && cuts.size() <= MaxCuts, "cuts", "cut数は1〜16です");
+    RequireGeometry(!cuts.empty() && cuts.size() <= MaxCuts,
+        GeometryBuildStatus::InvalidInput, "cuts", "cut数は1〜16です");
     const std::vector<Point> rectangle{{0, 0}, {1, 0}, {1, 1}, {0, 1}};
     std::vector<Polygon> polygons{{0, rectangle}};
     std::vector<Plane> planes;
@@ -193,17 +214,22 @@ Geometry Build(const std::vector<Cut>& cuts) {
     Geometry geometry;
     for (std::size_t i = 0; i < cuts.size(); ++i) {
         const auto& cut = cuts[i]; const auto field = At("cuts", i);
-        Id(cut.id, field + ".id"); Require(ids.insert(cut.id).second, field + ".id", "idが重複しています");
+        GeometryId(cut.id, field + ".id");
+        RequireGeometry(ids.insert(cut.id).second,
+            GeometryBuildStatus::InvalidInput, field + ".id", "idが重複しています");
         const Point a{cut.from.x, cut.from.y}, b{cut.to.x, cut.to.y};
-        Require(std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(b.x) && std::isfinite(b.y), field, "切断座標は有限値が必要です");
+        RequireGeometry(std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(b.x) && std::isfinite(b.y),
+            GeometryBuildStatus::InvalidInput, field, "切断座標は有限値が必要です");
         const Point direction = Sub(b, a); const double length = std::hypot(direction.x, direction.y);
-        Require(length > 0, field, "長さ0の切断線です");
+        RequireGeometry(length > 0,
+            GeometryBuildStatus::CandidateRejected, field, "長さ0の切断線です");
         const Plane plane{-direction.y / length, direction.x / length,
             (direction.y * a.x - direction.x * a.y) / length};
         for (Plane previous : planes) {
             const bool same = std::hypot(plane.x - previous.x, plane.y - previous.y) <= DistanceTolerance && std::abs(plane.c - previous.c) <= DistanceTolerance;
             const bool reverse = std::hypot(plane.x + previous.x, plane.y + previous.y) <= DistanceTolerance && std::abs(plane.c + previous.c) <= DistanceTolerance;
-            Require(!same && !reverse, field, "同一または反転した切断線が重複しています");
+            RequireGeometry(!same && !reverse,
+                GeometryBuildStatus::CandidateRejected, field, "同一または反転した切断線が重複しています");
         }
         planes.push_back(plane);
         std::vector<Point> intersections;
@@ -219,7 +245,8 @@ Geometry Build(const std::vector<Cut>& cuts) {
         std::sort(intersections.begin(), intersections.end(), [&](Point p, Point q) {
             return p.x * direction.x + p.y * direction.y < q.x * direction.x + q.y * direction.y;
         });
-        Require(intersections.size() >= 2 && !Near(intersections.front(), intersections.back()), field, "画面を横切る区間がありません");
+        RequireGeometry(intersections.size() >= 2 && !Near(intersections.front(), intersections.back()),
+            GeometryBuildStatus::CandidateRejected, field, "画面を横切る区間がありません");
         geometry.cutSegments.push_back({ToVector(intersections.front()), ToVector(intersections.back())});
         std::vector<Polygon> next;
         std::size_t splits = 0;
@@ -227,17 +254,20 @@ Geometry Build(const std::vector<Cut>& cuts) {
         for (const auto& polygon : polygons) {
             bool left = false, right = false;
             for (Point p : polygon.points) { const double d = Distance(plane, p); left |= d > 0; right |= d < 0; }
-            Require(left || right, field, "許容差内で退化したpolygonです");
+            RequireGeometry(left || right,
+                GeometryBuildStatus::CandidateRejected, field, "許容差内で退化したpolygonです");
             if (left && right) {
                 auto l = Clip(polygon.points, plane, true), r = Clip(polygon.points, plane, false);
-                Require(l.size() >= 3 && r.size() >= 3 && Area(l) > AreaTolerance && Area(r) > AreaTolerance,
-                    field, "切断で退化したpolygonが生成されます");
+                RequireGeometry(l.size() >= 3 && r.size() >= 3 && Area(l) > AreaTolerance && Area(r) > AreaTolerance,
+                    GeometryBuildStatus::CandidateRejected, field, "切断で退化したpolygonが生成されます");
                 next.push_back({static_cast<std::uint16_t>(polygon.id | bit), std::move(l)});
                 next.push_back({polygon.id, std::move(r)}); ++splits;
             } else next.push_back({static_cast<std::uint16_t>(polygon.id | (left ? bit : 0)), polygon.points});
-            Require(next.size() <= MaxFragments, field, "断片数上限を超えています");
+            RequireGeometry(next.size() <= MaxFragments,
+                GeometryBuildStatus::CapacityExceeded, field, "断片数上限を超えています");
         }
-        Require(splits > 0, field, "境界接触のみ、または断片を増やさないcutです");
+        RequireGeometry(splits > 0,
+            GeometryBuildStatus::CandidateRejected, field, "境界接触のみ、または断片を増やさないcutです");
         polygons = std::move(next);
     }
     std::sort(polygons.begin(), polygons.end(), [](const Polygon& a, const Polygon& b) { return a.id < b.id; });
@@ -248,7 +278,10 @@ Geometry Build(const std::vector<Cut>& cuts) {
         std::vector<Point> output;
         for (Point p : polygon.points) { const Vector2 v = ToVector(p); output.push_back({v.x, v.y}); fragment.polygon.push_back(v); }
         const double area = Area(output);
-        Require(std::isfinite(area) && area > AreaTolerance, "geometry", "出力polygonの面積が退化しています");
+        const bool finiteArea = std::isfinite(area);
+        RequireGeometry(finiteArea && area > AreaTolerance,
+            finiteArea ? GeometryBuildStatus::CandidateRejected : GeometryBuildStatus::InternalFailure,
+            "geometry", "出力polygonの面積が退化しています");
         Point center{0, 0};
         for (std::size_t i = 0; i < output.size(); ++i) {
             const Point p = output[i], q = output[(i + 1) % output.size()]; const double weight = Cross(p, q);
@@ -257,22 +290,26 @@ Geometry Build(const std::vector<Cut>& cuts) {
         fragment.centroid = ToVector({center.x / (6 * area), center.y / (6 * area)});
         fragment.area = static_cast<float>(area); totalArea += area;
         fragment.firstVertex = geometry.vertices.size(); fragment.firstIndex = geometry.indices.size();
-        Require(geometry.vertices.size() + output.size() <= MaxVertices &&
-            geometry.indices.size() + 3 * (output.size() - 2) <= MaxIndices, "geometry", "頂点/index容量を超えています");
+        RequireGeometry(geometry.vertices.size() + output.size() <= MaxVertices &&
+            geometry.indices.size() + 3 * (output.size() - 2) <= MaxIndices,
+            GeometryBuildStatus::CapacityExceeded, "geometry", "頂点/index容量を超えています");
         for (Vector2 uv : fragment.polygon) geometry.vertices.push_back({uv, polygon.id});
         for (std::size_t i = 1; i + 1 < output.size(); ++i) {
-            Require(Cross(Sub(output[i], output[0]), Sub(output[i + 1], output[0])) * 0.5 > AreaTolerance,
-                "geometry", "triangleの面積または向きが不正です");
+            RequireGeometry(Cross(Sub(output[i], output[0]), Sub(output[i + 1], output[0])) * 0.5 > AreaTolerance,
+                GeometryBuildStatus::CandidateRejected, "geometry", "triangleの面積または向きが不正です");
             for (std::size_t local : {std::size_t{0}, i, i + 1}) {
                 const auto index = fragment.firstVertex + local;
-                Require(index < geometry.vertices.size(), "geometry", "indexが頂点範囲外です");
+                RequireGeometry(index < geometry.vertices.size(),
+                    GeometryBuildStatus::InternalFailure, "geometry", "indexが頂点範囲外です");
                 geometry.indices.push_back(static_cast<std::uint32_t>(index));
             }
         }
         fragment.indexCount = geometry.indices.size() - fragment.firstIndex;
         geometry.fragments.push_back(std::move(fragment));
     }
-    Require(std::abs(totalArea - 1) <= AreaSumTolerance && geometry.indices.size() / 3 <= MaxTriangles,
+    const bool validAreaSum = std::abs(totalArea - 1) <= AreaSumTolerance;
+    RequireGeometry(validAreaSum && geometry.indices.size() / 3 <= MaxTriangles,
+        validAreaSum ? GeometryBuildStatus::CapacityExceeded : GeometryBuildStatus::InternalFailure,
         "geometry", "面積合計またはtriangle容量が不正です");
     geometry.binding = Binding(cuts);
     return geometry;
@@ -594,13 +631,710 @@ FlashSample SampleFlash(const std::vector<FlashKey>& keys, Phase phase, float ti
     }
     return previous ? FlashSample{previous->color, previous->intensity} : FlashSample{};
 }
+struct LinkedFailure { LoadLinkedDiagnostic diagnostic; };
+using LinkedCode = LoadLinkedDiagnosticCode;
+[[noreturn]] void LinkedFail(LinkedCode code, const std::string& field, const std::string& detail) {
+    throw LinkedFailure{{code, field, detail}};
+}
+void LinkedRequire(bool condition, LinkedCode code, const std::string& field, const std::string& detail) {
+    if (!condition) LinkedFail(code, field, detail);
+}
+template<class F> bool LinkedGuard(LoadLinkedDiagnostics& diagnostics, F&& operation) {
+    diagnostics.clear();
+    try { operation(); return true; }
+    catch (const LinkedFailure& error) { diagnostics.push_back(error.diagnostic); }
+    catch (const std::bad_alloc& error) { diagnostics.push_back({LinkedCode::ResourceFailure, "asset", error.what()}); }
+    catch (const fs::filesystem_error& error) { diagnostics.push_back({LinkedCode::IoFailure, "path", error.what()}); }
+    catch (const std::exception& error) { diagnostics.push_back({LinkedCode::InternalFailure, "asset", error.what()}); }
+    return false;
+}
+void LinkedUtf8(std::string_view value, std::size_t limit, const std::string& field) {
+    LinkedRequire(value.size() <= limit, LinkedCode::OutOfRange, field, "UTF-8 byte上限を超えています");
+    if (!value.empty()) LinkedRequire(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0) > 0, LinkedCode::InvalidUtf8, field, "UTF-8が不正です");
+}
+void LinkedText(const std::string& value, std::size_t limit, const std::string& field, bool allowLf = false) {
+    LinkedUtf8(value, limit, field);
+    for (unsigned char c : value) LinkedRequire((c >= 32 && c != 127) || (allowLf && c == 10),
+        LinkedCode::OutOfRange, field, "許可されない制御文字です");
+}
+void LinkedRange(double value, double low, double high, const std::string& field, bool exclusiveLow = false) {
+    LinkedRequire(std::isfinite(value) && (exclusiveLow ? value > low : value >= low) && value <= high,
+        LinkedCode::OutOfRange, field, "有限値かつ許可範囲内である必要があります");
+}
+void LinkedFields(const Json& value, std::initializer_list<const char*> names, const std::string& field) {
+    LinkedRequire(value.is_object(), LinkedCode::InvalidType, field, "objectが必要です");
+    for (const auto* name : names) LinkedRequire(value.contains(name), LinkedCode::MissingField,
+        field == "asset" ? name : field + "." + name, "必須項目がありません");
+    for (auto it = value.begin(); it != value.end(); ++it) LinkedRequire(
+        std::find_if(names.begin(), names.end(), [&](const char* name) { return it.key() == name; }) != names.end(),
+        LinkedCode::UnknownField, field == "asset" ? it.key() : field + "." + it.key(), "未知項目です");
+}
+const Json& LinkedArray(const Json& value, std::size_t count, const std::string& field) {
+    LinkedRequire(value.is_array(), LinkedCode::InvalidType, field, "配列が必要です");
+    LinkedRequire(value.size() == count, LinkedCode::OutOfRange, field, "成分数が違います");
+    return value;
+}
+std::string LinkedString(const Json& value, const std::string& field) {
+    LinkedRequire(value.is_string(), LinkedCode::InvalidType, field, "文字列が必要です");
+    return value.get<std::string>();
+}
+std::string LinkedSavedText(const Json& value, const std::string& field, std::size_t limit,
+    bool allowLf = false, bool requireNonempty = false) {
+    auto text = LinkedString(value, field);
+    LinkedText(text, limit, field, allowLf);
+    LinkedRequire(!requireNonempty || !text.empty(), LinkedCode::OutOfRange, field, "空文字は使えません");
+    return text;
+}
+bool LinkedBool(const Json& value, const std::string& field) {
+    LinkedRequire(value.is_boolean(), LinkedCode::InvalidType, field, "booleanが必要です");
+    return value.get<bool>();
+}
+std::uint32_t LinkedInteger(const Json& value, const std::string& field, std::uint32_t low, std::uint32_t high) {
+    LinkedRequire(value.is_number_integer(), LinkedCode::InvalidType, field, "整数が必要です");
+    // 負数やuint64の上位をuint32へ丸める前に検証する。
+    LinkedRange(value.get<double>(), low, high, field);
+    return value.get<std::uint32_t>();
+}
+float LinkedNumber(const Json& value, const std::string& field, double low, double high, bool exclusiveLow = false) {
+    LinkedRequire(value.is_number(), LinkedCode::InvalidType, field, "数値が必要です");
+    const double raw = value.get<double>();
+    LinkedRange(raw, low, high, field, exclusiveLow);
+    const float converted = static_cast<float>(raw);
+    LinkedRange(converted, low, high, field, exclusiveLow);
+    return converted;
+}
+Vector2 LinkedRead2(const Json& value, const std::string& field, double low, double high) {
+    LinkedArray(value, 2, field);
+    return {LinkedNumber(value[0], At(field, 0), low, high), LinkedNumber(value[1], At(field, 1), low, high)};
+}
+Vector3 LinkedRead3(const Json& value, const std::string& field, double low, double high) {
+    LinkedArray(value, 3, field);
+    return {LinkedNumber(value[0], At(field, 0), low, high), LinkedNumber(value[1], At(field, 1), low, high),
+        LinkedNumber(value[2], At(field, 2), low, high)};
+}
+Vector4 LinkedRead4(const Json& value, const std::string& field) {
+    LinkedArray(value, 4, field);
+    return {LinkedNumber(value[0], At(field, 0), 0, 1), LinkedNumber(value[1], At(field, 1), 0, 1),
+        LinkedNumber(value[2], At(field, 2), 0, 1), LinkedNumber(value[3], At(field, 3), 0, 1)};
+}
+template<class E> E LinkedEnum(const Json& value, const std::string& field,
+    std::initializer_list<std::pair<const char*, E>> entries) {
+    const auto name = LinkedString(value, field);
+    for (const auto& entry : entries) if (name == entry.first) return entry.second;
+    LinkedFail(LinkedCode::InvalidType, field, "未知の列挙値です");
+}
+LoadLinkedSeed ReadLinkedSeed(const Json& value, const std::string& field) {
+    LinkedFields(value, {"mode", "value"}, field);
+    return {LinkedEnum<LoadLinkedSeedMode>(value.at("mode"), field + ".mode",
+        {{"Fixed", LoadLinkedSeedMode::Fixed}, {"PerRequest", LoadLinkedSeedMode::PerRequest}}),
+        LinkedInteger(value.at("value"), field + ".value", 0, UINT32_MAX)};
+}
+void ValidateLinkedSeed(const LoadLinkedSeed& seed, const std::string& field) {
+    LinkedRequire(seed.mode == LoadLinkedSeedMode::Fixed || seed.mode == LoadLinkedSeedMode::PerRequest,
+        LinkedCode::InvalidType, field + ".mode", "未知のseed modeです");
+}
+Json WriteLinkedSeed(const LoadLinkedSeed& seed) {
+    return {{"mode", seed.mode == LoadLinkedSeedMode::Fixed ? "Fixed" : "PerRequest"}, {"value", seed.value}};
+}
+// 数値一致では±0を区別しない。NaNだけbit表現の一致を用いる。
+bool LinkedEqual(float a, float b) noexcept {
+    return a == b || (std::isnan(a) && std::isnan(b) &&
+        std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b));
+}
+bool LinkedEqual(Vector2 a, Vector2 b) noexcept { return LinkedEqual(a.x, b.x) && LinkedEqual(a.y, b.y); }
+bool LinkedEqual(Vector3 a, Vector3 b) noexcept {
+    return LinkedEqual(a.x, b.x) && LinkedEqual(a.y, b.y) && LinkedEqual(a.z, b.z);
+}
+bool LinkedEqual(Vector4 a, Vector4 b) noexcept {
+    return LinkedEqual(a.x, b.x) && LinkedEqual(a.y, b.y) && LinkedEqual(a.z, b.z) && LinkedEqual(a.w, b.w);
+}
+template<class T> bool LinkedEqual(const T& a, const T& b) noexcept { return a == b; }
+bool LinkedEqual(const LoadLinkedSeed& a, const LoadLinkedSeed& b) noexcept {
+    return a.mode == b.mode && a.value == b.value;
+}
+
+const std::initializer_list<const char*> LinkedStyleFields = {
+    "sweepEasing", "afterglowDuration", "lineColor", "lineWidth", "glowColor", "glowWidth", "glowIntensity"
+};
+const std::initializer_list<const char*> LinkedCollapseFields = {
+    "duration", "launchSpeed", "directionMode", "direction", "fallAcceleration", "angularVelocity",
+    "speedVariation", "directionVariationDegrees", "rotationVariation", "endFadeDuration"
+};
+const std::initializer_list<const char*> LinkedTextFields = {
+    "enabled", "text", "referenceSize", "position", "pivot", "layoutSize", "fontFamily", "fontSize", "color",
+    "outlineEnabled", "outlineColor", "outlineWidth", "motion", "pulsePeriod", "minimumOpacity"
+};
+const std::initializer_list<const char*> LinkedRandomFields = {
+    "kind", "generationVersion", "seed", "angleStartDegrees", "angleSpanDegrees", "pointMin", "pointMax",
+    "minimumAngleSeparationDegrees", "minimumCutSeparation"
+};
+const std::initializer_list<const char*> LinkedAssetFields = {
+    "version", "effect", "playback", "displayName", "minimumCuts", "maximumCuts", "cutInterval",
+    "cutSweepDuration", "cutStyle", "cutSource", "motionSeed", "collapse", "loadingText"
+};
+
+LoadLinkedCutStyle ReadLinkedCutStyle(const Json& j) {
+    LinkedFields(j, LinkedStyleFields, "cutStyle");
+    LoadLinkedCutStyle value;
+    value.sweepEasing = LinkedEnum<Easing>(j.at("sweepEasing"), "cutStyle.sweepEasing",
+        {{"Linear", Easing::Linear}, {"EaseIn", Easing::EaseIn}, {"EaseOut", Easing::EaseOut}, {"EaseInOut", Easing::EaseInOut}, {"SmoothStep", Easing::SmoothStep}});
+    value.afterglowDuration = LinkedNumber(j.at("afterglowDuration"), "cutStyle.afterglowDuration", 0, 3600);
+    value.lineColor = LinkedRead4(j.at("lineColor"), "cutStyle.lineColor");
+    value.lineWidth = LinkedNumber(j.at("lineWidth"), "cutStyle.lineWidth", 0, 1, true);
+    value.glowColor = LinkedRead4(j.at("glowColor"), "cutStyle.glowColor");
+    value.glowWidth = LinkedNumber(j.at("glowWidth"), "cutStyle.glowWidth", 0, 1, true);
+    value.glowIntensity = LinkedNumber(j.at("glowIntensity"), "cutStyle.glowIntensity", 0, 32);
+    return value;
+}
+Json WriteLinkedCutStyle(const LoadLinkedCutStyle& value) {
+    return {
+        {"sweepEasing", Name(value.sweepEasing)},
+        {"afterglowDuration", value.afterglowDuration},
+        {"lineColor", Write4(value.lineColor)},
+        {"lineWidth", value.lineWidth},
+        {"glowColor", Write4(value.glowColor)},
+        {"glowWidth", value.glowWidth},
+        {"glowIntensity", value.glowIntensity}
+    };
+}
+LoadLinkedCollapse ReadLinkedCollapse(const Json& j) {
+    LinkedFields(j, LinkedCollapseFields, "collapse");
+    LoadLinkedCollapse value;
+    value.duration = LinkedNumber(j.at("duration"), "collapse.duration", 0, 3600, true);
+    value.launchSpeed = LinkedNumber(j.at("launchSpeed"), "collapse.launchSpeed", 0, 10000);
+    value.directionMode = LinkedEnum<LoadLinkedDirectionMode>(j.at("directionMode"), "collapse.directionMode",
+        {{"Outward", LoadLinkedDirectionMode::Outward}, {"Fixed", LoadLinkedDirectionMode::Fixed}});
+    value.direction = LinkedRead3(j.at("direction"), "collapse.direction", -1, 1);
+    value.fallAcceleration = LinkedNumber(j.at("fallAcceleration"), "collapse.fallAcceleration", 0, 10000);
+    value.angularVelocity = LinkedRead3(j.at("angularVelocity"), "collapse.angularVelocity", -360000, 360000);
+    value.speedVariation = LinkedNumber(j.at("speedVariation"), "collapse.speedVariation", 0, 1);
+    value.directionVariationDegrees = LinkedNumber(j.at("directionVariationDegrees"), "collapse.directionVariationDegrees", 0, 180);
+    value.rotationVariation = LinkedRead3(j.at("rotationVariation"), "collapse.rotationVariation", 0, 360000);
+    value.endFadeDuration = LinkedNumber(j.at("endFadeDuration"), "collapse.endFadeDuration", 0, 3600);
+    return value;
+}
+Json WriteLinkedCollapse(const LoadLinkedCollapse& value) {
+    return {
+        {"duration", value.duration},
+        {"launchSpeed", value.launchSpeed},
+        {"directionMode", value.directionMode == LoadLinkedDirectionMode::Outward ? "Outward" : "Fixed"},
+        {"direction", Write3(value.direction)},
+        {"fallAcceleration", value.fallAcceleration},
+        {"angularVelocity", Write3(value.angularVelocity)},
+        {"speedVariation", value.speedVariation},
+        {"directionVariationDegrees", value.directionVariationDegrees},
+        {"rotationVariation", Write3(value.rotationVariation)},
+        {"endFadeDuration", value.endFadeDuration}
+    };
+}
+LoadLinkedText ReadLinkedText(const Json& j) {
+    LinkedFields(j, LinkedTextFields, "loadingText");
+    LoadLinkedText value;
+    value.enabled = LinkedBool(j.at("enabled"), "loadingText.enabled");
+    value.text = LinkedSavedText(j.at("text"), "loadingText.text", 4096, true);
+    LinkedArray(j.at("referenceSize"), 2, "loadingText.referenceSize");
+    value.referenceSize[0] = LinkedInteger(j.at("referenceSize")[0], "loadingText.referenceSize[0]", 1, 4096);
+    value.referenceSize[1] = LinkedInteger(j.at("referenceSize")[1], "loadingText.referenceSize[1]", 1, 4096);
+    value.position = LinkedRead2(j.at("position"), "loadingText.position", 0, 4096);
+    value.pivot = LinkedRead2(j.at("pivot"), "loadingText.pivot", 0, 1);
+    LinkedArray(j.at("layoutSize"), 2, "loadingText.layoutSize");
+    value.layoutSize[0] = LinkedInteger(j.at("layoutSize")[0], "loadingText.layoutSize[0]", 1, 4096);
+    value.layoutSize[1] = LinkedInteger(j.at("layoutSize")[1], "loadingText.layoutSize[1]", 1, 4096);
+    value.fontFamily = LinkedSavedText(j.at("fontFamily"), "loadingText.fontFamily", 256);
+    value.fontSize = LinkedNumber(j.at("fontSize"), "loadingText.fontSize", 1, 512);
+    value.color = LinkedRead4(j.at("color"), "loadingText.color");
+    value.outlineEnabled = LinkedBool(j.at("outlineEnabled"), "loadingText.outlineEnabled");
+    value.outlineColor = LinkedRead4(j.at("outlineColor"), "loadingText.outlineColor");
+    value.outlineWidth = LinkedNumber(j.at("outlineWidth"), "loadingText.outlineWidth", 0, 32);
+    value.motion = LinkedEnum<LoadLinkedTextMotion>(j.at("motion"), "loadingText.motion",
+        {{"Static", LoadLinkedTextMotion::Static}, {"Pulse", LoadLinkedTextMotion::Pulse}});
+    value.pulsePeriod = LinkedNumber(j.at("pulsePeriod"), "loadingText.pulsePeriod", 0, 3600, true);
+    value.minimumOpacity = LinkedNumber(j.at("minimumOpacity"), "loadingText.minimumOpacity", 0, 1);
+    return value;
+}
+Json WriteLinkedText(const LoadLinkedText& value) {
+    return {
+        {"enabled", value.enabled},
+        {"text", value.text},
+        {"referenceSize", value.referenceSize},
+        {"position", Write2(value.position)},
+        {"pivot", Write2(value.pivot)},
+        {"layoutSize", value.layoutSize},
+        {"fontFamily", value.fontFamily},
+        {"fontSize", value.fontSize},
+        {"color", Write4(value.color)},
+        {"outlineEnabled", value.outlineEnabled},
+        {"outlineColor", Write4(value.outlineColor)},
+        {"outlineWidth", value.outlineWidth},
+        {"motion", value.motion == LoadLinkedTextMotion::Static ? "Static" : "Pulse"},
+        {"pulsePeriod", value.pulsePeriod},
+        {"minimumOpacity", value.minimumOpacity}
+    };
+}
+LoadLinkedRandomSource ReadLinkedRandomSource(const Json& j) {
+    LinkedFields(j, LinkedRandomFields, "cutSource");
+    LoadLinkedRandomSource value;
+    value.generationVersion = LinkedInteger(j.at("generationVersion"), "cutSource.generationVersion", 1, 1);
+    value.seed = ReadLinkedSeed(j.at("seed"), "cutSource.seed");
+    value.angleStartDegrees = LinkedNumber(j.at("angleStartDegrees"), "cutSource.angleStartDegrees", 0, 360);
+    LinkedRequire(j.at("angleStartDegrees").get<double>() < 360 && value.angleStartDegrees < 360,
+        LinkedCode::OutOfRange, "cutSource.angleStartDegrees", "360度未満が必要です");
+    value.angleSpanDegrees = LinkedNumber(j.at("angleSpanDegrees"), "cutSource.angleSpanDegrees", 0, 360);
+    value.pointMin = LinkedRead2(j.at("pointMin"), "cutSource.pointMin", 0, 1);
+    value.pointMax = LinkedRead2(j.at("pointMax"), "cutSource.pointMax", 0, 1);
+    value.minimumAngleSeparationDegrees = LinkedNumber(j.at("minimumAngleSeparationDegrees"), "cutSource.minimumAngleSeparationDegrees", 0, 90);
+    value.minimumCutSeparation = LinkedNumber(j.at("minimumCutSeparation"), "cutSource.minimumCutSeparation", 0, 1);
+    return value;
+}
+Json WriteLinkedRandomSource(const LoadLinkedRandomSource& value) {
+    return {
+        {"kind", "Random"},
+        {"generationVersion", value.generationVersion},
+        {"seed", WriteLinkedSeed(value.seed)},
+        {"angleStartDegrees", value.angleStartDegrees},
+        {"angleSpanDegrees", value.angleSpanDegrees},
+        {"pointMin", Write2(value.pointMin)},
+        {"pointMax", Write2(value.pointMax)},
+        {"minimumAngleSeparationDegrees", value.minimumAngleSeparationDegrees},
+        {"minimumCutSeparation", value.minimumCutSeparation}
+    };
+}
+void ValidateLinkedScalars(const LoadLinkedAsset& asset) {
+    LinkedText(asset.displayName, 1024, "displayName");
+    LinkedRequire(!asset.displayName.empty(), LinkedCode::OutOfRange, "displayName", "表示名が空です");
+    LinkedRange(asset.minimumCuts, 1, 16, "minimumCuts");
+    LinkedRange(asset.maximumCuts, 1, 16, "maximumCuts");
+    LinkedRange(asset.cutInterval, 0, 3600, "cutInterval");
+    LinkedRange(asset.cutSweepDuration, 0, 3600, "cutSweepDuration", true);
+    LinkedRequire(asset.cutStyle.sweepEasing == Easing::Linear ||
+        asset.cutStyle.sweepEasing == Easing::EaseIn ||
+        asset.cutStyle.sweepEasing == Easing::EaseOut ||
+        asset.cutStyle.sweepEasing == Easing::EaseInOut ||
+        asset.cutStyle.sweepEasing == Easing::SmoothStep,
+        LinkedCode::InvalidType, "cutStyle.sweepEasing", "未知の列挙値です");
+    LinkedRange(asset.cutStyle.afterglowDuration, 0, 3600, "cutStyle.afterglowDuration");
+    LinkedRange(asset.cutStyle.lineColor.x, 0, 1, "cutStyle.lineColor[0]");
+    LinkedRange(asset.cutStyle.lineColor.y, 0, 1, "cutStyle.lineColor[1]");
+    LinkedRange(asset.cutStyle.lineColor.z, 0, 1, "cutStyle.lineColor[2]");
+    LinkedRange(asset.cutStyle.lineColor.w, 0, 1, "cutStyle.lineColor[3]");
+    LinkedRange(asset.cutStyle.lineWidth, 0, 1, "cutStyle.lineWidth", true);
+    LinkedRange(asset.cutStyle.glowColor.x, 0, 1, "cutStyle.glowColor[0]");
+    LinkedRange(asset.cutStyle.glowColor.y, 0, 1, "cutStyle.glowColor[1]");
+    LinkedRange(asset.cutStyle.glowColor.z, 0, 1, "cutStyle.glowColor[2]");
+    LinkedRange(asset.cutStyle.glowColor.w, 0, 1, "cutStyle.glowColor[3]");
+    LinkedRange(asset.cutStyle.glowWidth, 0, 1, "cutStyle.glowWidth", true);
+    LinkedRange(asset.cutStyle.glowIntensity, 0, 32, "cutStyle.glowIntensity");
+    LinkedRequire(!asset.cutSource.valueless_by_exception(), LinkedCode::InvalidType, "cutSource", "方式が不正です");
+    if (const auto* authored = std::get_if<LoadLinkedAuthoredSource>(&asset.cutSource)) {
+        LinkedRange(authored->cuts.size(), 1, 16, "cutSource.cuts");
+        std::set<std::string> ids;
+        for (std::size_t i = 0; i < authored->cuts.size(); ++i) {
+            const auto& cut = authored->cuts[i];
+            const auto field = At("cutSource.cuts", i);
+            LinkedUtf8(cut.id, 64, field + ".id");
+            LinkedRequire(!cut.id.empty() && cut.id.size() <= 64, LinkedCode::OutOfRange, field + ".id", "idは1〜64byteです");
+            for (unsigned char c : cut.id) LinkedRequire((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') || c == '_' || c == '-', LinkedCode::InvalidType, field + ".id", "idはASCII英数字/_/-です");
+            LinkedRequire(ids.insert(cut.id).second, LinkedCode::InvalidType, field + ".id", "idが重複しています");
+            LinkedRange(cut.from.x, 0, 1, field + ".from[0]");
+            LinkedRange(cut.from.y, 0, 1, field + ".from[1]");
+            LinkedRange(cut.to.x, 0, 1, field + ".to[0]");
+            LinkedRange(cut.to.y, 0, 1, field + ".to[1]");
+        }
+    } else {
+        const auto& source = std::get<LoadLinkedRandomSource>(asset.cutSource);
+        LinkedRange(source.generationVersion, 1, 1, "cutSource.generationVersion");
+        ValidateLinkedSeed(source.seed, "cutSource.seed");
+        LinkedRange(source.angleStartDegrees, 0, 360, "cutSource.angleStartDegrees");
+        LinkedRequire(source.angleStartDegrees < 360, LinkedCode::OutOfRange, "cutSource.angleStartDegrees", "360度未満が必要です");
+        LinkedRange(source.angleSpanDegrees, 0, 360, "cutSource.angleSpanDegrees");
+        LinkedRange(source.pointMin.x, 0, 1, "cutSource.pointMin[0]");
+        LinkedRange(source.pointMin.y, 0, 1, "cutSource.pointMin[1]");
+        LinkedRange(source.pointMax.x, 0, 1, "cutSource.pointMax[0]");
+        LinkedRange(source.pointMax.y, 0, 1, "cutSource.pointMax[1]");
+        LinkedRange(source.minimumAngleSeparationDegrees, 0, 90, "cutSource.minimumAngleSeparationDegrees");
+        LinkedRange(source.minimumCutSeparation, 0, 1, "cutSource.minimumCutSeparation");
+    }
+    ValidateLinkedSeed(asset.motionSeed, "motionSeed");
+    LinkedRange(asset.collapse.duration, 0, 3600, "collapse.duration", true);
+    LinkedRange(asset.collapse.launchSpeed, 0, 10000, "collapse.launchSpeed");
+    LinkedRequire(asset.collapse.directionMode == LoadLinkedDirectionMode::Outward ||
+        asset.collapse.directionMode == LoadLinkedDirectionMode::Fixed,
+        LinkedCode::InvalidType, "collapse.directionMode", "未知の列挙値です");
+    LinkedRange(asset.collapse.direction.x, -1, 1, "collapse.direction[0]");
+    LinkedRange(asset.collapse.direction.y, -1, 1, "collapse.direction[1]");
+    LinkedRange(asset.collapse.direction.z, -1, 1, "collapse.direction[2]");
+    LinkedRange(asset.collapse.fallAcceleration, 0, 10000, "collapse.fallAcceleration");
+    LinkedRange(asset.collapse.angularVelocity.x, -360000, 360000, "collapse.angularVelocity[0]");
+    LinkedRange(asset.collapse.angularVelocity.y, -360000, 360000, "collapse.angularVelocity[1]");
+    LinkedRange(asset.collapse.angularVelocity.z, -360000, 360000, "collapse.angularVelocity[2]");
+    LinkedRange(asset.collapse.speedVariation, 0, 1, "collapse.speedVariation");
+    LinkedRange(asset.collapse.directionVariationDegrees, 0, 180, "collapse.directionVariationDegrees");
+    LinkedRange(asset.collapse.rotationVariation.x, 0, 360000, "collapse.rotationVariation[0]");
+    LinkedRange(asset.collapse.rotationVariation.y, 0, 360000, "collapse.rotationVariation[1]");
+    LinkedRange(asset.collapse.rotationVariation.z, 0, 360000, "collapse.rotationVariation[2]");
+    LinkedRange(asset.collapse.endFadeDuration, 0, 3600, "collapse.endFadeDuration");
+    LinkedText(asset.loadingText.text, 4096, "loadingText.text", true);
+    for (auto value : asset.loadingText.referenceSize) LinkedRange(value, 1, 4096, "loadingText.referenceSize");
+    LinkedRange(asset.loadingText.position.x, 0, 4096, "loadingText.position[0]");
+    LinkedRange(asset.loadingText.position.y, 0, 4096, "loadingText.position[1]");
+    LinkedRange(asset.loadingText.pivot.x, 0, 1, "loadingText.pivot[0]");
+    LinkedRange(asset.loadingText.pivot.y, 0, 1, "loadingText.pivot[1]");
+    for (auto value : asset.loadingText.layoutSize) LinkedRange(value, 1, 4096, "loadingText.layoutSize");
+    LinkedText(asset.loadingText.fontFamily, 256, "loadingText.fontFamily");
+    LinkedRange(asset.loadingText.fontSize, 1, 512, "loadingText.fontSize");
+    LinkedRange(asset.loadingText.color.x, 0, 1, "loadingText.color[0]");
+    LinkedRange(asset.loadingText.color.y, 0, 1, "loadingText.color[1]");
+    LinkedRange(asset.loadingText.color.z, 0, 1, "loadingText.color[2]");
+    LinkedRange(asset.loadingText.color.w, 0, 1, "loadingText.color[3]");
+    LinkedRange(asset.loadingText.outlineColor.x, 0, 1, "loadingText.outlineColor[0]");
+    LinkedRange(asset.loadingText.outlineColor.y, 0, 1, "loadingText.outlineColor[1]");
+    LinkedRange(asset.loadingText.outlineColor.z, 0, 1, "loadingText.outlineColor[2]");
+    LinkedRange(asset.loadingText.outlineColor.w, 0, 1, "loadingText.outlineColor[3]");
+    LinkedRange(asset.loadingText.outlineWidth, 0, 32, "loadingText.outlineWidth");
+    LinkedRequire(asset.loadingText.motion == LoadLinkedTextMotion::Static ||
+        asset.loadingText.motion == LoadLinkedTextMotion::Pulse,
+        LinkedCode::InvalidType, "loadingText.motion", "未知の列挙値です");
+    LinkedRange(asset.loadingText.pulsePeriod, 0, 3600, "loadingText.pulsePeriod", true);
+    LinkedRange(asset.loadingText.minimumOpacity, 0, 1, "loadingText.minimumOpacity");
+}
+
+// doubleの保存入力とfloatへ確定した値に、同じ相関条件を適用する。
+void LinkedCollapseRelations(double duration, double speed, double variation, double acceleration,
+    const std::array<double, 3>& direction, const std::array<double, 3>& angular,
+    const std::array<double, 3>& rotation, double fade) {
+    const double norm = std::hypot(direction[0], direction[1], direction[2]);
+    LinkedRequire(norm > 1e-6, LinkedCode::OutOfRange, "collapse.direction", "方向ノルムは1e-6超が必要です");
+    const double distance = speed * (1 + variation) * duration + 0.5 * acceleration * duration * duration;
+    LinkedRange(distance, 0, 10000, "collapse");
+    for (std::size_t i = 0; i < 3; ++i)
+        LinkedRange((std::abs(angular[i]) + rotation[i]) * duration, 0, 360000, At("collapse.angularVelocity", i));
+    LinkedRange(fade, 0, duration, "collapse.endFadeDuration");
+}
+void LinkedTextRelations(const std::array<std::uint32_t, 2>& reference, const std::array<std::uint32_t, 2>& layout,
+    const std::array<double, 2>& position, const std::array<double, 2>& pivot,
+    bool enabled, double alpha, bool outline, double width) {
+    if (enabled) LinkedRequire(alpha > 0, LinkedCode::OutOfRange, "loadingText.color[3]", "有効な文字には正のalphaが必要です");
+    if (outline) LinkedRequire(width > 0, LinkedCode::OutOfRange, "loadingText.outlineWidth", "有効な輪郭には正の幅が必要です");
+    const double padding = (outline ? std::ceil(width) : 0) + 2;
+    for (std::size_t i = 0; i < 2; ++i) {
+        LinkedRange(position[i], 0, reference[i], At("loadingText.position", i));
+        LinkedRange(layout[i] + 2 * padding, 0, 4096, At("loadingText.layoutSize", i));
+        const double origin = position[i] - pivot[i] * layout[i];
+        LinkedRequire(origin >= 0 && origin + layout[i] <= reference[i], LinkedCode::OutOfRange,
+            At("loadingText.layoutSize", i), "文字枠が基準画面内に収まりません");
+    }
+}
+// ASCII space/LFと全角spaceを除く文字があるか、Unicode正規化せず確認する。
+bool LinkedHasVisibleText(const std::string& text) {
+    for (std::size_t i = 0; i < text.size();) {
+        if (text[i] == ' ' || text[i] == '\n') { ++i; continue; }
+        if (text.compare(i, 3, "\xE3\x80\x80") == 0) { i += 3; continue; }
+        return true;
+    }
+    return false;
+}
+void ValidateLinkedRelations(const LoadLinkedAsset& asset) {
+    LinkedRequire(asset.minimumCuts <= asset.maximumCuts, LinkedCode::OutOfRange, "maximumCuts", "minimum以上が必要です");
+    if (const auto* source = std::get_if<LoadLinkedAuthoredSource>(&asset.cutSource)) {
+        LinkedRequire(source->cuts.size() >= asset.maximumCuts, LinkedCode::OutOfRange, "cutSource.cuts", "maximumCuts以上が必要です");
+    } else {
+        const auto& random = std::get<LoadLinkedRandomSource>(asset.cutSource);
+        LinkedRequire(random.pointMin.x <= random.pointMax.x && random.pointMin.y <= random.pointMax.y,
+            LinkedCode::OutOfRange, "cutSource.pointMax", "各軸でmin以上が必要です");
+    }
+    const auto& c = asset.collapse;
+    LinkedCollapseRelations(c.duration, c.launchSpeed, c.speedVariation, c.fallAcceleration,
+        {c.direction.x, c.direction.y, c.direction.z}, {c.angularVelocity.x, c.angularVelocity.y, c.angularVelocity.z},
+        {c.rotationVariation.x, c.rotationVariation.y, c.rotationVariation.z}, c.endFadeDuration);
+    const auto& t = asset.loadingText;
+    LinkedRequire(!t.enabled || LinkedHasVisibleText(t.text), LinkedCode::OutOfRange,
+        "loadingText.text", "有効な文面が必要です");
+    LinkedTextRelations(t.referenceSize, t.layoutSize, {t.position.x, t.position.y}, {t.pivot.x, t.pivot.y},
+        t.enabled, t.color.w, t.outlineEnabled, t.outlineWidth);
+}
+void ValidateLinkedGeometry(const LoadLinkedAsset& asset) {
+    const auto* source = std::get_if<LoadLinkedAuthoredSource>(&asset.cutSource);
+    if (!source) return;
+    std::vector<Cut> prefix;
+    prefix.reserve(source->cuts.size());
+    for (const auto& saved : source->cuts) {
+        Cut cut;
+        cut.id = saved.id;
+        cut.from = saved.from;
+        cut.to = saved.to;
+        prefix.push_back(std::move(cut));
+        Geometry geometry;
+        Diagnostics diagnostics;
+        const auto status = TryBuildGeometryDetailed(prefix, geometry, diagnostics);
+        if (status == GeometryBuildStatus::Success) continue;
+        LinkedCode code = LinkedCode::InternalFailure;
+        switch (status) {
+        case GeometryBuildStatus::CandidateRejected: code = LinkedCode::InvalidGeometry; break;
+        case GeometryBuildStatus::InvalidInput: code = LinkedCode::InvalidType; break;
+        case GeometryBuildStatus::CapacityExceeded: code = LinkedCode::OutOfRange; break;
+        case GeometryBuildStatus::AllocationFailure: code = LinkedCode::ResourceFailure; break;
+        default: break;
+        }
+        if (diagnostics.empty()) LinkedFail(LinkedCode::InternalFailure, "cutSource.cuts", "幾何失敗の診断がありません");
+        // 幾何のcuts fieldを保存schemaのcutSource.cutsへ対応付ける。
+        const auto& diagnostic = diagnostics.front();
+        const auto field = diagnostic.field.starts_with("cuts") ? "cutSource." + diagnostic.field : diagnostic.field;
+        LinkedFail(code, field, diagnostic.message);
+    }
+}
+template<std::size_t N> std::array<double, N> LinkedRawComponents(const Json& value) {
+    std::array<double, N> result{};
+    for (std::size_t i = 0; i < N; ++i) result[i] = value[i].get<double>();
+    return result;
+}
+
+void ValidateLinkedShape(const Json& root) {
+    LinkedFields(root, LinkedAssetFields, "asset");
+    LinkedFields(root.at("cutStyle"), LinkedStyleFields, "cutStyle");
+    const auto& source = root.at("cutSource");
+    LinkedRequire(source.is_object(), LinkedCode::InvalidType, "cutSource", "objectが必要です");
+    LinkedRequire(source.contains("kind"), LinkedCode::MissingField, "cutSource.kind", "方式がありません");
+    const auto kind = LinkedString(source.at("kind"), "cutSource.kind");
+    if (kind == "Authored") {
+        LinkedFields(source, {"kind", "cuts"}, "cutSource");
+        const auto& cuts = source.at("cuts");
+        LinkedRequire(cuts.is_array(), LinkedCode::InvalidType, "cutSource.cuts", "配列が必要です");
+        LinkedRange(cuts.size(), 1, 16, "cutSource.cuts");
+        for (std::size_t i = 0; i < cuts.size(); ++i) {
+            const auto field = At("cutSource.cuts", i);
+            LinkedFields(cuts[i], {"id", "from", "to"}, field);
+            LinkedArray(cuts[i].at("from"), 2, field + ".from");
+            LinkedArray(cuts[i].at("to"), 2, field + ".to");
+        }
+    } else if (kind == "Random") {
+        LinkedFields(source, LinkedRandomFields, "cutSource");
+        LinkedFields(source.at("seed"), {"mode", "value"}, "cutSource.seed");
+        LinkedArray(source.at("pointMin"), 2, "cutSource.pointMin");
+        LinkedArray(source.at("pointMax"), 2, "cutSource.pointMax");
+    } else LinkedFail(LinkedCode::InvalidType, "cutSource.kind", "未知の方式です");
+    LinkedFields(root.at("motionSeed"), {"mode", "value"}, "motionSeed");
+    LinkedFields(root.at("collapse"), LinkedCollapseFields, "collapse");
+    LinkedFields(root.at("loadingText"), LinkedTextFields, "loadingText");
+    for (const auto* name : {"lineColor", "glowColor"})
+        LinkedArray(root.at("cutStyle").at(name), 4, std::string("cutStyle.") + name);
+    for (const auto* name : {"direction", "angularVelocity", "rotationVariation"})
+        LinkedArray(root.at("collapse").at(name), 3, std::string("collapse.") + name);
+    for (const auto* name : {"referenceSize", "position", "pivot", "layoutSize"})
+        LinkedArray(root.at("loadingText").at(name), 2, std::string("loadingText.") + name);
+    for (const auto* name : {"color", "outlineColor"})
+        LinkedArray(root.at("loadingText").at(name), 4, std::string("loadingText.") + name);
+}
+
+LoadLinkedAsset ReadLinkedAsset(const Json& root) {
+    ValidateLinkedShape(root);
+    LinkedRequire(LinkedString(root.at("effect"), "effect") == "SwordShatter", LinkedCode::InvalidType, "effect", "未知のeffectです");
+    LinkedRequire(LinkedString(root.at("playback"), "playback") == "LoadLinked", LinkedCode::InvalidType, "playback", "未知のplaybackです");
+    LoadLinkedAsset asset;
+    asset.displayName = LinkedSavedText(root.at("displayName"), "displayName", 1024, false, true);
+    asset.minimumCuts = LinkedInteger(root.at("minimumCuts"), "minimumCuts", 1, 16);
+    asset.maximumCuts = LinkedInteger(root.at("maximumCuts"), "maximumCuts", 1, 16);
+    asset.cutInterval = LinkedNumber(root.at("cutInterval"), "cutInterval", 0, 3600);
+    asset.cutSweepDuration = LinkedNumber(root.at("cutSweepDuration"), "cutSweepDuration", 0, 3600, true);
+    asset.cutStyle = ReadLinkedCutStyle(root.at("cutStyle"));
+    const auto& source = root.at("cutSource");
+    LinkedRequire(source.is_object(), LinkedCode::InvalidType, "cutSource", "objectが必要です");
+    LinkedRequire(source.contains("kind"), LinkedCode::MissingField, "cutSource.kind", "方式がありません");
+    const auto kind = LinkedString(source.at("kind"), "cutSource.kind");
+    if (kind == "Authored") {
+        LinkedFields(source, {"kind", "cuts"}, "cutSource");
+        const auto& cuts = source.at("cuts");
+        LinkedRequire(cuts.is_array(), LinkedCode::InvalidType, "cutSource.cuts", "配列が必要です");
+        LinkedRange(cuts.size(), 1, 16, "cutSource.cuts");
+        LoadLinkedAuthoredSource authored;
+        std::set<std::string> ids;
+        for (std::size_t i = 0; i < cuts.size(); ++i) {
+            const auto field = At("cutSource.cuts", i);
+            const auto& cut = cuts[i];
+            LinkedFields(cut, {"id", "from", "to"}, field);
+            auto id = LinkedSavedText(cut.at("id"), field + ".id", 64, false, true);
+            try { Id(id, field + ".id"); }
+            catch (const Failure& error) { LinkedFail(LinkedCode::InvalidType, error.diagnostic.field, error.diagnostic.message); }
+            LinkedRequire(ids.insert(id).second, LinkedCode::InvalidType, field + ".id", "idが重複しています");
+            authored.cuts.push_back({std::move(id), LinkedRead2(cut.at("from"), field + ".from", 0, 1),
+                LinkedRead2(cut.at("to"), field + ".to", 0, 1)});
+        }
+        asset.cutSource = std::move(authored);
+    } else if (kind == "Random") {
+        asset.cutSource = ReadLinkedRandomSource(source);
+    } else LinkedFail(LinkedCode::InvalidType, "cutSource.kind", "未知の方式です");
+    asset.motionSeed = ReadLinkedSeed(root.at("motionSeed"), "motionSeed");
+    asset.collapse = ReadLinkedCollapse(root.at("collapse"));
+    asset.loadingText = ReadLinkedText(root.at("loadingText"));
+    ValidateLinkedScalars(asset);
+    // 元doubleの相関を確認してから、float保存値の相関と幾何を検証する。
+    LinkedRequire(asset.minimumCuts <= asset.maximumCuts, LinkedCode::OutOfRange, "maximumCuts", "minimum以上が必要です");
+    if (kind == "Authored") LinkedRequire(std::get<LoadLinkedAuthoredSource>(asset.cutSource).cuts.size() >= asset.maximumCuts,
+        LinkedCode::OutOfRange, "cutSource.cuts", "maximumCuts以上が必要です");
+    if (kind == "Random") {
+        const auto low = LinkedRawComponents<2>(source.at("pointMin"));
+        const auto high = LinkedRawComponents<2>(source.at("pointMax"));
+        LinkedRequire(low[0] <= high[0] && low[1] <= high[1], LinkedCode::OutOfRange,
+            "cutSource.pointMax", "各軸でmin以上が必要です");
+    }
+    const auto& c = root.at("collapse");
+    LinkedCollapseRelations(c.at("duration").get<double>(), c.at("launchSpeed").get<double>(),
+        c.at("speedVariation").get<double>(), c.at("fallAcceleration").get<double>(),
+        LinkedRawComponents<3>(c.at("direction")), LinkedRawComponents<3>(c.at("angularVelocity")),
+        LinkedRawComponents<3>(c.at("rotationVariation")), c.at("endFadeDuration").get<double>());
+    const auto& t = root.at("loadingText");
+    LinkedRequire(!asset.loadingText.enabled || LinkedHasVisibleText(asset.loadingText.text), LinkedCode::OutOfRange,
+        "loadingText.text", "有効な文面が必要です");
+    LinkedTextRelations(asset.loadingText.referenceSize, asset.loadingText.layoutSize,
+        LinkedRawComponents<2>(t.at("position")), LinkedRawComponents<2>(t.at("pivot")),
+        asset.loadingText.enabled, t.at("color")[3].get<double>(), asset.loadingText.outlineEnabled,
+        t.at("outlineWidth").get<double>());
+    ValidateLinkedRelations(asset);
+    ValidateLinkedGeometry(asset);
+    return asset;
+}
+Json WriteLinkedAsset(const LoadLinkedAsset& asset) {
+    Json source;
+    if (const auto* authored = std::get_if<LoadLinkedAuthoredSource>(&asset.cutSource)) {
+        source = {{"kind", "Authored"}, {"cuts", Json::array()}};
+        for (const auto& cut : authored->cuts) source["cuts"].push_back(
+            {{"id", cut.id}, {"from", Write2(cut.from)}, {"to", Write2(cut.to)}});
+    } else source = WriteLinkedRandomSource(std::get<LoadLinkedRandomSource>(asset.cutSource));
+    return {{"version", 2}, {"effect", "SwordShatter"}, {"playback", "LoadLinked"},
+        {"displayName", asset.displayName}, {"minimumCuts", asset.minimumCuts}, {"maximumCuts", asset.maximumCuts},
+        {"cutInterval", asset.cutInterval}, {"cutSweepDuration", asset.cutSweepDuration},
+        {"cutStyle", WriteLinkedCutStyle(asset.cutStyle)}, {"cutSource", std::move(source)},
+        {"motionSeed", WriteLinkedSeed(asset.motionSeed)}, {"collapse", WriteLinkedCollapse(asset.collapse)},
+        {"loadingText", WriteLinkedText(asset.loadingText)}};
+}
+Json ParseLinkedBytes(std::string_view bytes) {
+    LinkedUtf8(bytes, MaxJsonBytes, "asset");
+    // JSON文法にない生NULを、lexerが入力終端として扱って後続bytesを見落とす前に拒否する。
+    LinkedRequire(bytes.find('\0') == std::string_view::npos, LinkedCode::InvalidType, "asset", "JSONに生NULを含められません");
+    std::vector<std::set<std::string>> keys;
+    const auto callback = [&](int depth, Json::parse_event_t event, Json& parsed) {
+        LinkedRequire(depth <= MaxJsonDepth, LinkedCode::OutOfRange, "asset", "JSON階層上限を超えています");
+        if (event == Json::parse_event_t::object_start) keys.emplace_back();
+        else if (event == Json::parse_event_t::key) {
+            const auto key = parsed.get<std::string>();
+            LinkedRequire(!keys.empty() && keys.back().insert(key).second, LinkedCode::DuplicateField, "asset." + key, "keyが重複しています");
+        } else if (event == Json::parse_event_t::object_end) keys.pop_back();
+        return true;
+    };
+    try { return Json::parse(bytes.begin(), bytes.end(), callback); }
+    catch (const Json::out_of_range& error) { LinkedFail(LinkedCode::OutOfRange, "asset", error.what()); }
+    catch (const Json::exception& error) { LinkedFail(LinkedCode::InvalidType, "asset", error.what()); }
+}
+
+bool LinkedSamePath(const fs::path& a, const fs::path& b) {
+    auto leftPath = a;
+    auto rightPath = b;
+    leftPath.make_preferred();
+    rightPath.make_preferred();
+    auto left = leftPath.begin(), right = rightPath.begin();
+    for (; left != leftPath.end() && right != rightPath.end(); ++left, ++right) {
+        if (CompareStringOrdinal(left->c_str(), -1, right->c_str(), -1, TRUE) != CSTR_EQUAL) return false;
+    }
+    return left == leftPath.end() && right == rightPath.end();
+}
+struct LinkedProjectInfo {
+    EditorAssetProjectKind kind = EditorAssetProjectKind::Legacy;
+    fs::path source, resources, descriptor;
+    std::string projectId;
+};
+LinkedProjectInfo InspectLinkedProject(const fs::path& source) {
+    LinkedRequire(!source.empty(), LinkedCode::InvalidPath, "context", "source rootが空です");
+    LinkedRequire(fs::is_directory(source), LinkedCode::InvalidPath, "context", "source directoryがありません");
+    LinkedProjectInfo info;
+    info.source = fs::canonical(source);
+    LinkedRequire(fs::is_directory(info.source / L"resources"), LinkedCode::InvalidPath, "context", "resources directoryがありません");
+    info.resources = fs::canonical(info.source / L"resources");
+    const auto descriptor = info.source.parent_path() / L"game.project.json";
+    std::error_code error;
+    const auto status = fs::symlink_status(descriptor, error);
+    // 存在しない場合だけLegacy判定へ進む。検査不能や壊れたdescriptorは拒否する。
+    LinkedRequire(!error || error == std::errc::no_such_file_or_directory,
+        LinkedCode::IoFailure, "context", "descriptorの存在を確認できません");
+    if (fs::exists(status)) {
+        ProjectDescriptor project;
+        std::string detail;
+        if (!project.Load(descriptor, detail)) LinkedFail(LinkedCode::InvalidPath, "context", detail);
+        LinkedRequire(LinkedSamePath(fs::canonical(project.GetProjectRoot() / L"project"), info.source),
+            LinkedCode::InvalidPath, "context", "descriptorとsource rootが一致しません");
+        info.kind = EditorAssetProjectKind::Descriptor;
+        info.projectId = project.GetProjectId();
+        info.descriptor = fs::canonical(descriptor);
+    } else {
+        LinkedRequire(fs::exists(info.source / L"CG2_2025_04_14.vcxproj"), LinkedCode::InvalidPath,
+            "context", "Legacy source markerがありません");
+    }
+    return info;
+}
+void VerifyLinkedContext(const EditorAssetContextPtr& context) {
+    LinkedRequire(context != nullptr, LinkedCode::InvalidPath, "context", "contextがありません");
+    const auto info = InspectLinkedProject(context->SourceRoot());
+    LinkedRequire(info.kind == context->Kind() && info.projectId == context->ProjectId() &&
+        LinkedSamePath(info.source, context->SourceRoot()) && LinkedSamePath(info.resources, context->ResourcesRoot()) &&
+        LinkedSamePath(info.descriptor, context->DescriptorPath()), LinkedCode::ExternalChange, "context", "Projectの識別情報またはrootが変更されています");
+}
+struct LinkedResolvedPath { std::string logical; fs::path target; };
+LinkedResolvedPath ResolveLinkedTarget(const EditorAssetContextPtr& context, const std::string& path) {
+    fs::path logical;
+    try { logical = LogicalPath(path, "path", true); }
+    catch (const Failure& error) { LinkedFail(LinkedCode::InvalidPath, error.diagnostic.field, error.diagnostic.message); }
+    auto it = logical.begin();
+    ++it; // LogicalPathが確認したresources成分を外し、捕捉rootへ結合する。
+    fs::path relative;
+    for (; it != logical.end(); ++it) relative /= *it;
+    auto target = fs::weakly_canonical(context->ResourcesRoot() / relative);
+    LinkedRequire(Inside(context->ResourcesRoot(), target), LinkedCode::InvalidPath, "path", "解決後のpathがresources境界外です");
+    LinkedRequire(fs::is_directory(target.parent_path()), LinkedCode::InvalidPath, "path", "保存先directoryがありません");
+    return {StringUtility::ToUtf8(logical), std::move(target)};
+}
+std::string ReadLinkedBytes(const fs::path& target) {
+    std::ifstream input(target, std::ios::binary);
+    LinkedRequire(input.is_open(), LinkedCode::IoFailure, "path", "Assetを開けません");
+    std::string bytes(MaxJsonBytes + 1, '\0');
+    input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    LinkedRequire(!input.bad() && (input.eof() || !input.fail()), LinkedCode::IoFailure, "path", "読込に失敗しました");
+    const auto count = input.gcount();
+    LinkedRequire(count >= 0 && static_cast<std::size_t>(count) <= MaxJsonBytes, LinkedCode::OutOfRange, "asset", "JSON byte上限を超えています");
+    bytes.resize(static_cast<std::size_t>(count));
+    return bytes;
+}
+void CompareLinkedBaseline(const EditorAssetContextPtr& context, const LinkedResolvedPath& resolved,
+    const LoadLinkedWriteExpectation& expectation, LoadLinkedIoStage& stage) {
+    stage = LoadLinkedIoStage::Resolve;
+    VerifyLinkedContext(context);
+    const auto now = ResolveLinkedTarget(context, resolved.logical);
+    LinkedRequire(LinkedSamePath(now.target, resolved.target), LinkedCode::ExternalChange, "path", "解決先が変更されています");
+    stage = LoadLinkedIoStage::Compare;
+    if (const auto* match = std::get_if<LoadLinkedMatchSnapshot>(&expectation)) {
+        const auto& snapshot = match->snapshot;
+        LinkedRequire(snapshot && snapshot->Context() == context && LinkedSamePath(snapshot->TargetPath(), resolved.target),
+            LinkedCode::ExternalChange, "path", "保存基準のcontextまたはtargetが一致しません");
+        stage = LoadLinkedIoStage::Read;
+        const auto bytes = ReadLinkedBytes(resolved.target);
+        stage = LoadLinkedIoStage::Compare;
+        LinkedRequire(bytes == snapshot->Bytes(), LinkedCode::ExternalChange, "path", "元ファイルのbytesが変更されています");
+    } else {
+        LinkedRequire(!fs::exists(resolved.target), LinkedCode::ExternalChange, "path", "同名のAssetが存在します");
+    }
+}
+// Writerのエラー経路では診断の割当も失敗し得る。scalarは常に先に確定する。
+void SetLinkedWriteDiagnostic(LoadLinkedWriteResult& result, LinkedCode code,
+    const char* field, const char* detail) noexcept {
+    result.failureCode = code;
+    try { result.diagnostics.push_back({code, field, detail}); }
+    catch (...) { result.diagnostics.clear(); }
+}
+
 } // namespace
 
-bool TryBuildGeometry(const std::vector<Cut>& cuts, Geometry& geometry, Diagnostics& diagnostics) {
-    return Guard(diagnostics, [&] { auto result = Build(cuts); geometry = std::move(result); });
-}
-bool TryCompile(const Asset& asset, std::shared_ptr<const CompiledTransition>& compiled, Diagnostics& diagnostics) {
-    return Guard(diagnostics, [&] {
+// V1公開Guardと新Decodeの内側で、例外の型を保った共通構築を行う。
+struct CompiledTransitionV1Access {
+    static std::shared_ptr<const CompiledTransition> Compile(const Asset& asset) {
         auto geometry = Build(asset.cuts); Validate(asset, geometry);
         std::shared_ptr<CompiledTransition> result(new CompiledTransition);
         result->asset_ = asset; result->geometry_ = std::move(geometry);
@@ -613,8 +1347,46 @@ bool TryCompile(const Asset& asset, std::shared_ptr<const CompiledTransition>& c
             if (a.phase != b.phase) return a.phase == Phase::Cutting;
             return a.time < b.time;
         });
-        compiled = std::move(result);
-    });
+        return result;
+    }
+};
+
+GeometryBuildStatus TryBuildGeometryDetailed(
+    const std::vector<Cut>& cuts, Geometry& geometry, Diagnostics& diagnostics) {
+    diagnostics.clear();
+    try {
+        auto result = Build(cuts);
+        // 全検証を通過した完成値を、割当を伴わないmoveで一度だけ反映する。
+        static_assert(noexcept(geometry = std::move(result)));
+        geometry = std::move(result);
+        return GeometryBuildStatus::Success;
+    } catch (const Failure& error) {
+        diagnostics.push_back(error.diagnostic);
+        switch (error.geometryStatus) {
+        case GeometryBuildStatus::CandidateRejected:
+        case GeometryBuildStatus::InvalidInput:
+        case GeometryBuildStatus::CapacityExceeded:
+        case GeometryBuildStatus::InternalFailure:
+        case GeometryBuildStatus::AllocationFailure:
+            return error.geometryStatus;
+        case GeometryBuildStatus::Success:
+        default:
+            return GeometryBuildStatus::InternalFailure;
+        }
+    } catch (const std::bad_alloc& error) {
+        diagnostics.push_back({"asset", error.what()});
+        return GeometryBuildStatus::AllocationFailure;
+    } catch (const std::exception& error) {
+        diagnostics.push_back({"asset", error.what()});
+        return GeometryBuildStatus::InternalFailure;
+    }
+}
+
+bool TryBuildGeometry(const std::vector<Cut>& cuts, Geometry& geometry, Diagnostics& diagnostics) {
+    return Guard(diagnostics, [&] { auto result = Build(cuts); geometry = std::move(result); });
+}
+bool TryCompile(const Asset& asset, std::shared_ptr<const CompiledTransition>& compiled, Diagnostics& diagnostics) {
+    return Guard(diagnostics, [&] { compiled = CompiledTransitionV1Access::Compile(asset); });
 }
 bool TryLoad(const std::string& logicalPath, std::shared_ptr<const CompiledTransition>& compiled, Diagnostics& diagnostics) {
     return Guard(diagnostics, [&] {
@@ -673,4 +1445,302 @@ bool TryEvaluate(const CompiledTransition& compiled, Phase phase, float localTim
         sample = std::move(result);
     });
 }
+bool EqualLoadLinkedSavedValues(const LoadLinkedAsset& a, const LoadLinkedAsset& b) noexcept {
+    if (!(LinkedEqual(a.displayName, b.displayName)
+        && LinkedEqual(a.minimumCuts, b.minimumCuts)
+        && LinkedEqual(a.maximumCuts, b.maximumCuts)
+        && LinkedEqual(a.cutInterval, b.cutInterval)
+        && LinkedEqual(a.cutSweepDuration, b.cutSweepDuration)
+        && LinkedEqual(a.motionSeed, b.motionSeed)
+        && LinkedEqual(a.cutStyle.sweepEasing, b.cutStyle.sweepEasing)
+        && LinkedEqual(a.cutStyle.afterglowDuration, b.cutStyle.afterglowDuration)
+        && LinkedEqual(a.cutStyle.lineColor, b.cutStyle.lineColor)
+        && LinkedEqual(a.cutStyle.lineWidth, b.cutStyle.lineWidth)
+        && LinkedEqual(a.cutStyle.glowColor, b.cutStyle.glowColor)
+        && LinkedEqual(a.cutStyle.glowWidth, b.cutStyle.glowWidth)
+        && LinkedEqual(a.cutStyle.glowIntensity, b.cutStyle.glowIntensity)
+        && LinkedEqual(a.collapse.duration, b.collapse.duration)
+        && LinkedEqual(a.collapse.launchSpeed, b.collapse.launchSpeed)
+        && LinkedEqual(a.collapse.directionMode, b.collapse.directionMode)
+        && LinkedEqual(a.collapse.direction, b.collapse.direction)
+        && LinkedEqual(a.collapse.fallAcceleration, b.collapse.fallAcceleration)
+        && LinkedEqual(a.collapse.angularVelocity, b.collapse.angularVelocity)
+        && LinkedEqual(a.collapse.speedVariation, b.collapse.speedVariation)
+        && LinkedEqual(a.collapse.directionVariationDegrees, b.collapse.directionVariationDegrees)
+        && LinkedEqual(a.collapse.rotationVariation, b.collapse.rotationVariation)
+        && LinkedEqual(a.collapse.endFadeDuration, b.collapse.endFadeDuration)
+        && LinkedEqual(a.loadingText.enabled, b.loadingText.enabled)
+        && LinkedEqual(a.loadingText.text, b.loadingText.text)
+        && LinkedEqual(a.loadingText.referenceSize, b.loadingText.referenceSize)
+        && LinkedEqual(a.loadingText.position, b.loadingText.position)
+        && LinkedEqual(a.loadingText.pivot, b.loadingText.pivot)
+        && LinkedEqual(a.loadingText.layoutSize, b.loadingText.layoutSize)
+        && LinkedEqual(a.loadingText.fontFamily, b.loadingText.fontFamily)
+        && LinkedEqual(a.loadingText.fontSize, b.loadingText.fontSize)
+        && LinkedEqual(a.loadingText.color, b.loadingText.color)
+        && LinkedEqual(a.loadingText.outlineEnabled, b.loadingText.outlineEnabled)
+        && LinkedEqual(a.loadingText.outlineColor, b.loadingText.outlineColor)
+        && LinkedEqual(a.loadingText.outlineWidth, b.loadingText.outlineWidth)
+        && LinkedEqual(a.loadingText.motion, b.loadingText.motion)
+        && LinkedEqual(a.loadingText.pulsePeriod, b.loadingText.pulsePeriod)
+        && LinkedEqual(a.loadingText.minimumOpacity, b.loadingText.minimumOpacity))) return false;
+    if (a.cutSource.index() != b.cutSource.index()) return false;
+    if (a.cutSource.valueless_by_exception()) return true;
+    if (const auto* x = std::get_if<LoadLinkedAuthoredSource>(&a.cutSource)) {
+        const auto& y = std::get<LoadLinkedAuthoredSource>(b.cutSource);
+        if (x->cuts.size() != y.cuts.size()) return false;
+        for (std::size_t i = 0; i < x->cuts.size(); ++i) {
+            if (x->cuts[i].id != y.cuts[i].id || !LinkedEqual(x->cuts[i].from, y.cuts[i].from) ||
+                !LinkedEqual(x->cuts[i].to, y.cuts[i].to)) return false;
+        }
+        return true;
+    }
+    const auto& x = std::get<LoadLinkedRandomSource>(a.cutSource);
+    const auto& y = std::get<LoadLinkedRandomSource>(b.cutSource);
+    return LinkedEqual(x.generationVersion, y.generationVersion)
+        && LinkedEqual(x.seed, y.seed)
+        && LinkedEqual(x.angleStartDegrees, y.angleStartDegrees)
+        && LinkedEqual(x.angleSpanDegrees, y.angleSpanDegrees)
+        && LinkedEqual(x.pointMin, y.pointMin)
+        && LinkedEqual(x.pointMax, y.pointMax)
+        && LinkedEqual(x.minimumAngleSeparationDegrees, y.minimumAngleSeparationDegrees)
+        && LinkedEqual(x.minimumCutSeparation, y.minimumCutSeparation);
+}
+
+LoadLinkedRandomSource MakeDefaultLoadLinkedRandomSource() {
+    LoadLinkedRandomSource source;
+    source.generationVersion = 1;
+    source.seed = {LoadLinkedSeedMode::Fixed, 1};
+    source.angleSpanDegrees = 360;
+    source.pointMin = {0.15f, 0.15f};
+    source.pointMax = {0.85f, 0.85f};
+    return source;
+}
+LoadLinkedAsset MakeDefaultLoadLinked(LoadLinkedDefaultLanguage language) {
+    if (language != LoadLinkedDefaultLanguage::Japanese && language != LoadLinkedDefaultLanguage::English)
+        throw std::invalid_argument("Unknown load-linked default language");
+    LoadLinkedAsset asset;
+    asset.displayName = language == LoadLinkedDefaultLanguage::Japanese ? "ロード連動の斬り込み" : "Load-linked sword shatter";
+    asset.minimumCuts = 2;
+    asset.maximumCuts = 2;
+    asset.cutInterval = 0.15f;
+    asset.cutSweepDuration = 0.25f;
+    asset.cutStyle.afterglowDuration = 0.8f;
+    asset.cutStyle.lineColor = {0.04f, 0.04f, 0.04f, 1};
+    asset.cutStyle.lineWidth = 0.003f;
+    asset.cutStyle.glowColor = {0.25f, 0.65f, 1, 1};
+    asset.cutStyle.glowWidth = 0.025f;
+    asset.cutStyle.glowIntensity = 3;
+    asset.cutSource = LoadLinkedAuthoredSource{{{"h", {0, 0.5f}, {1, 0.5f}}, {"d", {0.2f, 0.1f}, {0.8f, 0.9f}}}};
+    asset.motionSeed = {LoadLinkedSeedMode::Fixed, 1};
+    asset.collapse.duration = 2;
+    asset.collapse.launchSpeed = 0.8f;
+    asset.collapse.direction = {0, 0, 1};
+    asset.collapse.fallAcceleration = 0.6f;
+    asset.collapse.angularVelocity = {0, 0, 45};
+    asset.collapse.endFadeDuration = 0.3f;
+    auto& text = asset.loadingText;
+    text.enabled = true;
+    text.text = language == LoadLinkedDefaultLanguage::Japanese ? "読み込み中…" : "Loading…";
+    text.referenceSize = {1280, 720};
+    text.position = {640, 648};
+    text.pivot = {0.5f, 0.5f};
+    text.layoutSize = {480, 64};
+    text.fontFamily = "Yu Gothic UI";
+    text.fontSize = 32;
+    text.color = {1, 1, 1, 1};
+    text.outlineEnabled = true;
+    text.outlineColor = {0, 0, 0, 1};
+    text.outlineWidth = 2;
+    text.motion = LoadLinkedTextMotion::Pulse;
+    text.pulsePeriod = 1.2f;
+    text.minimumOpacity = 0.35f;
+    return asset;
+}
+bool TryValidateLoadLinked(const LoadLinkedAsset& asset, LoadLinkedDiagnostics& diagnostics) {
+    return LinkedGuard(diagnostics, [&] {
+        ValidateLinkedScalars(asset);
+        ValidateLinkedRelations(asset);
+        ValidateLinkedGeometry(asset);
+    });
+}
+bool TryDecodeTransitionBytes(std::string_view bytes, DecodedTransitionAsset& out, LoadLinkedDiagnostics& diagnostics) {
+    return LinkedGuard(diagnostics, [&] {
+        const auto root = ParseLinkedBytes(bytes);
+        LinkedRequire(root.is_object(), LinkedCode::InvalidType, "asset", "objectが必要です");
+        LinkedRequire(root.contains("version"), LinkedCode::MissingField, "version", "versionがありません");
+        const auto& version = root.at("version");
+        LinkedRequire(version.is_number_integer(), LinkedCode::InvalidType, "version", "整数versionが必要です");
+        DecodedTransitionAsset result;
+        if (version == 1) {
+            try {
+                Asset asset;
+                try { asset = ReadAsset(root); }
+                catch (const Json::exception& error) { LinkedFail(LinkedCode::InvalidType, "asset", error.what()); }
+                result = CompiledTransitionV1Access::Compile(asset);
+            } catch (const Failure& error) {
+                LinkedFail(LinkedCode::InvalidType, error.diagnostic.field, error.diagnostic.message);
+            }
+        } else if (version == 2) {
+            result = std::make_shared<const LoadLinkedAsset>(ReadLinkedAsset(root));
+        } else LinkedFail(LinkedCode::UnsupportedVersion, "version", "未対応の整数versionです");
+        static_assert(std::is_nothrow_move_assignable_v<DecodedTransitionAsset>);
+        out = std::move(result);
+    });
+}
+bool TryReadTransitionFile(const fs::path& capturedResourcesRoot, const std::string& logicalPath,
+    DecodedTransitionAsset& out, LoadLinkedDiagnostics& diagnostics) {
+    return LinkedGuard(diagnostics, [&] {
+        LinkedRequire(capturedResourcesRoot.is_absolute() && fs::is_directory(capturedResourcesRoot),
+            LinkedCode::InvalidPath, "path", "捕捉resources rootは実在する絶対directoryが必要です");
+        const auto root = fs::canonical(capturedResourcesRoot);
+        fs::path logical;
+        try { logical = LogicalPath(logicalPath, "path", true); }
+        catch (const Failure& error) { LinkedFail(LinkedCode::InvalidPath, error.diagnostic.field, error.diagnostic.message); }
+        fs::path relative;
+        auto part = logical.begin();
+        for (++part; part != logical.end(); ++part) relative /= *part;
+        const auto target = fs::weakly_canonical(root / relative);
+        LinkedRequire(Inside(root, target), LinkedCode::InvalidPath, "path", "解決後のpathがresources境界外です");
+        const auto bytes = ReadLinkedBytes(target);
+        DecodedTransitionAsset candidate;
+        LoadLinkedDiagnostics decodeDiagnostics;
+        if (!TryDecodeTransitionBytes(bytes, candidate, decodeDiagnostics)) throw LinkedFailure{decodeDiagnostics.front()};
+        static_assert(std::is_nothrow_move_assignable_v<DecodedTransitionAsset>);
+        out = std::move(candidate);
+    });
+}
+bool TryCreateEditorAssetFileContext(const fs::path& sourceRoot, std::uint64_t hostEpoch,
+    EditorAssetContextPtr& out, LoadLinkedDiagnostics& diagnostics) {
+    return LinkedGuard(diagnostics, [&] {
+        LinkedRequire(hostEpoch != 0, LinkedCode::OutOfRange, "context.hostEpoch", "epochは0以外が必要です");
+        const auto info = InspectLinkedProject(sourceRoot);
+        std::shared_ptr<EditorAssetFileContext> result(new EditorAssetFileContext);
+        result->kind_ = info.kind;
+        result->hostEpoch_ = hostEpoch;
+        result->projectId_ = info.projectId;
+        result->descriptorPath_ = info.descriptor;
+        result->sourceRoot_ = info.source;
+        result->resourcesRoot_ = info.resources;
+        out = std::move(result);
+    });
+}
+bool TryReadLoadLinkedFile(const EditorAssetContextPtr& context, const std::string& logicalPath,
+    LoadLinkedDiskSnapshotPtr& out, LoadLinkedDiagnostics& diagnostics) {
+    return LinkedGuard(diagnostics, [&] {
+        VerifyLinkedContext(context);
+        auto resolved = ResolveLinkedTarget(context, logicalPath);
+        auto bytes = ReadLinkedBytes(resolved.target);
+        DecodedTransitionAsset decoded;
+        LoadLinkedDiagnostics decodeDiagnostics;
+        if (!TryDecodeTransitionBytes(bytes, decoded, decodeDiagnostics)) throw LinkedFailure{decodeDiagnostics.front()};
+        const auto* value = std::get_if<std::shared_ptr<const LoadLinkedAsset>>(&decoded);
+        LinkedRequire(value != nullptr, LinkedCode::UnsupportedVersion, "version", "V2専用の編集入口です");
+        std::shared_ptr<LoadLinkedDiskSnapshot> result(new LoadLinkedDiskSnapshot);
+        result->value_ = *value;
+        result->bytes_ = std::move(bytes);
+        result->logicalPath_ = std::move(resolved.logical);
+        result->targetPath_ = std::move(resolved.target);
+        result->context_ = context;
+        out = std::move(result);
+    });
+}
+LoadLinkedWriteResult WriteLoadLinkedFile(const EditorAssetContextPtr& context, const std::string& logicalPath,
+    const LoadLinkedAsset& asset, const LoadLinkedWriteExpectation& expectation) noexcept {
+    static_assert(std::is_nothrow_default_constructible_v<LoadLinkedWriteResult>);
+    static_assert(std::is_nothrow_move_constructible_v<LoadLinkedWriteResult>);
+    static_assert(std::is_nothrow_move_assignable_v<LoadLinkedWriteResult>);
+    static_assert(std::is_nothrow_move_assignable_v<LoadLinkedDiskSnapshotPtr>);
+    static_assert(std::is_nothrow_move_constructible_v<LoadLinkedDiagnostics>);
+    static_assert(std::is_nothrow_move_assignable_v<LoadLinkedDiagnostics>);
+    LoadLinkedWriteResult result;
+    result.failureStage = LoadLinkedIoStage::Validate;
+    try {
+        LinkedRequire(!expectation.valueless_by_exception(), LinkedCode::InvalidType, "expectation", "保存期待値がありません");
+        ValidateLinkedScalars(asset);
+        ValidateLinkedRelations(asset);
+        ValidateLinkedGeometry(asset);
+        result.failureStage = LoadLinkedIoStage::Resolve;
+        VerifyLinkedContext(context);
+        auto resolved = ResolveLinkedTarget(context, logicalPath);
+        if (const auto* match = std::get_if<LoadLinkedMatchSnapshot>(&expectation))
+            LinkedRequire(match->snapshot && match->snapshot->Context() == context &&
+                LinkedSamePath(match->snapshot->TargetPath(), resolved.target), LinkedCode::ExternalChange, "path", "保存基準が一致しません");
+        result.failureStage = LoadLinkedIoStage::Serialize;
+        auto bytes = WriteLinkedAsset(asset).dump(2);
+        DecodedTransitionAsset decoded;
+        LoadLinkedDiagnostics decodeDiagnostics;
+        if (!TryDecodeTransitionBytes(bytes, decoded, decodeDiagnostics)) throw LinkedFailure{decodeDiagnostics.front()};
+        result.failureStage = LoadLinkedIoStage::Allocate;
+        std::shared_ptr<LoadLinkedDiskSnapshot> snapshot(new LoadLinkedDiskSnapshot);
+        snapshot->value_ = std::get<std::shared_ptr<const LoadLinkedAsset>>(std::move(decoded));
+        snapshot->bytes_ = std::move(bytes);
+        snapshot->logicalPath_ = resolved.logical;
+        snapshot->targetPath_ = resolved.target;
+        snapshot->context_ = context;
+        result.failureStage = LoadLinkedIoStage::Compare;
+        CompareLinkedBaseline(context, resolved, expectation, result.failureStage);
+        result.failureStage = LoadLinkedIoStage::CreateTemporary;
+        static std::atomic<std::uint64_t> serial{0};
+        TemporaryFile temporary;
+        temporary.path = resolved.target;
+        temporary.path += L".tmp." + std::to_wstring(GetCurrentProcessId()) + L"." +
+            std::to_wstring(GetTickCount64()) + L"." + std::to_wstring(serial.fetch_add(1));
+        temporary.handle = CreateFileW(temporary.path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (temporary.handle == INVALID_HANDLE_VALUE) {
+            result.systemError = GetLastError();
+            LinkedFail(LinkedCode::IoFailure, "path", "排他的temp作成に失敗しました");
+        }
+        temporary.owned = true;
+        result.failureStage = LoadLinkedIoStage::WriteTemporary;
+        DWORD written = 0;
+        const BOOL wrote = WriteFile(temporary.handle, snapshot->bytes_.data(), static_cast<DWORD>(snapshot->bytes_.size()), &written, nullptr);
+        if (!wrote || written != snapshot->bytes_.size()) {
+            result.systemError = wrote ? ERROR_WRITE_FAULT : GetLastError();
+            LinkedFail(LinkedCode::IoFailure, "path", "temp書込みに失敗しました");
+        }
+        result.failureStage = LoadLinkedIoStage::FlushTemporary;
+        if (!FlushFileBuffers(temporary.handle)) {
+            result.systemError = GetLastError();
+            LinkedFail(LinkedCode::IoFailure, "path", "temp flushに失敗しました");
+        }
+        result.failureStage = LoadLinkedIoStage::CloseTemporary;
+        if (!CloseHandle(temporary.handle)) {
+            result.systemError = GetLastError();
+            LinkedFail(LinkedCode::IoFailure, "path", "temp closeに失敗しました");
+        }
+        temporary.handle = INVALID_HANDLE_VALUE;
+        result.failureStage = LoadLinkedIoStage::Compare;
+        CompareLinkedBaseline(context, resolved, expectation, result.failureStage);
+        const DWORD flags = MOVEFILE_WRITE_THROUGH |
+            (std::holds_alternative<LoadLinkedMatchSnapshot>(expectation) ? MOVEFILE_REPLACE_EXISTING : 0);
+        // ここから先は保存結果が不確定になり得る。全返却情報は既に構築済み。
+        result.failureStage = LoadLinkedIoStage::Rename;
+        result.status = LoadLinkedWriteStatus::Indeterminate;
+        if (!MoveFileExW(temporary.path.c_str(), resolved.target.c_str(), flags)) {
+            result.systemError = GetLastError();
+            SetLinkedWriteDiagnostic(result, LinkedCode::IoFailure, "path", "renameの成功を確認できません");
+            return result;
+        }
+        temporary.owned = false;
+        static_assert(noexcept(result.snapshot = std::move(snapshot)));
+        result.snapshot = std::move(snapshot);
+        result.status = LoadLinkedWriteStatus::Written;
+        result.failureStage = LoadLinkedIoStage::None;
+        result.systemError = 0;
+        return result;
+    } catch (const LinkedFailure& error) {
+        SetLinkedWriteDiagnostic(result, error.diagnostic.code, error.diagnostic.field.c_str(), error.diagnostic.detail.c_str());
+    } catch (const std::bad_alloc&) {
+        SetLinkedWriteDiagnostic(result, LinkedCode::ResourceFailure, "asset", "メモリを確保できません");
+    } catch (const fs::filesystem_error& error) {
+        SetLinkedWriteDiagnostic(result, LinkedCode::IoFailure, "path", error.what());
+    } catch (const std::exception& error) {
+        SetLinkedWriteDiagnostic(result, LinkedCode::InternalFailure, "asset", error.what());
+    } catch (...) {
+        SetLinkedWriteDiagnostic(result, LinkedCode::InternalFailure, "asset", "非標準例外が発生しました");
+    }
+    return result;
+}
+
 } // namespace SceneTransitionAsset

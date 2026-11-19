@@ -5,6 +5,7 @@
 #include <string>
 
 #include "SceneEntityReference.h"
+#include "SceneRuntimePreparation.h"
 
 class BaseScene;
 class SceneDocument;
@@ -49,6 +50,8 @@ private:
 	);
 
 	void Initialize(SceneManager* sceneManager);
+	bool BeginPreparedRuntime(SceneManager* sceneManager);
+	RuntimePrepareStep StepPreparedRuntime(const SceneRuntimePrepareBudget&, std::string& diagnostic);
 	void Finalize();
 	void BindDocument(SceneDocument* document);
 	void OwnDocument(std::unique_ptr<SceneDocument> document);
@@ -65,5 +68,6 @@ private:
 	std::unique_ptr<SceneDocument> ownedDocument_;
 	SceneDocument* document_ = nullptr;
 	bool initialized_ = false;
+	bool preparing_ = false;
 	bool persistent_ = false;
 };
