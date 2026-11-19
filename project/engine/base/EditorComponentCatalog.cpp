@@ -28,7 +28,7 @@ namespace {
 		EditorComponentTag::Prefab
 	}};
 
-	constexpr std::array<EditorComponentDefinition, 48> kDefinitions = {{
+	constexpr std::array<EditorComponentDefinition, 49> kDefinitions = {{
 		{
 			"GameFlowDirector", "ゲーム進行", "Game Flow Director",
 			"開始案内、敵出現待ち、カウントダウン、Phaseとクリア時間を設定します。初回戦闘開始をEventへ通知します。",
@@ -192,6 +192,14 @@ namespace {
 			EditorComponentCategory::Gameplay,
 			SceneContext, 14, -1, "",
 			EditorComponentTagBit(EditorComponentTag::Player)
+		},
+		{
+			"PlayerMovementBounds", "プレイヤー移動範囲", "Player Movement Bounds",
+			"移動用当たり判定をワールドXZの範囲内に収め、接近時に境界を表示します。",
+			"Contains the movement collider within a world XZ area and reveals the boundary nearby.",
+			EditorComponentCategory::Gameplay,
+			SceneContext, 50, -1, "PlayerBehavior",
+			EditorComponentTagBit(EditorComponentTag::Player) | EditorComponentTagBit(EditorComponentTag::Physics)
 		},
 		{
 			"AgentBehavior", "Agent移動", "Agent Behavior",

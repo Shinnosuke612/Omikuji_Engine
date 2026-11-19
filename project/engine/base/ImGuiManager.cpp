@@ -284,6 +284,82 @@ namespace {
 		uint64_t inspectId = 0;
 		std::string inspectType;
 	};
+	const char* MovementBoundsIssueText(EditorLanguage language, std::string_view issue) {
+		auto text = [language](const char* ja, const char* en) { return SelectEditorText(language, ja, en); };
+		if (issue == "MovementBounds:Player") return text("一つだけ存在するルートのPlayerに追加し、PlayerBehaviorを有効にしてください。", "Add this to the unique root Player and enable PlayerBehavior.");
+		if (issue == "MovementBounds:Body") return text("PlayerのPhysicsBodyを有効にしてDynamicに設定してください。", "Enable PhysicsBody on Player and set it to Dynamic.");
+		if (issue == "MovementBounds:Collider") return text("移動用Colliderを有効にし、Triggerを解除して寸法を確認してください。", "Enable the movement collider, disable Trigger and check its dimensions.");
+		if (issue == "MovementBounds:Shape") return text("形状をボックスか円から選択してください。", "Choose Box or Circle.");
+		if (issue == "MovementBounds:Dimensions") return text("中心には有限値、半幅と半径には正の値を入力してください。", "Enter a finite center and positive half-extents and radius.");
+		if (issue == "MovementBounds:Appearance") return text("表示距離と線幅を正の値にし、高さと色を確認してください。", "Use positive reveal distance and line width and check height and color.");
+		if (issue == "MovementBounds:Duplicate") return text("Playerに移動範囲を一つだけ残してください。", "Keep one movement boundary on Player.");
+		if (issue == "MovementBounds:Fit") return text("移動用Colliderが収まるように範囲を広げてください。", "Enlarge the boundary to fit the movement collider.");
+		return text("範囲内に安全な位置を確保できません。開始位置、範囲、壁の配置を確認してください。",
+			"No safe position is available within the boundary. Check the start position, bounds, and walls.");
+	}
+
+	void DrawMovementBoundsFields(EditorLanguage language, SceneDocument& document, const SceneEntity& owner,
+		SceneComponent& component, bool editable) {
+		auto text = [language](const char* ja, const char* en) { return SelectEditorText(language, ja, en); };
+		const char* rejected = text("移動範囲の設定を適用できません###MovementBoundsFieldsRejected",
+			"Movement Bounds Settings Rejected###MovementBoundsFieldsRejected");
+		// 拒否理由は静的な識別子。モーダルを閉じるまでDocumentを変更せず保持する。
+		static const char* rejectedIssue = nullptr;
+		auto draft = component.movementBounds;
+		bool changed = false;
+		ImGui::BeginDisabled(!editable);
+		ImGui::SeparatorText(text("形状・範囲", "Shape and Area"));
+		const bool box = draft.shape == "Box";
+		if (ImGui::BeginCombo(text("形状", "Shape"), box ? text("ボックス", "Box") : text("円", "Circle"))) {
+			if (ImGui::Selectable(text("ボックス", "Box"), box)) { draft.shape = "Box"; changed = true; }
+			if (ImGui::Selectable(text("円", "Circle"), !box)) { draft.shape = "Circle"; changed = true; }
+			ImGui::EndCombo();
+		}
+		changed |= ImGui::DragFloat2(text("中心 X / Z", "Center X / Z"), &draft.center.x, 0.1f);
+		if (draft.shape == "Box") {
+			changed |= ImGui::DragFloat2(text("半幅 X / Z", "Half-extents X / Z"), &draft.halfExtents.x, 0.1f);
+			ImGui::Text("X [%.2f, %.2f]  Z [%.2f, %.2f]", double(draft.center.x) - draft.halfExtents.x,
+				double(draft.center.x) + draft.halfExtents.x, double(draft.center.y) - draft.halfExtents.y,
+				double(draft.center.y) + draft.halfExtents.y);
+		} else {
+			changed |= ImGui::DragFloat(text("半径", "Radius"), &draft.radius, 0.1f);
+		}
+		ImGui::SeparatorText(text("境界の表示", "Boundary Appearance"));
+		changed |= ImGui::Checkbox(text("プレイ中に表示", "Show During Play"), &draft.showBoundary);
+		changed |= ImGui::DragFloat(text("表示距離", "Reveal Distance"), &draft.revealDistance, 0.1f);
+		changed |= ImGui::DragFloat(text("表示高さ Y", "Display Height Y"), &draft.boundaryY, 0.01f);
+		changed |= ImGui::DragFloat(text("線幅", "Line Width"), &draft.lineWidth, 0.01f);
+		changed |= ImGui::ColorEdit4(text("色", "Color"), &draft.color.x);
+		ImGui::EndDisabled();
+		if (changed) {
+			rejectedIssue = component.enabled ? SceneMovementBounds::AuthoringIssue(document, owner, draft)
+				: SceneMovementBounds::SettingsIssue(draft);
+			if (rejectedIssue) {
+				ImGui::OpenPopup(rejected);
+			} else {
+				component.movementBounds = draft;
+				document.MarkDirty();
+			}
+		}
+		if (ImGui::BeginPopupModal(rejected, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::TextWrapped("%s", MovementBoundsIssueText(language, rejectedIssue ? rejectedIssue : ""));
+			if (ImGui::Button(text("閉じる", "Close"))) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		if (const char* issue = SceneMovementBounds::AuthoringIssue(document, owner, component.movementBounds))
+			ImGui::TextWrapped("%s", MovementBoundsIssueText(language, issue));
+		const char* reference = text("移動範囲のリファレンス###MovementBoundsReference", "Movement Bounds Reference###MovementBoundsReference");
+		if (ImGui::Button(reference)) ImGui::OpenPopup(reference);
+		if (ImGui::BeginPopup(reference)) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440.0f);
+			ImGui::TextWrapped("%s", text(
+				"Playerに追加し、編集中の輪郭を見ながらワールドXZの中心と大きさを合わせてから有効にします。Play中は移動用Colliderの外周が近づくと輪郭が濃くなります。高さYは平面の描画位置です。障害物と境界が競合した場合は直前の安全姿勢を使い、高さも戻る場合があります。",
+				"Add to Player, then use the editor outline to set the world XZ center and size before enabling it. During play, the outline fades in as the movement collider approaches. Height Y sets the drawing plane. When an obstacle blocks a correction, the last safe pose may also restore height."));
+			ImGui::PopTextWrapPos();
+			ImGui::EndPopup();
+		}
+	}
+
 	bool DrawStatSetFields(EditorLanguage language, SceneComponent& component,
 		const SceneManager* runtime, const SceneDocument* runtimeDocument, uint64_t entityId, bool editable) {
 		bool changed = false, reject = false;
@@ -13133,14 +13209,15 @@ void ImGuiManager::DrawSpawnPreparationWarning() {
 		case ScenePreparationDiagnosticCode::WaveMismatch: spawnWarningIssue_ = "WaveMismatch"; break;
 		default: spawnWarningIssue_.clear(); break;
 		}
-		if (diagnostic.detail.starts_with("DeathResponse:") || diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
+		if (diagnostic.detail.starts_with("MovementBounds:") || diagnostic.detail.starts_with("DeathResponse:") || diagnostic.detail.starts_with("FlowPreparation:") || diagnostic.detail.starts_with("SceneRestart:") || diagnostic.detail.starts_with("MenuRuntime:")) spawnWarningIssue_ = diagnostic.detail;
 	}
 	const bool death = spawnWarningIssue_.starts_with("DeathResponse:");
 	const bool flow = spawnWarningIssue_.starts_with("FlowPreparation:");
 	const bool restart = spawnWarningIssue_.starts_with("SceneRestart:");
 	const bool menu = spawnWarningIssue_.starts_with("MenuRuntime:");
 	const bool transition = spawnWarningIssue_.starts_with("SceneTransition:");
-	const char* title = death ? SelectEditorText(editorLanguage_, "死亡処理の操作を完了できません###SpawnPreparationWarning", "Death Operation Failed###SpawnPreparationWarning") : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました###SpawnPreparationWarning", "Scene Transition Problem###SpawnPreparationWarning") :
+	const bool movementBounds = spawnWarningIssue_.starts_with("MovementBounds:");
+	const char* title = movementBounds ? SelectEditorText(editorLanguage_, "移動範囲の設定に問題があります###SpawnPreparationWarning", "Movement Bounds Problem###SpawnPreparationWarning") : death ? SelectEditorText(editorLanguage_, "死亡処理の操作を完了できません###SpawnPreparationWarning", "Death Operation Failed###SpawnPreparationWarning") : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました###SpawnPreparationWarning", "Scene Transition Problem###SpawnPreparationWarning") :
 		menu ? SelectEditorText(editorLanguage_, "メニュー操作を完了できません###SpawnPreparationWarning", "Menu Operation Failed###SpawnPreparationWarning") :
 		restart ? SelectEditorText(editorLanguage_, "Sceneを再起動できません###SpawnPreparationWarning", "Scene Restart Failed###SpawnPreparationWarning") :
 		flow ? SelectEditorText(editorLanguage_, "ゲーム開始を準備できません###SpawnPreparationWarning", "Game Start Preparation Failed###SpawnPreparationWarning") :
@@ -13148,7 +13225,7 @@ void ImGuiManager::DrawSpawnPreparationWarning() {
 	if (spawnWarningRequested_) { ImGui::OpenPopup(title); spawnWarningRequested_ = false; }
 	if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
 	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 540.0f);
-	ImGui::TextWrapped("%s", death ? (spawnWarningRuntime_ ? SelectEditorText(editorLanguage_,"死亡停止は維持しています。原因と対処を確認してください。","Death remains stopped. Review the cause and corrective steps.") : SelectEditorText(editorLanguage_,"死亡演出の編集操作を完了できません。原因と対処を確認してください。","The death authoring operation could not complete. Review the cause and corrective steps.")) : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました。以下の原因と対処を確認してください。", "A scene transition problem occurred. Review the cause and corrective steps below.") :
+	ImGui::TextWrapped("%s", movementBounds ? SelectEditorText(editorLanguage_, "プレイヤーの移動範囲を適用できません。", "The player movement boundary could not be applied.") : death ? (spawnWarningRuntime_ ? SelectEditorText(editorLanguage_,"死亡停止は維持しています。原因と対処を確認してください。","Death remains stopped. Review the cause and corrective steps.") : SelectEditorText(editorLanguage_,"死亡演出の編集操作を完了できません。原因と対処を確認してください。","The death authoring operation could not complete. Review the cause and corrective steps.")) : transition ? SelectEditorText(editorLanguage_, "Sceneの切替処理で問題が発生しました。以下の原因と対処を確認してください。", "A scene transition problem occurred. Review the cause and corrective steps below.") :
 		menu ? SelectEditorText(editorLanguage_, "メニューまたはUI Eventの処理を完了できませんでした。以下の原因と対処を確認してください。", "A menu or UI event operation could not complete. Review the cause and corrective steps below.") :
 		restart ? SelectEditorText(editorLanguage_, "Sceneを再起動できませんでした。現在のSceneは維持しています。", "The scene could not restart. The current scene has been kept.") :
 		flow ? (spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "ゲーム開始・進行の処理を停止しました。", "Game preparation or progression has stopped.") :
@@ -13156,7 +13233,7 @@ void ImGuiManager::DrawSpawnPreparationWarning() {
 		(spawnWarningRuntime_ ? SelectEditorText(editorLanguage_, "このSpawnerの出現処理を停止しました。", "Spawning has stopped for this spawner.") :
 		SelectEditorText(editorLanguage_, "出現設定を適用できません。入力前の値を維持しています。", "Spawn settings could not be applied. Previous values have been kept.")));
 	if (!transition) ImGui::Text("%s: %llu", SelectEditorText(editorLanguage_, "対象ID", "Entity ID"), static_cast<unsigned long long>(spawnWarningEntityId_));
-	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (death ? LocalizeDeathIssue(editorLanguage_,spawnWarningIssue_) : transition ? (spawnWarningIssue_ == "SceneTransition:MainDock" ? mainDockTransitionIssueText_ : std::string(LocalizeTransitionFailure(spawnWarningDetail_))) : menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
+	ImGui::TextColored(ImVec4(1, 0.65f, 0.2f, 1), "%s", (movementBounds ? std::string(MovementBoundsIssueText(editorLanguage_, spawnWarningIssue_)) : death ? LocalizeDeathIssue(editorLanguage_,spawnWarningIssue_) : transition ? (spawnWarningIssue_ == "SceneTransition:MainDock" ? mainDockTransitionIssueText_ : std::string(LocalizeTransitionFailure(spawnWarningDetail_))) : menu ? LocalizeMenuRuntimeIssue(spawnWarningIssue_) : restart ? LocalizeSceneRestartIssue(spawnWarningIssue_) : flow ? LocalizeGameFlowIssue(spawnWarningIssue_) : LocalizeSpawnIssue(spawnWarningIssue_)).c_str());
 	if (ImGui::TreeNode(SelectEditorText(editorLanguage_, "診断原文（詳細）", "Diagnostic Details"))) { ImGui::TextWrapped("%s", spawnWarningDetail_.c_str()); ImGui::TreePop(); }
 	ImGui::PopTextWrapPos();
 	if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
@@ -16133,7 +16210,8 @@ void ImGuiManager::DrawInspectorWindow() {
 				continue;
 			}
 			ImGui::PushID(component.type.c_str());
-			const char* componentLabel = component.type == "StatTextDisplay" ? SelectEditorText(editorLanguage_,"能力値表示 (StatTextDisplay)","Stat Text Display (StatTextDisplay)") : component.type == "UICanvas" ? SelectEditorText(editorLanguage_,"UI画面 (UICanvas)","UI Canvas (UICanvas)") : component.type == "UITransform" ? SelectEditorText(editorLanguage_,"UI配置 (UITransform)","UI Layout (UITransform)") : component.type == "OBBCollider"
+			const char* componentLabel = component.type == "PlayerMovementBounds"
+				? SelectEditorText(editorLanguage_, "プレイヤー移動範囲", "Player Movement Bounds") : component.type == "StatTextDisplay" ? SelectEditorText(editorLanguage_,"能力値表示 (StatTextDisplay)","Stat Text Display (StatTextDisplay)") : component.type == "UICanvas" ? SelectEditorText(editorLanguage_,"UI画面 (UICanvas)","UI Canvas (UICanvas)") : component.type == "UITransform" ? SelectEditorText(editorLanguage_,"UI配置 (UITransform)","UI Layout (UITransform)") : component.type == "OBBCollider"
 				? "Collider"
 				: component.type.c_str();
 			const std::string componentHeaderLabel =
@@ -16161,13 +16239,27 @@ void ImGuiManager::DrawInspectorWindow() {
 				continue;
 			}
 			ImGui::BeginDisabled(entityLocked || !editorSession_->IsEditing());
-			if (ImGui::Checkbox(SelectEditorText(
-				editorLanguage_,
-				"有効###SceneComponentEnabled",
-				"Enabled###SceneComponentEnabled"
-			), &component.enabled)) {
-				document.MarkDirty();
-				editorSession_->RequestSceneReload();
+			bool componentEnabled = component.enabled;
+			const bool isMovementBounds = component.type == "PlayerMovementBounds";
+			const char* boundsEnableIssue = isMovementBounds
+				? SceneMovementBounds::AuthoringIssue(document, *entity, component.movementBounds) : nullptr;
+			const char* boundsEnablePopup = SelectEditorText(editorLanguage_,
+				"移動範囲を有効にできません###MovementBoundsEnableRejected",
+				"Cannot Enable Movement Bounds###MovementBoundsEnableRejected");
+			if (ImGui::Checkbox(SelectEditorText(editorLanguage_, "有効###SceneComponentEnabled",
+				"Enabled###SceneComponentEnabled"), &componentEnabled)) {
+				if (componentEnabled && boundsEnableIssue) {
+					ImGui::OpenPopup(boundsEnablePopup);
+				} else {
+					component.enabled = componentEnabled;
+					document.MarkDirty();
+					editorSession_->RequestSceneReload();
+				}
+			}
+			if (isMovementBounds && ImGui::BeginPopupModal(boundsEnablePopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+				ImGui::TextWrapped("%s", MovementBoundsIssueText(editorLanguage_, boundsEnableIssue ? boundsEnableIssue : ""));
+				if (ImGui::Button(SelectEditorText(editorLanguage_, "閉じる", "Close"))) ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
 			}
 			ImGui::SameLine();
 			const bool removeUI = component.type == "UICanvas" || component.type == "UITransform";
@@ -19845,6 +19937,8 @@ void ImGuiManager::DrawInspectorWindow() {
 					document.MarkDirty();
 				}
 				ImGui::EndDisabled();
+			} else if (component.type == "PlayerMovementBounds") {
+				DrawMovementBoundsFields(editorLanguage_, document, *entity, component, editorSession_->IsEditing() && !entityLocked);
 			} else if (component.type == "PlayerBehavior") {
 				if (ImGui::Button(SelectEditorText(editorLanguage_, "攻撃・被弾を編集###playerActionsLink", "Edit attack / hit reaction###playerActionsLink"), ImVec2(-1,0))) playerCombatContexts_[0].reveal = true;
 				ImGui::BeginDisabled(!editorSession_->IsEditing() || entityLocked);
@@ -22477,7 +22571,7 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 		const SceneValidationIssue& issue = issues[issueIndex];
 		ImGui::PushID(static_cast<int>(issueIndex));
 		if (issue.entityId != 0 && document.FindEntity(issue.entityId)) {
-			if (ImGui::SmallButton((issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("StatText:") || issue.message.starts_with("DeathResponse:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
+			if (ImGui::SmallButton((issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("StatText:") || issue.message.starts_with("DeathResponse:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
 				prefabSelectedEntityId_ = issue.entityId;
 			}
 			ImGui::SameLine();
@@ -22488,9 +22582,9 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 				? ImVec4(0.95f, 0.35f, 0.3f, 1.0f)
 				: ImVec4(0.95f, 0.65f, 0.25f, 1.0f),
 			"[%s] %s",
-			(issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
+			(issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("GameFlowEvent:") || issue.message.starts_with("StatText:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? (isError ? SelectEditorText(editorLanguage_, "エラー", "Error") : SelectEditorText(editorLanguage_, "警告", "Warning")) : (isError ? "Error" : "Warning"),
 			((issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:")) ? std::string(EnemyPositioningIssue(editorLanguage_, issue.message)) :
-			(issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
+			(issue.message.starts_with("MovementBounds:") ? std::string(MovementBoundsIssueText(editorLanguage_, issue.message)) : issue.message.starts_with("GameFlowEvent:") ? std::string(GameFlowEventIssue(editorLanguage_,issue.message)) : issue.message.starts_with("StatText:") ? std::string(StatTextIssue(editorLanguage_,issue.message)) : issue.message.starts_with("DeathResponse:") ? LocalizeDeathIssue(editorLanguage_,issue.message) : issue.message.starts_with("Health:") ? LocalizeHealthIssue(editorLanguage_, issue.message) : issue.message.starts_with("StatFlags:") ? LocalizeStatFlagIssue(editorLanguage_, issue.message) : issue.message.starts_with("EventKeys:") ? LocalizeMenuIssue(issue.message) : issue.message.starts_with("MenuRuntime:") ? LocalizeMenuRuntimeIssue(issue.message) : issue.message.starts_with("SceneRestart:") ? LocalizeSceneRestartIssue(issue.message) : issue.message.starts_with("FlowPreparation:") ? LocalizeGameFlowIssue(issue.message) : issue.message.starts_with("SpawnPreparation:") ? LocalizeSpawnIssue(issue.message) :
 			((issue.message.starts_with("Menu runtime:") || issue.message.starts_with("MenuItem marker") || issue.message.starts_with("MenuItem selection marker")) ? LocalizeMenuIssue(issue.message) : issue.message))).c_str()
 		);
 		ImGui::PopID();

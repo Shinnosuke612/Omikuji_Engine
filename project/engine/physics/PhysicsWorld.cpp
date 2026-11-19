@@ -410,6 +410,32 @@ void PhysicsWorld::Step(float deltaTime) {
 	}
 }
 
+bool PhysicsWorld::IsPlacementBlocked(const PhysicsBody& body) const {
+	return CollidesWithStatic(body);
+}
+
+bool PhysicsWorld::IsPlanarCorrectionBlocked(const PhysicsBody& body, const Vector3& delta) const {
+	if (!body.collider) return true;
+	ColliderSweepShape moving;
+	if (!CaptureColliderSweepShape(*body.collider, moving)) return true;
+	auto blocks = [&](const Collider* obstacle) {
+		if (!obstacle || obstacle == body.collider || obstacle->IsTrigger() ||
+			!body.collider->CanCollideWith(*obstacle)) return false;
+		ColliderSweepShape shape;
+		if (!CaptureColliderSweepShape(*obstacle, shape)) return true;
+		ColliderSweepHit hit;
+		const auto result = SweepColliderTranslation(moving, delta, shape, {}, hit);
+		if (result == ColliderSweepResult::Invalid) return true;
+		// 地面や壁に接している状態から離れる/沿う補正は通す。終点は別に検査する。
+		return result == ColliderSweepResult::Hit &&
+			(!hit.initialOverlap || Math::Dot(delta, hit.normal) < 0.0f);
+	};
+	for (const auto* other : bodies_) {
+		if (other && other != &body && other->type != PhysicsBodyType::Dynamic && blocks(other->collider)) return true;
+	}
+	return std::any_of(staticColliders_.begin(), staticColliders_.end(), blocks);
+}
+
 bool PhysicsWorld::CollidesWithStatic(const PhysicsBody& body) const {
 	if (!body.collider || body.collider->IsTrigger()) {
 		return false;

@@ -16,6 +16,9 @@ public:
 	// Physicsとcontrolled攻撃時計が共有する秒数。非有限値は進めない。
 	static float EffectiveStepDelta(float deltaTime);
 	void Step(float deltaTime);
+	// 確定前の姿勢と補正区間を、既存の静的障害物と同じ登録集合で照会する。
+	bool IsPlacementBlocked(const PhysicsBody& body) const;
+	bool IsPlanarCorrectionBlocked(const PhysicsBody& body, const Vector3& delta) const;
 
 	void SetGravity(const Vector3& gravity) { gravity_ = gravity; }
 	const Vector3& GetGravity() const { return gravity_; }

@@ -151,9 +151,9 @@
           1.0
         ],
         "scale": [
-          100.0,
+          1000.0,
           1.0,
-          100.0
+          1000.0
         ],
         "translate": [
           0.0,
@@ -1562,6 +1562,31 @@
           "stateName": "Idle",
           "triggerMode": "MinimumDamage",
           "type": "HitReaction"
+        },
+        {
+          "boundaryY": 0.029999999329447746,
+          "center": [
+            0.0,
+            0.0
+          ],
+          "color": [
+            0.20000000298023224,
+            0.8500000238418579,
+            1.0,
+            0.8500000238418579
+          ],
+          "enabled": true,
+          "halfExtents": [
+            100.0,
+            100.0
+          ],
+          "lineWidth": 0.07999999821186066,
+          "localId": 15,
+          "radius": 25.0,
+          "revealDistance": 7.099999904632568,
+          "shape": "Box",
+          "showBoundary": true,
+          "type": "PlayerMovementBounds"
         }
       ],
       "folder": false,
@@ -12457,5 +12482,5 @@
   },
   "sceneName": "GAMEPLAY",
   "teams": [],
-  "version": 37
+  "version": 41
 }

@@ -221,6 +221,16 @@ bool SceneValidator::ValidateDocument(
 	size_t gamePauseCount = 0;
 	for (const SceneEntity& owner : document.GetEntities()) {
 		for (const SceneComponent& setting : owner.components) {
+			if (setting.type == "PlayerMovementBounds") {
+				if (std::count_if(owner.components.begin(), owner.components.end(),
+					[](const auto& c) { return c.type == "PlayerMovementBounds"; }) > 1)
+					addIssue(SceneValidationSeverity::Error, owner.id, "MovementBounds:Duplicate");
+				if (const char* issue = SceneMovementBounds::SettingsIssue(setting.movementBounds)) {
+					addIssue(SceneValidationSeverity::Error, owner.id, issue);
+				} else if (const char* issue = SceneMovementBounds::AuthoringIssue(document, owner, setting.movementBounds)) {
+					addIssue(setting.enabled ? SceneValidationSeverity::Error : SceneValidationSeverity::Warning, owner.id, issue);
+				}
+			}
 			if (setting.type == "EventTrigger") {
 				for (const auto& binding : setting.eventBindings) for (const auto& action : binding.actions) {
 					if (action.type == "RestartScene" && binding.executionDomain != "Gameplay")

@@ -325,6 +325,7 @@ RuntimePrepareStep RuntimeScene::StepPreparedRuntime(
 	}
 	if (initialPreparationStage_ == InitialPreparationStage::InitialPhysics) {
 		auto* document = GetSceneDocument();
+		ApplyInitialBindingPhysics(*document, true);
 		attachmentSystem_.Update(*document, objectSystem_, runtimeObjectBindings_);
 		cameraSystem_.UpdateTransitionHold(*document, camera_, player_, runtimeObjectBindings_);
 		initialPreparationStage_ = InitialPreparationStage::Environment;
@@ -357,6 +358,14 @@ RuntimePrepareStep RuntimeScene::StepPreparedRuntime(
 	if (initialPreparationStage_ == InitialPreparationStage::Lighting) {
 		const auto step = lightingSystem_.StepPrepared(*GetSceneDocument(), budget, diagnostic);
 		if (step != RuntimePrepareStep::Ready) return step;
+		initialPreparationStage_ = InitialPreparationStage::Boundary;
+		return RuntimePrepareStep::Progress;
+	}
+	if (initialPreparationStage_ == InitialPreparationStage::Boundary) {
+		auto* dx = Object3dCommon::GetInstance()->GetDxCommon();
+		const auto step = effectRenderSystem_.StepPreparedBoundary(*dx, budget, diagnostic);
+		if (step != RuntimePrepareStep::Ready) return step;
+		effectRenderSystem_.SetMovementBoundary(physicsSystem_.MovementBoundsFrame(*GetSceneDocument(), false));
 		monitorSystem_.Initialize(dx, SrvManager::GetInstance());
 		initialPreparationStage_ = InitialPreparationStage::GroundCracks;
 		return RuntimePrepareStep::Progress;
@@ -448,6 +457,28 @@ void RuntimeScene::InitializeScenePlayer(SceneDocument* initialDocument) {
 	));
 }
 
+void RuntimeScene::InitializeSceneBindings(SceneDocument& document, bool playing) {
+	objectSystem_.BuildBindings(
+		document,
+		runtimeObjectBindings_
+	);
+	ApplyInitialBindingPhysics(document, playing);
+}
+
+void RuntimeScene::ApplyInitialBindingPhysics(SceneDocument& document, bool playing) {
+	auto* owner = document.FindEntityByName("Player");
+	if (playing && owner && SceneEntityQuery::FindEnabledComponent(*owner, "PlayerMovementBounds")) {
+		// 初回描画と開始案内より前に、Runtimeコピーだけを範囲内へ置く。
+		physicsSystem_.SyncSceneSettings(document, player_, runtimeObjectBindings_, false);
+		physicsSystem_.Step(player_, runtimeObjectBindings_, 0.0f, true, &document);
+		player_->PostPhysicsUpdate();
+		if (player_->GetObject()) {
+			SynchronizeSceneTransform(owner->transform, player_->GetObject()->GetTransform());
+			objectSystem_.RefreshTransforms(document, {owner->id});
+		}
+	}
+}
+
 void RuntimeScene::Initialize()
 {
 	// PlayerはObjectSystemのObjectを借用するため、Objectを最初に構築する。
@@ -482,10 +513,7 @@ void RuntimeScene::Initialize()
 		Object3dCommon::GetInstance()->GetDxCommon()
 	);
 	if (initialDocument) {
-		objectSystem_.BuildBindings(
-			*initialDocument,
-			runtimeObjectBindings_
-		);
+		InitializeSceneBindings(*initialDocument, initialPlaying);
 		environmentSystem_.Sync(
 			initialDocument,
 			runtimeObjectBindings_
@@ -505,6 +533,9 @@ void RuntimeScene::Initialize()
 	effectRenderSystem_.Initialize(
 		Object3dCommon::GetInstance()->GetDxCommon()
 	);
+	if (initialDocument) {
+		effectRenderSystem_.SetMovementBoundary(physicsSystem_.MovementBoundsFrame(*initialDocument, initialEditing));
+	}
 	textRenderSystem_.Initialize(
 		Object3dCommon::GetInstance()->GetDxCommon(),
 		GetSceneAssetId() + "_" + std::to_string(GetSceneInstanceId())
@@ -1445,6 +1476,7 @@ void RuntimeScene::Update(float deltaTime)
 	} else if (camera_) {
 		camera_->Update();
 	}
+	RefreshMovementBoundary(editing);
 	// Transform確定後に環境設定とDebug形状を登録し、描画時の状態を揃える。
 	environmentSystem_.Sync(activeDocument, runtimeObjectBindings_);
 	if (activeDocument && playing) {
@@ -1633,6 +1665,7 @@ void RuntimeScene::Update(float deltaTime)
 
 void RuntimeScene::UpdateGamePaused(float uiDeltaTime)
 {
+	RefreshMovementBoundary(false);
 	ApplyPendingUiAudio();
 	auto* document = GetSceneDocument();
 	if (!document) return;
@@ -1662,6 +1695,7 @@ void RuntimeScene::UpdateGamePaused(float uiDeltaTime)
 
 void RuntimeScene::UpdateTransitionHold()
 {
+	RefreshMovementBoundary(false);
 	SceneDocument* document = GetSceneDocument();
 	if (!document) {
 		return;
@@ -1697,6 +1731,7 @@ void RuntimeScene::UpdatePaused()
 	PrepareGameFlowTextOverrides(false);
 	const auto* context = sceneManager_ ? sceneManager_->GetExecutionContext() : nullptr;
 	textRenderSystem_.Sync(GetSceneDocument(), context && context->IsEditing() ? nullptr : &statSystem_);
+	RefreshMovementBoundary(context && context->IsEditing());
 	SceneDocument* document = GetSceneDocument();
 	lightingSystem_.Sync(document);
 #if defined(_DEBUG) || defined(DEVELOPMENT)
@@ -1715,6 +1750,26 @@ void RuntimeScene::UpdatePaused()
 		true
 	);
 #endif
+}
+
+void RuntimeScene::RefreshMovementBoundary(bool editing) {
+	const auto* document = GetSceneDocument();
+	effectRenderSystem_.SetMovementBoundary(document ? physicsSystem_.MovementBoundsFrame(*document, editing) : SceneMovementBoundsFrame{});
+	const char* issue = document && !editing ? physicsSystem_.MovementBoundsIssue(*document) : nullptr;
+	if (!issue) {
+		movementBoundsReportedGeneration_ = 0;
+		return;
+	}
+	const auto generation = document->GetContentGeneration();
+	if (movementBoundsReportedGeneration_ == generation) return;
+	movementBoundsReportedGeneration_ = generation;
+	const auto* owner = document->FindEntityByName("Player");
+	preparationDiagnostic_ = {ScenePreparationDiagnosticCode::InvalidReference, generation,
+		owner ? owner->id : 0, ++preparationDiagnosticSerial_, issue};
+}
+
+void RuntimeScene::BeginRenderFrame(uint64_t serial) {
+	effectRenderSystem_.BeginRenderFrame(serial);
 }
 
 void RuntimeScene::Draw()

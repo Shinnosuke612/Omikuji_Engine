@@ -7,6 +7,8 @@
 #include "../../SceneRuntimeObjectBinding.h"
 #include "../../../../engine/physics/PhysicsWorld.h"
 #include "../../../../engine/collision/Collider.h"
+#include "../../../../engine/scene/SceneMovementBounds.h"
+#include <optional>
 
 class Collider;
 class Object3d;
@@ -112,9 +114,19 @@ public:
 		float maxDistance,
 		SceneStaticRaycastHit& outHit
 	) const;
+	// 内容世代とPlayer IDが一致する確定済みの範囲だけを描画へ渡す。
+	SceneMovementBoundsFrame MovementBoundsFrame(const SceneDocument& document, bool editing) const;
+	const char* MovementBoundsIssue(const SceneDocument& document) const;
 	void Clear();
 
 private:
+	bool ConstrainPlayer(Player& player, const SceneDocument& document, const SceneEntity& owner,
+		const SceneComponent& component);
+	// 姿勢と診断はRuntime専用。DocumentやColliderの借用ポインタを残さない。
+	uint64_t boundsGeneration_ = 0, boundsOwner_ = 0;
+	std::optional<Transform> boundsSafePose_;
+	SceneMovementBoundsFrame boundsFrame_;
+	const char* boundsIssue_ = nullptr;
 	void ApplyPlayerBehavior(
 		const SceneDocument& document,
 		Player* player

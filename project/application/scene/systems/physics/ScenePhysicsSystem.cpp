@@ -438,14 +438,17 @@ void ScenePhysicsSystem::Step(
 		return;
 	}
 
+	const auto* playerEntity = document ? document->FindEntityByName("Player") : nullptr;
+	const auto* bounds = playerEntity && SceneEntityQuery::IsEntityActiveInHierarchy(*document, *playerEntity)
+		? SceneEntityQuery::FindEnabledComponent(*playerEntity, "PlayerMovementBounds") : nullptr;
+	const bool hasPlayer = player && player->GetObject();
+
 	// BodyとColliderは非所有なので、現在のbindingsからWorld登録を毎Step再構築する。
 	physicsWorld_.Clear();
 	for (Collider* collider : staticColliders_) {
 		physicsWorld_.AddStaticCollider(collider);
 	}
-	if (player && player->GetObject()) {
-		physicsWorld_.AddBody(&player->GetPhysicsBody());
-	}
+	if (hasPlayer && !bounds) physicsWorld_.AddBody(&player->GetPhysicsBody());
 	for (const SceneRuntimeObjectBinding& binding : bindings) {
 		if (
 			!binding.entity ||
@@ -459,7 +462,27 @@ void ScenePhysicsSystem::Step(
 	}
 
 	PlayerColliderScope playerCollider(player);
-	const auto* playerEntity=document?document->FindEntityByName("Player"):nullptr;
+	bool advancePlayer = hasPlayer;
+	if (!bounds || (document && boundsGeneration_ != document->GetContentGeneration()) ||
+		(playerEntity && boundsOwner_ != playerEntity->id)) {
+		boundsSafePose_.reset();
+		boundsFrame_ = {};
+		boundsIssue_ = nullptr;
+	}
+	std::optional<Transform> boundsStepStart;
+	if (hasPlayer && bounds) {
+		const auto before = playerCollider.collider ? playerCollider.collider->GetWorldCenter() : Vector3{};
+		advancePlayer = ConstrainPlayer(*player, *document, *playerEntity, *bounds);
+		if (playerCollider.collider) {
+			playerCollider.shapeOffset = Math::Add(playerCollider.shapeOffset,
+				Math::Subtract(playerCollider.collider->GetWorldCenter(), before));
+		}
+		if (advancePlayer) {
+			auto& body = player->GetPhysicsBody();
+			boundsStepStart = *body.transform;
+			physicsWorld_.AddBody(&body);
+		}
+	}
 	std::vector<ControlledPath> paths;
 	std::vector<ControlledShape> shapes;
 	if (document && !controlled.empty()) {
@@ -516,6 +539,12 @@ void ScenePhysicsSystem::Step(
 		}
 	}
 	physicsWorld_.Step(deltaTime);
+	// controlled contactとCombatが読む前に、同じ実ColliderとObjectを補正位置へ同期する。
+	if (boundsStepStart && !ConstrainPlayer(*player, *document, *playerEntity, *bounds)) {
+		auto& body = player->GetPhysicsBody();
+		*body.transform = *boundsStepStart;
+		body.SynchronizeTransform();
+	}
 	if (document && !paths.empty()) {
 		for (auto& shape : shapes) {
 			ColliderSweepShape end;
@@ -708,7 +737,100 @@ bool ScenePhysicsSystem::RaycastStatic(
 	return found;
 }
 
+bool ScenePhysicsSystem::ConstrainPlayer(Player& player, const SceneDocument& document,
+	const SceneEntity& owner, const SceneComponent& component) {
+	boundsGeneration_ = document.GetContentGeneration();
+	boundsOwner_ = owner.id;
+	boundsFrame_ = {};
+	boundsIssue_ = SceneMovementBounds::TargetIssue(document, owner);
+	auto& body = player.GetPhysicsBody();
+	const auto& settings = component.movementBounds;
+	if (!boundsIssue_) boundsIssue_ = SceneMovementBounds::SettingsIssue(settings);
+	auto stop = [&](const char* reason) {
+		boundsIssue_ = reason;
+		body.velocity = {};
+		return false;
+	};
+	if (boundsIssue_) return stop(boundsIssue_);
+	if (!body.transform || !body.collider || !body.collider->IsActive() || body.collider->IsTrigger())
+		return stop("MovementBounds:Collider");
+
+	SceneMovementBoundsPlacement placement;
+	auto solve = [&] {
+		ColliderSweepShape shape;
+		return CaptureColliderSweepShape(*body.collider, shape) &&
+			SceneMovementBounds::Solve(settings, shape, placement);
+	};
+	const Transform candidate = *body.transform;
+	constexpr float tolerance = 1.0e-5f;
+	auto needsCorrection = [&] {
+		return std::abs(placement.correction.x) > tolerance || std::abs(placement.correction.y) > tolerance;
+	};
+	bool accepted = solve();
+	bool restored = false;
+	if (accepted && needsCorrection()) {
+		const Vector3 delta{placement.correction.x, 0, placement.correction.y};
+		accepted = (!body.freezePositionX || std::abs(delta.x) <= tolerance) &&
+			(!body.freezePositionZ || std::abs(delta.z) <= tolerance) &&
+			!physicsWorld_.IsPlanarCorrectionBlocked(body, delta);
+		if (accepted) {
+			body.transform->translate.x += delta.x;
+			body.transform->translate.z += delta.z;
+			body.SynchronizeTransform();
+			accepted = solve() && !needsCorrection() && !physicsWorld_.IsPlacementBlocked(body);
+		}
+	}
+	if (!accepted && boundsSafePose_) {
+		// 壁と境界が競合した場合、押し戻しを反復せず前回の安全姿勢を再検査する。
+		*body.transform = *boundsSafePose_;
+		body.SynchronizeTransform();
+		accepted = solve() && !needsCorrection() && !physicsWorld_.IsPlacementBlocked(body);
+		restored = accepted;
+	}
+	if (!accepted) {
+		*body.transform = candidate;
+		body.SynchronizeTransform();
+		return stop("MovementBounds:Placement");
+	}
+	if (!physicsWorld_.IsPlacementBlocked(body)) boundsSafePose_ = *body.transform;
+	if (restored && body.transform->translate.y != candidate.translate.y) body.velocity.y = 0;
+	const auto velocity = restored ? Vector2{} : SceneMovementBounds::RestrictVelocity(placement, {body.velocity.x, body.velocity.z});
+	body.velocity.x = velocity.x;
+	body.velocity.z = velocity.y;
+
+	if (settings.showBoundary) {
+		const double approach = std::clamp(1.0 - placement.clearance / settings.revealDistance, 0.0, 1.0);
+		boundsFrame_ = {settings, static_cast<float>(approach * approach * (3.0 - 2.0 * approach))};
+	}
+	return true;
+}
+
+SceneMovementBoundsFrame ScenePhysicsSystem::MovementBoundsFrame(const SceneDocument& document, bool editing) const {
+	const auto* owner = document.FindEntityByName("Player");
+	if (!owner || !SceneEntityQuery::IsEntityActiveInHierarchy(document, *owner)) return {};
+	if (editing) {
+		const auto* component = SceneEntityQuery::FindComponent(*owner, "PlayerMovementBounds");
+		if (component && !SceneMovementBounds::SettingsIssue(component->movementBounds))
+			return {component->movementBounds, 1.0f};
+		return {};
+	}
+	if (boundsGeneration_ != document.GetContentGeneration() || boundsOwner_ != owner->id ||
+		!SceneEntityQuery::FindEnabledComponent(*owner, "PlayerMovementBounds")) return {};
+	return boundsFrame_;
+}
+
+const char* ScenePhysicsSystem::MovementBoundsIssue(const SceneDocument& document) const {
+	if (!boundsIssue_ || boundsGeneration_ != document.GetContentGeneration()) return nullptr;
+	const auto* owner = document.FindEntity(boundsOwner_);
+	return owner && SceneEntityQuery::IsEntityActiveInHierarchy(document, *owner) &&
+		SceneEntityQuery::FindEnabledComponent(*owner, "PlayerMovementBounds") ? boundsIssue_ : nullptr;
+}
+
 void ScenePhysicsSystem::Clear() {
+	boundsGeneration_ = boundsOwner_ = 0;
+	boundsSafePose_.reset();
+	boundsFrame_ = {};
+	boundsIssue_ = nullptr;
 	physicsWorld_.Clear();
 	staticColliders_.clear();
 }

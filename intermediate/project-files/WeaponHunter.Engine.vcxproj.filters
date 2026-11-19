@@ -109,6 +109,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\effect\GroundCrackRenderer.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\effect\LightningRenderer.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\effect\LightningRenderer.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\effect\MovementBoundaryRenderer.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\effect\MovementBoundaryRenderer.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\effect\WaterSurfaceRenderer.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\effect\WaterSurfaceRenderer.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\io\Input.cpp"><Filter>Engine</Filter></ClCompile>
@@ -201,6 +203,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneManager.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneMenuLayout.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneMenuRuntime.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneMovementBounds.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneMovementBounds.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\ScenePreparation.h"><Filter>Engine</Filter></ClInclude>

@@ -1702,6 +1702,17 @@ namespace {
 			result["active"] = component.colliderActive;
 			result["layer"] = component.colliderLayer;
 			result["mask"] = component.colliderMask;
+		} else if (component.type == "PlayerMovementBounds") {
+			const auto& bounds = component.movementBounds;
+			result["shape"] = bounds.shape;
+			result["center"] = VectorToJson(bounds.center);
+			result["halfExtents"] = VectorToJson(bounds.halfExtents);
+			result["radius"] = bounds.radius;
+			result["showBoundary"] = bounds.showBoundary;
+			result["revealDistance"] = bounds.revealDistance;
+			result["boundaryY"] = bounds.boundaryY;
+			result["lineWidth"] = bounds.lineWidth;
+			result["color"] = VectorToJson(bounds.color);
 		} else if (component.type == "PlayerBehavior") {
 			result["moveSpeed"] = component.playerMoveSpeed;
 			result["jumpVelocity"] = component.playerJumpVelocity;
@@ -4062,6 +4073,26 @@ namespace {
 				if (component.type == "DeathResponse") {
 					component.deathResponseFlagId = value.value("flagId", std::string{});
 					component.deathResponseScope = value.value("scope", std::string{"Target"});
+				}
+				if (component.type == "PlayerMovementBounds") {
+					auto& bounds = component.movementBounds;
+					bounds.shape = value.value("shape", bounds.shape);
+					auto requireVector = [&](const char* key, size_t count) -> const json& {
+						const auto& field = value.at(key);
+						if (!field.is_array() || field.size() != count ||
+							!std::all_of(field.begin(), field.end(), [](const json& n) { return n.is_number(); })) {
+							throw json::type_error::create(302, "MovementBounds:Dimensions", &field);
+						}
+						return field;
+					};
+					if (value.contains("center")) bounds.center = JsonToVector(requireVector("center", 2), bounds.center);
+					if (value.contains("halfExtents")) bounds.halfExtents = JsonToVector(requireVector("halfExtents", 2), bounds.halfExtents);
+					bounds.radius = value.value("radius", bounds.radius);
+					bounds.showBoundary = value.value("showBoundary", bounds.showBoundary);
+					bounds.revealDistance = value.value("revealDistance", bounds.revealDistance);
+					bounds.boundaryY = value.value("boundaryY", bounds.boundaryY);
+					bounds.lineWidth = value.value("lineWidth", bounds.lineWidth);
+					if (value.contains("color")) bounds.color = JsonToVector(requireVector("color", 4), bounds.color);
 				}
 				if (component.type == "StatTextDisplay") {
 					component.statTextStatsEntityId = value.value("statsEntityId", uint64_t{0});
@@ -8976,6 +9007,9 @@ bool SceneDocument::AddComponent(uint64_t id, const std::string& type) {
 		component.physicsFriction = 0.0f;
 		component.physicsMaxFallSpeed = 100.0f;
 		component.physicsVelocity = { 0.0f, 0.0f, 0.0f };
+	} else if (type == "PlayerMovementBounds") {
+		// 範囲を合わせてから有効化できるよう、制作時の追加は無効で始める。
+		component.enabled = false;
 	} else if (type == "PlayerBehavior") {
 		component.playerMoveSpeed = 10.8f;
 		component.playerJumpVelocity = 37.2f;

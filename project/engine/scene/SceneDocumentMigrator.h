@@ -7,7 +7,7 @@
 
 class SceneDocumentMigrator final {
 public:
-	static constexpr int kCurrentVersion = 37;
+	static constexpr int kCurrentVersion = 41;
 
 	static bool Migrate(
 		nlohmann::json& root,

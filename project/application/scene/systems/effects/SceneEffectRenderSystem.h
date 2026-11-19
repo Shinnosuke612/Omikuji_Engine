@@ -6,12 +6,14 @@
 #include <vector>
 
 #include "SceneRuntimeEffectSystem.h"
+#include "../../../../engine/scene/SceneMovementBounds.h"
 #include "../../../../engine/scene/SceneRuntimePreparation.h"
 
 class Camera;
 class DirectXCommon;
 class LightningRenderer;
 class GroundCrackRenderer;
+class MovementBoundaryRenderer;
 class SceneDocument;
 class SceneEnvironmentSystem;
 class SceneObjectSystem;
@@ -24,9 +26,13 @@ public:
 	~SceneEffectRenderSystem();
 
 	void Initialize(DirectXCommon* dxCommon);
+	RuntimePrepareStep StepPreparedBoundary(DirectXCommon&, const SceneRuntimePrepareBudget&, std::string&);
 	// 候補所有のRendererだけを進める。Ready前にSpawn/Drawへ出さない。
 	RuntimePrepareStep StepPreparedGroundCracks(DirectXCommon&, const SceneRuntimePrepareBudget&, std::string&);
 	void Update(float deltaTime);
+	// Runtimeが確定した値を所有する。Drawでは位置や表示濃度を再評価しない。
+	void SetMovementBoundary(SceneMovementBoundsFrame frame);
+	void BeginRenderFrame(uint64_t serial);
 	void SpawnGroundCracks(const std::vector<SceneGroundCrackSpawnRequest>& requests);
 	void SetDeferForegroundEffects(bool defer) {
 		deferForegroundEffects_ = defer;
@@ -60,5 +66,7 @@ private:
 
 	std::unique_ptr<LightningRenderer> lightningRenderer_;
 	std::unique_ptr<GroundCrackRenderer> groundCrackRenderer_;
+	std::unique_ptr<MovementBoundaryRenderer> boundaryRenderer_;
+	SceneMovementBoundsFrame boundaryFrame_;
 	bool deferForegroundEffects_ = false;
 };

@@ -4,6 +4,8 @@
 #include "../rendering/SceneEnvironmentSystem.h"
 #include "../rendering/SceneObjectSystem.h"
 #include "../../../../engine/effect/GroundCrackRenderer.h"
+#include "../../../../engine/effect/MovementBoundaryRenderer.h"
+#include <utility>
 #include "../../../../engine/3d/Camera.h"
 #include "../../../../engine/effect/LightningRenderer.h"
 #include "../../../../engine/particle/ParticleManager.h"
@@ -89,6 +91,23 @@ void SceneEffectRenderSystem::Initialize(DirectXCommon* dxCommon) {
 	lightningRenderer_->Initialize(dxCommon);
 	groundCrackRenderer_ = std::make_unique<GroundCrackRenderer>();
 	groundCrackRenderer_->Initialize(dxCommon);
+	boundaryRenderer_ = std::make_unique<MovementBoundaryRenderer>(dxCommon);
+}
+
+RuntimePrepareStep SceneEffectRenderSystem::StepPreparedBoundary(DirectXCommon& dx,
+	const SceneRuntimePrepareBudget& budget, std::string& diagnostic) {
+	if (!boundaryRenderer_) boundaryRenderer_ = std::make_unique<MovementBoundaryRenderer>(&dx);
+	for (;;) {
+		auto remaining = budget;
+		const auto step = boundaryRenderer_->StepPrepared(remaining, diagnostic);
+		if (step == RuntimePrepareStep::Ready) break;
+		if (step != RuntimePrepareStep::Pending) return step;
+		// 下位で同期処理の進捗がある場合だけ次の段階を実行する。
+		if (remaining.maxItems == budget.maxItems &&
+			remaining.maxResourceCreates == budget.maxResourceCreates &&
+			remaining.maxCopyBytes == budget.maxCopyBytes) return step;
+	}
+	return RuntimePrepareStep::Ready;
 }
 
 RuntimePrepareStep SceneEffectRenderSystem::StepPreparedGroundCracks(DirectXCommon& dx,
@@ -109,6 +128,14 @@ RuntimePrepareStep SceneEffectRenderSystem::StepPreparedGroundCracks(DirectXComm
 			remaining.maxCopyBytes == budget.maxCopyBytes) return step;
 	}
 	return RuntimePrepareStep::Ready;
+}
+
+void SceneEffectRenderSystem::SetMovementBoundary(SceneMovementBoundsFrame frame) {
+	boundaryFrame_ = std::move(frame);
+}
+
+void SceneEffectRenderSystem::BeginRenderFrame(uint64_t serial) {
+	if (boundaryRenderer_) boundaryRenderer_->BeginFrame(serial);
 }
 
 void SceneEffectRenderSystem::Update(float deltaTime) {
@@ -174,6 +201,7 @@ void SceneEffectRenderSystem::DrawScenePass(
 		lightningRenderer_->Draw(camera);
 	}
 	if (groundCrackRenderer_) { groundCrackRenderer_->Draw(camera); }
+	if (boundaryRenderer_) boundaryRenderer_->Draw(camera, boundaryFrame_);
 
 	if (deferForegroundEffects_) {
 		if (drawSharedParticles) DrawParticles(document, camera, false, advanceGpuSimulation);
@@ -242,6 +270,8 @@ void SceneEffectRenderSystem::DrawParticles(
 }
 
 void SceneEffectRenderSystem::Finalize() {
+	boundaryFrame_ = {};
+	boundaryRenderer_.reset();
 	if (groundCrackRenderer_) {
 		groundCrackRenderer_->Finalize();
 		groundCrackRenderer_.reset();

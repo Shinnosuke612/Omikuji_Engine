@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "SceneSettings.h"
+#include "SceneMovementBounds.h"
 #include "SceneReplayPresentation.h"
 #include "SceneEntityReference.h"
 #include "../math/Transform.h"
@@ -619,6 +620,7 @@ struct SceneComponent {
 	bool colliderActive = true;
 	uint32_t colliderLayer = 0xffffffffu;
 	uint32_t colliderMask = 0xffffffffu;
+	SceneMovementBoundsSettings movementBounds;
 	float playerMoveSpeed = 10.8f;
 	float playerJumpVelocity = 37.2f;
 	float playerTurnResponsiveness = 0.018f;

@@ -5,11 +5,11 @@
       "path": "intermediate/project-files/WeaponHunter.Common.props"
     },
     {
-      "contentHash": "AAEEA40708460258",
+      "contentHash": "93094C1D098F4E9B",
       "path": "intermediate/project-files/WeaponHunter.Engine.vcxproj"
     },
     {
-      "contentHash": "B3204D55385D55DF",
+      "contentHash": "702F1C27C6D59BDD",
       "path": "intermediate/project-files/WeaponHunter.Engine.vcxproj.filters"
     },
     {
@@ -33,6 +33,6 @@
       "path": "intermediate/project-files/WeaponHunter.vcxproj.filters"
     }
   ],
-  "inputIdentity": "EA4BBCC00E05679B",
+  "inputIdentity": "9D8A94050A3CDE77",
   "schemaVersion": 1
 }

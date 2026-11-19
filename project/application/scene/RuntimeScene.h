@@ -74,6 +74,7 @@ public:
 	bool SupportsTransitionHold() const override { return true; }
 	// 保持中は描画同期だけ。Event/Audio autoplay/SimulationのRuntime stateを変更しない。
 	void UpdateTransitionHold() override;
+	void BeginRenderFrame(uint64_t serial) override;
 	void Draw() override;
 	Camera* GetRenderCamera() const override;
 	// 現Document世代の全体敗北だけを公開。Pause/描画で時計を進めない。
@@ -130,11 +131,14 @@ public:
 private:
 	enum class InitialPreparationStage {
 		Idle, Cameras, Objects, ModelBindings, Player, BindingReferences, InitialPhysics,
-		Environment, Sprites, Text, Lighting, GroundCracks, Verify, Ready
+		Environment, Sprites, Text, Lighting, Boundary, GroundCracks, Verify, Ready
 	};
 	InitialPreparationStage initialPreparationStage_ = InitialPreparationStage::Idle;
 	size_t initialBindingCursor_ = 0;
 	void InitializeScenePlayer(SceneDocument* document);
+	void InitializeSceneBindings(SceneDocument& document, bool playing);
+	// 完成した文書順bindingだけを受け、候補/通常初期化で同じ範囲補正を行う。
+	void ApplyInitialBindingPhysics(SceneDocument& document, bool playing);
 	const SceneUIEditorView* GetEditorUIView() const;
 	void SyncMenuPresentation();
 	void SyncMenuPresentationForOwnDocument();
@@ -156,6 +160,8 @@ private:
 	// 同世代の遷移hold/Pauseでは、進行済みの文字を保持する。
 	void PrepareGameFlowTextOverrides(bool reset);
 	// 発生元のserialを独立に照合し、Editor向けにはScene内で一意のserialへ束ねる。
+	void RefreshMovementBoundary(bool editing);
+	uint64_t movementBoundsReportedGeneration_ = 0;
 	void ReportPreparationDiagnostic(const ScenePreparationDiagnostic& diagnostic, uint64_t& sourceSerial);
 	// 再読込拒否/失敗だけを既存の言語対応Popup/ログ経路へ渡す。Scene進行は停止しない。
 	void ReportSceneRestartFailure(const std::string& detail);
