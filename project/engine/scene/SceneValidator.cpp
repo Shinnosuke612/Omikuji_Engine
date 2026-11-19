@@ -1,4 +1,5 @@
 // 役割: Entity ID、Hierarchy、Entity参照、Scene遷移先の整合性を検証する。
+#include "SceneAttackHitGeometryEvaluator.h"
 #include "SceneValidator.h"
 
 #include "SceneCatalog.h"
@@ -22,6 +23,28 @@
 #include <utility>
 
 namespace {
+bool AttackGeometryTarget(const SceneDocument& document, const SceneEntity* entity, const SceneAttackHitWindow& window) {
+	if (!entity) return false;
+	if (!document.FindEntity(window.hitBoxEntityId)) {
+		int matches = 0;
+		for (const auto& candidate : document.GetEntities()) if (candidate.name == window.hitBoxEntityName) ++matches;
+		if (matches != 1) return false;
+	}
+	int hitBoxes = 0, colliders = 0;
+	for (const auto& c : entity->components) {
+		if (c.type == "HitBox") { if (!c.enabled) return false; ++hitBoxes; }
+		if (c.type == "OBBCollider") { if (!c.enabled || !c.colliderIsTrigger) return false; ++colliders; }
+		if (c.enabled && (c.type == "HurtBox" || c.type == "PhysicsBody")) return false;
+	}
+	if (hitBoxes != 1 || colliders != 1) return false;
+	for (const auto& owner : document.GetEntities()) for (const auto& c : owner.components) {
+		if (!c.enabled || c.type != "EnemyBehavior") continue;
+		const auto* target = document.FindEntity(c.enemyAttackHitBoxEntityId);
+		if (!target && !c.enemyAttackHitBoxEntityName.empty()) target = document.FindEntityByName(c.enemyAttackHitBoxEntityName);
+		if (target && target->id == entity->id) return false;
+	}
+	return true;
+}
 	// Authoringでは参照の構文/存在だけを確認する。完全なAsset評価はRuntime開始前に行う。
 	bool IsTransitionReferenceAvailable(const std::string& value) {
 		if (value.size() > 4096 || value.empty() || !value.ends_with(".transition.json") ||
@@ -2090,7 +2113,17 @@ bool SceneValidator::ValidateDocument(
 						windowIndex < attack.hitWindows.size(); ++windowIndex) {
 						const SceneAttackHitWindow& window =
 							attack.hitWindows[windowIndex];
-						if (window.payloadSource != "HitBox") {
+						if (!window.geometryTrack.keys.empty()) {
+						const auto* target = document.FindEntity(window.hitBoxEntityId);
+						if (!target && !window.hitBoxEntityName.empty()) target = document.FindEntityByName(window.hitBoxEntityName);
+						const auto* collider = target ? SceneEntityQuery::FindEnabledComponent(*target,"OBBCollider") : nullptr;
+						SceneAttackHitGeometryEvaluator::Issue issue;
+						if (!AttackGeometryTarget(document,target,window)) issue.code = "Target";
+						else SceneAttackHitGeometryEvaluator::Validate(window,attack.windup+attack.activeTime+attack.recovery,collider->colliderShape,issue);
+						if (!issue.code.empty()) addIssue(SceneValidationSeverity::Warning,entity.id,
+							"AttackHitGeometry:"+issue.code+" / "+attack.name+" / #"+std::to_string(windowIndex+1)+" / #"+std::to_string(issue.key+1));
+					}
+					if (window.payloadSource != "HitBox") {
 							addIssue(
 								SceneValidationSeverity::Warning,
 								entity.id,

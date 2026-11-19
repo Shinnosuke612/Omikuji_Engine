@@ -1,4 +1,4 @@
-// 役割: プレイヤーの入力移動と物理状態の同期を実装する。
+// 役割: プレイヤーの入力移動、物理状態の同期、攻撃中の体向き保持と解放を実装する。
 #include "Player.h"
 
 #include "../../engine/3d/Object3d.h"
@@ -29,6 +29,7 @@ namespace {
 }
 
 void Player::Initialize(Object3dCommon* object3dCommon, const char* modelName) {
+	ClearAttackBodyFacingLock();
 	object_ = new Object3d();
 	ownsObject_ = true;
 	object_->Initialize(object3dCommon);
@@ -47,6 +48,7 @@ void Player::Initialize(Object3dCommon* object3dCommon, const char* modelName) {
 }
 
 void Player::Initialize(Object3d* object) {
+	ClearAttackBodyFacingLock();
 	object_ = object;
 	ownsObject_ = false;
 	if (!object_) {
@@ -155,7 +157,7 @@ void Player::Update(
 		}
 	}
 
-	if (acceptGameplayInput && cameraRelativeMove_ && camera) {
+	if (acceptGameplayInput && cameraRelativeMove_ && camera && !IsAttackBodyFacingLocked()) {
 		Vector3 facing = cameraForward;
 		if (!inWater_) {
 			facing = FlattenAndNormalize(facing);
@@ -239,6 +241,7 @@ void Player::DrawShadow(const Matrix4x4& lightViewProjection) {
 }
 
 void Player::Finalize() {
+	ClearAttackBodyFacingLock();
 	if (ownsObject_) {
 		delete object_;
 	}
@@ -247,6 +250,7 @@ void Player::Finalize() {
 }
 
 void Player::SetTransform(const Transform& transform) {
+	ClearAttackBodyFacingLock();
 	if (!object_) {
 		return;
 	}
@@ -257,6 +261,40 @@ void Player::SetTransform(const Transform& transform) {
 	SyncRotationStateFromObject();
 	ApplyPosition();
 	object_->Update();
+}
+
+bool Player::SetAttackBodyFacingLock(bool active, uint64_t documentGeneration, uint64_t ownerEntityId) {
+	if (!object_ || !documentGeneration || !ownerEntityId) {
+		ClearAttackBodyFacingLock();
+		return false;
+	}
+	if (attackBodyGeneration_ != documentGeneration || attackBodyOwner_ != ownerEntityId) {
+		// Scene交換/再利用先へ前のownerの姿勢を復元しない。
+		ClearAttackBodyFacingLock();
+		attackBodyGeneration_ = documentGeneration;
+		attackBodyOwner_ = ownerEntityId;
+	}
+	if (!active && !attackBodyFacingLocked_) return false;
+	if (active && !attackBodyFacingLocked_) {
+		attackBodyEuler_ = object_->GetRotate();
+		attackBodyQuaternion_ = object_->GetRotateQuaternion();
+		attackBodyUsesQuaternion_ = object_->UsesQuaternionRotation();
+	}
+	object_->SetRotate(attackBodyEuler_);
+	if (attackBodyUsesQuaternion_) object_->SetRotateQuaternion(attackBodyQuaternion_);
+	attackBodyFacingLocked_ = active;
+	// 解放後にCameraへ跳ばず、最後の実姿勢から既存の追従補間を再開する。
+	SyncRotationStateFromObject();
+	return true;
+}
+
+void Player::ClearAttackBodyFacingLock() {
+	attackBodyFacingLocked_ = false;
+	attackBodyUsesQuaternion_ = false;
+	attackBodyGeneration_ = attackBodyOwner_ = 0;
+	attackBodyEuler_ = {};
+	attackBodyQuaternion_ = {0.0f, 0.0f, 0.0f, 1.0f};
+	rotationInitialized_ = false;
 }
 
 void Player::SetBehaviorSettings(

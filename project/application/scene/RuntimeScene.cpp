@@ -1179,6 +1179,8 @@ void RuntimeScene::Update(float deltaTime)
 		const std::unordered_set<uint64_t> resetIds(spawnerResetEntityIds.begin(), spawnerResetEntityIds.end());
 		prefabAnimationSystem_.DiscardPresentationsForEntities(resetIds);
 		for (uint64_t entityId : spawnerResetEntityIds) {
+			const auto* resetPlayer = player_ ? activeDocument->FindEntityByName("Player") : nullptr;
+			if (resetPlayer && resetPlayer->id == entityId) player_->ClearAttackBodyFacingLock();
 			attackRunnerSystem_.ResetEntity(*activeDocument, entityId);
 			stateMachineSystem_.ResetEntity(entityId);
 			prefabAnimationSystem_.ResetEntity(entityId);
@@ -1304,6 +1306,43 @@ void RuntimeScene::Update(float deltaTime)
 		playing,
 		editing
 	);
+	// Playerが回転値を所有し、Sceneは攻撃状態とEntity/子孫への同期だけを担当する。
+	auto syncPlayerAttackBodyFacing = [&]() {
+		if (!player_) return;
+		auto* owner = activeDocument ? activeDocument->FindEntityByName("Player") : nullptr;
+		if (!playing || !owner || deathSystem_.IsDefeated() || deathSystem_.IsBlocked(owner->id) ||
+			!SceneEntityQuery::FindEnabledComponent(*owner, "PlayerBehavior") ||
+			!SceneEntityQuery::IsEntityActiveInHierarchy(*activeDocument, *owner)) {
+			// 死亡/無効化は通常終了と異なり、古い姿勢を復元しない。
+			player_->ClearAttackBodyFacingLock();
+			return;
+		}
+		auto* object = objectSystem_.FindObject(owner->id);
+		if (!object || object != player_->GetObject()) {
+			player_->ClearAttackBodyFacingLock();
+			return;
+		}
+		bool attacking = attackRunnerSystem_.IsRunning(owner->id);
+		const auto* machine = SceneEntityQuery::FindEnabledComponent(*owner, "StateMachine");
+		const auto* stateName = machine ? stateMachineSystem_.GetCurrentState(owner->id) : nullptr;
+		if (stateName) {
+			for (const auto& state : machine->stateMachineStates) {
+				if (state.name == *stateName && state.actionId == "Builtin.MeleeComboAttack") {
+					// 既存legacy fallbackも実行中のactionで判定。Attack1等の名前には依存しない。
+					attacking = true;
+					break;
+				}
+			}
+		}
+		if (player_->SetAttackBodyFacingLock(attacking, activeDocument->GetContentGeneration(), owner->id)) {
+			// 位置/scale/速度は戻さない。root回転を確定してから既存同期で子孫を更新する。
+			owner->transform.rotate = object->UsesQuaternionRotation()
+				? object->GetRotateQuaternion() : MakeQuaternionFromEuler(object->GetRotate());
+			objectSystem_.RefreshTransforms(*activeDocument, {owner->id});
+		}
+	};
+	// A: Pose/Model同期で書かれたroot回転より固定を優先し、最初のprobeより前に確定。
+	syncPlayerAttackBodyFacing();
 	// 値形状の寿命は呼出元の同期点まで。Agent用と攻撃直前用を別採取し、古い通路を許可に使わない。
 	auto captureAttackProbe = [&]() {
 		if (!activeDocument) return SceneMovementProbeSnapshot{};
@@ -1451,6 +1490,57 @@ void RuntimeScene::Update(float deltaTime)
 			spawnFrame_.blockedEntityIds,
 			!uiGameplayInputBlocked_
 		);
+		// B: このframeにEnter/Exitした攻撃を、方向計算とPhysicsの前に反映する。
+		syncPlayerAttackBodyFacing();
+		// 入力速度はこのframeだけ借用。開始/締めや失敗したSpinには許可を持ち越さない。
+		const float spinMoveSpeed = [&]() -> float {
+			if (!player_ || uiGameplayInputBlocked_ || deathSystem_.IsDefeated()) return 0;
+			const auto* owner = activeDocument->FindEntityByName("Player");
+			if (!owner || deathSystem_.IsBlocked(owner->id) || spawnFrame_.blockedEntityIds.contains(owner->id) ||
+				!SceneEntityQuery::IsEntityActiveInHierarchy(*activeDocument, *owner) ||
+				!SceneEntityQuery::FindEnabledComponent(*owner, "PlayerBehavior") ||
+				objectSystem_.FindObject(owner->id) != player_->GetObject() || !player_->GetObject()) return 0;
+			const auto* machine = SceneEntityQuery::FindEnabledComponent(*owner, "StateMachine");
+			const auto* name = machine ? stateMachineSystem_.GetCurrentState(owner->id) : nullptr;
+			if (!name) return 0;
+			const SceneStateDefinition* state = nullptr;
+			for (const auto& candidate : machine->stateMachineStates) if (candidate.name == *name) {
+				if (state) return 0;
+				state = &candidate;
+			}
+			if (!state || state->actionId != "Builtin.SpinLoopAttack") return 0;
+			bool ambiguous = false;
+			auto parameter = [&](const char* key) -> const SceneStateParameter* {
+				const SceneStateParameter* found = nullptr;
+				for (const auto& p : state->parameters) if (p.name == key) {
+					if (found) { ambiguous = true; return nullptr; }
+					found = &p;
+				}
+				return found;
+			};
+			const auto* multiplier = parameter("MoveSpeedMultiplier");
+			const auto* target = parameter("AnimationTarget");
+			const auto* attack = parameter("AttackName");
+			if (ambiguous || !multiplier || multiplier->type != "Float" || !target ||
+				!std::isfinite(multiplier->floatValue) || multiplier->floatValue <= 0 || multiplier->floatValue > 1) return 0;
+			const auto* set = activeDocument->FindEntity(target->entityId);
+			if (!set && !target->entityName.empty()) {
+				for (const auto& entity : activeDocument->GetEntities()) if (entity.name == target->entityName) {
+					if (set) return 0;
+					set = &entity;
+				}
+			}
+			if (!set || !attackRunnerSystem_.IsRunning(owner->id, set->id, attack ? attack->stringValue : "SpinLoop",
+				activeDocument->GetContentGeneration())) return 0;
+			const float speed = player_->GetWalkSpeed() * multiplier->floatValue;
+			return std::isfinite(speed) && speed > 0 && std::isfinite(playerAttackInputDirection.x) &&
+				std::isfinite(playerAttackInputDirection.z) ? speed : 0;
+		}();
+		if (spinMoveSpeed > 0) {
+			// Enter直後に通常歩行速度が残らないよう、攻撃Motionの評価前にXZだけ初期化する。
+			player_->GetPhysicsBody().velocity.x = 0;
+			player_->GetPhysicsBody().velocity.z = 0;
+		}
 		attackRunnerSystem_.ApplyMotion(
 			*activeDocument,
 			gameplayObjectBindings_,
@@ -1458,7 +1548,17 @@ void RuntimeScene::Update(float deltaTime)
 			playerAttackInputDirection,
 			gameplayDeltaTime
 		);
-		// Combat後に予約した被弾速度を、AI/Agent/Stateの書込み後に上書きする。
+		if (spinMoveSpeed > 0) {
+			auto& velocity = player_->GetPhysicsBody().velocity;
+			const double x = double(velocity.x) + double(playerAttackInputDirection.x) * spinMoveSpeed;
+			const double z = double(velocity.z) + double(playerAttackInputDirection.z) * spinMoveSpeed;
+			if (std::isfinite(x) && std::isfinite(z) && std::abs(x) <= (std::numeric_limits<float>::max)() &&
+				std::abs(z) <= (std::numeric_limits<float>::max)()) {
+				velocity.x = static_cast<float>(x);
+				velocity.z = static_cast<float>(z);
+			}
+		}
+		// Combat後に予約した被弾速度を、AI/Agent/Stateと入力加算の後に上書きする。
 		hitReactionSystem_.ApplyMotionOverrides(
 			*activeDocument,
 			reactionBindings,
@@ -1588,6 +1688,8 @@ void RuntimeScene::Update(float deltaTime)
 	if (activeDocument && playing) {
 		objectSystem_.RefreshTransforms(*activeDocument, enemySystem_.ApplyChargePoses(*activeDocument));
 	}
+	// C: Combat/被弾後の死亡・離脱を反映。Physics確定済みの位置は巻き戻さない。
+	syncPlayerAttackBodyFacing();
 	// 有効化は資源同期用の複製だけに行う。保存DocumentやRuntime overrideは変更しない。
 	SceneDocument editorResourceDocument;
 	SceneDocument* resourceDocument = activeDocument;
@@ -2094,7 +2196,7 @@ void RuntimeScene::Finalize()
 	audioSystem_.Clear();
 	postProcessProfileSystem_.Reset();
 	stateMachineSystem_.Clear();
-	attackRunnerSystem_.Clear();
+	attackRunnerSystem_.Clear(GetSceneDocument());
 	physicsSystem_.Clear();
 	prefabAnimationSystem_.Clear(GetSceneDocument());
 	pendingPresentationRequests_.clear();

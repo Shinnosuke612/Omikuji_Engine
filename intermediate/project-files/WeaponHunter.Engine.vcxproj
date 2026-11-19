@@ -110,28 +110,29 @@
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\PrefabEditorSession.cpp"><ObjectFileName>$(IntDir)src_88_2065F71FF8F172F9.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\RuntimeSession.cpp"><ObjectFileName>$(IntDir)src_89_0CB1C9900C93927A.obj</ObjectFileName></ClCompile>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneAssetService.cpp"><ObjectFileName>$(IntDir)src_90_1EEA70FBD681788B.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneCatalog.cpp"><ObjectFileName>$(IntDir)src_91_829D2A7CFCEDE1DD.obj</ObjectFileName><PrecompiledHeader>NotUsing</PrecompiledHeader><PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader><PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h</PrecompiledHeaderFile><PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile><ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocument.cpp"><ObjectFileName>$(IntDir)src_92_458C8EE62AEE1715.obj</ObjectFileName><PrecompiledHeader>NotUsing</PrecompiledHeader><PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader><PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h</PrecompiledHeaderFile><PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile><ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.cpp"><ObjectFileName>$(IntDir)src_93_0DCBE71EF893E6EA.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentRead.cpp"><ObjectFileName>$(IntDir)src_94_6CCDAD9097EBE72D.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEnemyChargeEvaluator.cpp"><ObjectFileName>$(IntDir)src_95_3990E99749A24E89.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEntityQuery.cpp"><ObjectFileName>$(IntDir)src_96_6E301A27D625F6E7.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneInstance.cpp"><ObjectFileName>$(IntDir)src_97_30BC9444DA2DFCB7.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneManager.cpp"><ObjectFileName>$(IntDir)src_98_1B87B48D6359B989.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneMovementBounds.cpp"><ObjectFileName>$(IntDir)src_99_1874D079D7D5B4D8.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.cpp"><ObjectFileName>$(IntDir)src_100_4E7CF5BBD88B82F1.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.cpp"><ObjectFileName>$(IntDir)src_101_337E88C2F6ED5239.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.cpp"><ObjectFileName>$(IntDir)src_102_22D75F192810F948.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneUILayout.cpp"><ObjectFileName>$(IntDir)src_103_734006459DF5F180.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.cpp"><ObjectFileName>$(IntDir)src_104_F4DA180CA0B97C2C.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.cpp"><ObjectFileName>$(IntDir)src_105_257A45E8CB101135.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedEvaluation.cpp"><ObjectFileName>$(IntDir)src_106_A52896CB9B143CF0.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedGeneration.cpp"><ObjectFileName>$(IntDir)src_107_CE3467C1F5830158.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.cpp"><ObjectFileName>$(IntDir)src_108_26ACEBB586594D56.obj</ObjectFileName><PrecompiledHeader>NotUsing</PrecompiledHeader><PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader><PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h</PrecompiledHeaderFile><PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile><ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.cpp"><ObjectFileName>$(IntDir)src_109_5EE77EE744BC2FE2.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\Logger.cpp"><ObjectFileName>$(IntDir)src_110_F2AD49FDC00D64CA.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\StringUtility.cpp"><ObjectFileName>$(IntDir)src_111_EE1C4772C059CBEF.obj</ObjectFileName></ClCompile>
-    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\SystemPerformanceMonitor.cpp"><ObjectFileName>$(IntDir)src_112_CA62CDFA969B7713.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneAttackHitGeometryEvaluator.cpp"><ObjectFileName>$(IntDir)src_91_1D9BD01C26406C3A.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneCatalog.cpp"><ObjectFileName>$(IntDir)src_92_829D2A7CFCEDE1DD.obj</ObjectFileName><PrecompiledHeader>NotUsing</PrecompiledHeader><PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader><PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h</PrecompiledHeaderFile><PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile><ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocument.cpp"><ObjectFileName>$(IntDir)src_93_458C8EE62AEE1715.obj</ObjectFileName><PrecompiledHeader>NotUsing</PrecompiledHeader><PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader><PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h</PrecompiledHeaderFile><PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile><ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.cpp"><ObjectFileName>$(IntDir)src_94_0DCBE71EF893E6EA.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentRead.cpp"><ObjectFileName>$(IntDir)src_95_6CCDAD9097EBE72D.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEnemyChargeEvaluator.cpp"><ObjectFileName>$(IntDir)src_96_3990E99749A24E89.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneEntityQuery.cpp"><ObjectFileName>$(IntDir)src_97_6E301A27D625F6E7.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneInstance.cpp"><ObjectFileName>$(IntDir)src_98_30BC9444DA2DFCB7.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneManager.cpp"><ObjectFileName>$(IntDir)src_99_1B87B48D6359B989.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneMovementBounds.cpp"><ObjectFileName>$(IntDir)src_100_1874D079D7D5B4D8.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\ScenePrefabAnimationEvaluator.cpp"><ObjectFileName>$(IntDir)src_101_4E7CF5BBD88B82F1.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTemplateRegistry.cpp"><ObjectFileName>$(IntDir)src_102_337E88C2F6ED5239.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneTransformResolver.cpp"><ObjectFileName>$(IntDir)src_103_22D75F192810F948.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneUILayout.cpp"><ObjectFileName>$(IntDir)src_104_734006459DF5F180.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneValidator.cpp"><ObjectFileName>$(IntDir)src_105_F4DA180CA0B97C2C.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\text\TextRasterizer.cpp"><ObjectFileName>$(IntDir)src_106_257A45E8CB101135.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedEvaluation.cpp"><ObjectFileName>$(IntDir)src_107_A52896CB9B143CF0.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\LoadLinkedGeneration.cpp"><ObjectFileName>$(IntDir)src_108_CE3467C1F5830158.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SceneTransitionAsset.cpp"><ObjectFileName>$(IntDir)src_109_26ACEBB586594D56.obj</ObjectFileName><PrecompiledHeader>NotUsing</PrecompiledHeader><PrecompiledHeader Condition="'$(_CGJsonPchActive)'=='true'">Use</PrecompiledHeader><PrecompiledHeaderFile Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h</PrecompiledHeaderFile><PrecompiledHeaderOutputFile Condition="'$(_CGJsonPchActive)'=='true'">$(IntDir)cg_json.pch</PrecompiledHeaderOutputFile><ForcedIncludeFiles Condition="'$(_CGJsonPchActive)'=='true'">$(CGProjectSourceRoot)engine\pch\JsonPch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\transition\SwordShatterRenderer.cpp"><ObjectFileName>$(IntDir)src_110_5EE77EE744BC2FE2.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\Logger.cpp"><ObjectFileName>$(IntDir)src_111_F2AD49FDC00D64CA.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\StringUtility.cpp"><ObjectFileName>$(IntDir)src_112_EE1C4772C059CBEF.obj</ObjectFileName></ClCompile>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\utility\SystemPerformanceMonitor.cpp"><ObjectFileName>$(IntDir)src_113_CA62CDFA969B7713.obj</ObjectFileName></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(CGProjectSourceRoot)engine\2d\SceneTextureCopy.h" />
@@ -230,6 +231,7 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\PrefabEditorSession.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\RuntimeSession.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneAssetService.h" />
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneAttackHitGeometryEvaluator.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneCatalog.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocument.h" />
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneDocumentMigrator.h" />

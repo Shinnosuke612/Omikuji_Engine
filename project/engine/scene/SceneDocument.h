@@ -282,6 +282,17 @@ struct SceneAnimationKeyframe {
 	Vector3 positionBulge{};
 };
 
+// 攻撃開始からの秒とColliderローカル値。Windowだけが所有し、Pose Trackとは独立。
+struct SceneAttackHitGeometryKey {
+	float time = 0;
+	Vector3 offset{}, halfSize{1, 1, 1};
+	float radius = 1;
+	std::string interpolation = "Linear";
+};
+struct SceneAttackHitGeometryTrack {
+	std::string shape;
+	std::vector<SceneAttackHitGeometryKey> keys;
+};
 struct SceneAttackHitWindow {
 	float startTime = 0.15f;
 	float endTime = 0.35f;
@@ -303,6 +314,7 @@ struct SceneAttackHitWindow {
 	Vector3 knockbackLocalDirection = { 0.0f, 0.0f, 1.0f };
 	std::string hitPolicy = "OncePerActivation";
 	float targetCooldown = 0.15f;
+	SceneAttackHitGeometryTrack geometryTrack;
 };
 
 // AttackRunner時刻から一発Particleを発火するためのAuthoringデータ。

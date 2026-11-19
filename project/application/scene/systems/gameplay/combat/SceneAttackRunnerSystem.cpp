@@ -1,4 +1,5 @@
 // 役割: AttackSetからコピーした定義を評価し、Combatが読むHitBoxの実行時値だけを更新する。
+#include "../../../../../engine/scene/SceneAttackHitGeometryEvaluator.h"
 #include "SceneAttackRunnerSystem.h"
 
 #include "../../animation/ScenePrefabAnimationSystem.h"
@@ -15,6 +16,28 @@
 #include <utility>
 
 namespace {
+bool AttackGeometryTarget(const SceneDocument& document, const SceneEntity* entity, const SceneAttackHitWindow& window) {
+	if (!entity) return false;
+	if (!document.FindEntity(window.hitBoxEntityId)) {
+		int matches = 0;
+		for (const auto& candidate : document.GetEntities()) if (candidate.name == window.hitBoxEntityName) ++matches;
+		if (matches != 1) return false;
+	}
+	int hitBoxes = 0, colliders = 0;
+	for (const auto& c : entity->components) {
+		if (c.type == "HitBox") { if (!c.enabled) return false; ++hitBoxes; }
+		if (c.type == "OBBCollider") { if (!c.enabled || !c.colliderIsTrigger) return false; ++colliders; }
+		if (c.enabled && (c.type == "HurtBox" || c.type == "PhysicsBody")) return false;
+	}
+	if (hitBoxes != 1 || colliders != 1) return false;
+	for (const auto& owner : document.GetEntities()) for (const auto& c : owner.components) {
+		if (!c.enabled || c.type != "EnemyBehavior") continue;
+		const auto* target = document.FindEntity(c.enemyAttackHitBoxEntityId);
+		if (!target && !c.enemyAttackHitBoxEntityName.empty()) target = document.FindEntityByName(c.enemyAttackHitBoxEntityName);
+		if (target && target->id == entity->id) return false;
+	}
+	return true;
+}
 	SceneComponent* FindHitBox(SceneEntity& entity) {
 		return SceneEntityQuery::FindComponent(entity, "HitBox");
 	}
@@ -56,6 +79,7 @@ bool SceneAttackRunnerSystem::Start(
 		runtimes_.erase(existing);
 	}
 	Runtime runtime{};
+	runtime.documentGeneration = document.GetContentGeneration();
 	runtime.attackSetEntityId = attackSetEntityId;
 	// 実行中にAuthoring Documentが再配置・編集されても攻撃時系列を変えない。
 	runtime.definition = *definition;
@@ -124,9 +148,22 @@ void SceneAttackRunnerSystem::DeactivateWindow(
 	SceneDocument& document,
 	ActiveWindow& activeWindow
 ) {
+	if (activeWindow.geometry.valid && keyedActiveCount_ > 0) --keyedActiveCount_;
+	if (activeWindow.geometry.valid && activeWindow.geometry.generation != document.GetContentGeneration()) return;
 	SceneEntity* entity = document.FindEntity(activeWindow.entityId);
 	if (!entity) {
 		return;
+	}
+	// disabledでも同じComponentなら復元。差替えられたComponentへは書かない。
+	if (activeWindow.geometry.valid) {
+		const auto& snapshot = activeWindow.geometry;
+		const auto* owner = FindHitBox(*entity);
+		if (owner && owner->hitBoxAttackExecutionId != snapshot.executionId) return;
+		for (auto& c : entity->components) if (c.localId == snapshot.colliderId && c.type == "OBBCollider" && c.colliderShape == snapshot.shape) {
+			c.colliderOffset = snapshot.offset;
+			c.colliderSizeMultiplier = snapshot.halfSize;
+			c.colliderSphereRadius = snapshot.radius;
+		}
 	}
 	SceneComponent* hitBox = FindHitBox(*entity);
 	if (activeWindow.usesLegacyPayload) {
@@ -151,7 +188,7 @@ void SceneAttackRunnerSystem::DeactivateWindow(
 			}
 		}
 	} else {
-		// 専用HitBoxは保存時inactiveが契約で、Payload／Collider値は変更しない。
+		// 専用HitBoxは保存時inactiveが契約。キー形状は上で復元し、Payloadは保持。
 		entity->active = false;
 	}
 	if (hitBox) {
@@ -195,6 +232,27 @@ void SceneAttackRunnerSystem::UpdateHitWindows(
 		if (!entity || !hitBox || !usedHitBoxEntities.insert(entity->id).second) {
 			continue;
 		}
+		const bool keyed = !window.geometryTrack.keys.empty();
+		if (keyed && (runtime.documentGeneration != document.GetContentGeneration() || runtime.invalidGeometryTargets.contains(entity->id))) continue;
+		auto* collider = SceneEntityQuery::FindEnabledComponent(*entity,"OBBCollider");
+		SceneAttackHitGeometryEvaluator::Issue issue;
+		if (keyed && (!AttackGeometryTarget(document,entity,window) || !collider ||
+			!SceneAttackHitGeometryEvaluator::Validate(window,GetDuration(runtime.definition),collider->colliderShape,issue))) continue;
+		if (keyed) {
+			bool replaced = false;
+			for (const auto& active : runtime.activeWindows) if (active.entityId == entity->id && active.geometry.valid &&
+				(active.geometry.colliderId != collider->localId || active.geometry.shape != collider->colliderShape)) replaced = true;
+			if (replaced) { runtime.invalidGeometryTargets.insert(entity->id); continue; }
+			SceneAttackHitGeometryEvaluator::Sample sample;
+			if (!SceneAttackHitGeometryEvaluator::SampleTrack(window.geometryTrack,runtime.time,sample,issue)) continue;
+		}
+		bool conflict = false;
+		if (keyed || keyedActiveCount_ > 0) for (const auto& [id, other] : runtimes_) {
+			(void)id;
+			if (&other == &runtime) continue;
+			for (const auto& active : other.activeWindows) if (active.entityId == entity->id && (keyed || active.geometry.valid)) conflict = true;
+		}
+		if (conflict) continue;
 		desiredWindows.push_back({ windowIndex, entity, hitBox });
 	}
 
@@ -225,9 +283,32 @@ void SceneAttackRunnerSystem::UpdateHitWindows(
 					activeWindow.entityId == desired.entity->id;
 			}
 		);
-		if (alreadyActive) {
+		const auto& geometryWindow = runtime.definition.hitWindows[desired.windowIndex];
+		if (!geometryWindow.geometryTrack.keys.empty()) {
+			auto* collider = SceneEntityQuery::FindComponent(*desired.entity,"OBBCollider");
+			SceneAttackHitGeometryEvaluator::Sample sample;
+			SceneAttackHitGeometryEvaluator::Issue issue;
+			if (!SceneAttackHitGeometryEvaluator::SampleTrack(geometryWindow.geometryTrack,runtime.time,sample,issue)) continue;
+			GeometrySnapshot snapshot;
+			if (!alreadyActive) snapshot = {true,document.GetContentGeneration(),collider->localId,runtime.attackExecutionId,
+				collider->colliderShape,collider->colliderOffset,collider->colliderSizeMultiplier,collider->colliderSphereRadius};
+			collider->colliderOffset = sample.offset;
+			if (sample.shape == "Box") collider->colliderSizeMultiplier = sample.halfSize;
+			else collider->colliderSphereRadius = sample.radius;
+			if (alreadyActive) continue; // 形状更新だけでは命中serialを増やさない。
+			ActiveWindow active;
+			active.windowIndex = desired.windowIndex;
+			active.entityId = desired.entity->id;
+			active.geometry = snapshot;
+			++keyedActiveCount_;
+			desired.entity->active = true;
+			++desired.hitBox->hitBoxAttackWindowSerial;
+			desired.hitBox->hitBoxAttackExecutionId = runtime.attackExecutionId;
+			desired.hitBox->hitBoxReactionPriority = static_cast<uint32_t>(desired.windowIndex);
+			runtime.activeWindows.push_back(std::move(active));
 			continue;
 		}
+		if (alreadyActive) continue;
 		const SceneAttackHitWindow& window =
 			runtime.definition.hitWindows[desired.windowIndex];
 		ActiveWindow activeWindow{};
@@ -411,6 +492,8 @@ void SceneAttackRunnerSystem::ApplyMotion(
 			runtime.startForward = runtime.forward;
 			runtime.axesCaptured = true;
 		}
+		// 方向ベクトルは更新し、実Playerの体向きへの反映だけを分離する。
+		const bool bodyFacingLocked = player && binding->object == player->GetObject() && player->IsAttackBodyFacingLocked();
 		const bool usesPlayerInputFacing =
 			runtime.definition.facingMode == "InputDirection" &&
 			player &&
@@ -419,8 +502,8 @@ void SceneAttackRunnerSystem::ApplyMotion(
 		if (usesPlayerInputFacing) {
 			runtime.forward = Math::Normalize(playerInputDirection);
 			runtime.right = { runtime.forward.z, 0.0f, -runtime.forward.x };
-			// Player::UpdateのCamera向き更新後に上書きし、攻撃中だけ入力方向を向く。
-			binding->object->SetRotate({
+			// ロックしていない実行主体では従来どおり入力方向を反映する。
+			if (!bodyFacingLocked) binding->object->SetRotate({
 				0.0f,
 				std::atan2(runtime.forward.x, runtime.forward.z),
 				0.0f
@@ -436,7 +519,7 @@ void SceneAttackRunnerSystem::ApplyMotion(
 				if (Math::Length(direction) > 0.0001f) {
 					runtime.forward = Math::Normalize(direction);
 					runtime.right = { runtime.forward.z, 0.0f, -runtime.forward.x };
-					binding->object->SetRotate({
+					if (!bodyFacingLocked) binding->object->SetRotate({
 						0.0f,
 						std::atan2(runtime.forward.x, runtime.forward.z),
 						0.0f
@@ -453,7 +536,7 @@ void SceneAttackRunnerSystem::ApplyMotion(
 				-runtime.startForward.x * std::sin(angle) + runtime.startForward.z * std::cos(angle)
 			};
 			runtime.right = { runtime.forward.z, 0.0f, -runtime.forward.x };
-			binding->object->SetRotate({
+			if (!bodyFacingLocked) binding->object->SetRotate({
 				0.0f,
 				std::atan2(runtime.forward.x, runtime.forward.z),
 				0.0f
@@ -477,6 +560,16 @@ void SceneAttackRunnerSystem::ApplyMotion(
 bool SceneAttackRunnerSystem::IsRunning(uint64_t ownerEntityId) const {
 	const auto found = runtimes_.find(ownerEntityId);
 	return found != runtimes_.end() && !found->second.finished;
+}
+
+bool SceneAttackRunnerSystem::IsRunning(uint64_t ownerEntityId, uint64_t attackSetEntityId,
+	const std::string& attackName, uint64_t documentGeneration) const {
+	const auto found = runtimes_.find(ownerEntityId);
+	if (found == runtimes_.end() || deathContinuation_) return false;
+	const auto& runtime = found->second;
+	return runtime.started && !runtime.finished && !runtime.deathContinuing &&
+		runtime.documentGeneration == documentGeneration && runtime.attackSetEntityId == attackSetEntityId &&
+		runtime.definition.name == attackName;
 }
 
 bool SceneAttackRunnerSystem::IsFinished(uint64_t ownerEntityId) const {
@@ -514,7 +607,13 @@ void SceneAttackRunnerSystem::Stop(SceneDocument& document, uint64_t ownerEntity
 }
 
 void SceneAttackRunnerSystem::ResetEntity(SceneDocument& document, uint64_t entityId) {
-	Stop(document, entityId);
+	std::vector<uint64_t> owners{entityId};
+	for (const auto& [id, runtime] : runtimes_) for (const auto& window : runtime.definition.hitWindows) {
+		if (window.geometryTrack.keys.empty()) continue;
+		const auto* target = ResolveEntity(document,window.hitBoxEntityId,window.hitBoxEntityName);
+		if (target && target->id == entityId) { owners.push_back(id); break; }
+	}
+	for (uint64_t id : owners) Stop(document,id);
 }
 
 void SceneAttackRunnerSystem::Clear(SceneDocument* document) {
@@ -525,6 +624,7 @@ void SceneAttackRunnerSystem::Clear(SceneDocument* document) {
 		}
 	}
 	runtimes_.clear();
+	keyedActiveCount_ = 0;
 	effectRequests_.clear();
 	nextAttackExecutionId_ = 1;
 }

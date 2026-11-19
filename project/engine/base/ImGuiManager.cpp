@@ -72,6 +72,25 @@
 #include <map>
 
 namespace {
+	// 新しい判定キー診断だけを翻訳し、内部識別子は補助情報として残す。
+	std::string AttackGeometryIssueText(EditorLanguage language, const std::string& issue) {
+		const auto position = issue.find("AttackHitGeometry:");
+		if (position == std::string::npos) return issue;
+		const auto codeStart = position + std::string("AttackHitGeometry:").size();
+		const auto codeEnd = issue.find_first_of(" /\"\r\n",codeStart);
+		const std::string code = issue.substr(codeStart,codeEnd-codeStart);
+		const char* ja = "判定キーが不正です。参照・値・時刻を修正してください。";
+		const char* en = "Invalid hit geometry keys. Correct targets, values and times.";
+		if (code == "Time") { ja = "キー時刻が不正です。攻撃時間内で重複のない昇順にしてください。"; en = "Invalid key times. Use unique increasing times within the attack duration."; }
+		else if (code == "Shape") { ja = "キーとColliderの形状が一致しません。Box/Sphereの対応を確認してください。"; en = "Key and Collider shapes differ. Check the Box/Sphere shape."; }
+		else if (code == "Legacy") { ja = "旧方式の区間では判定キーを使えません。HitBox方式へ明示移行してください。"; en = "Legacy windows cannot use geometry keys. Explicitly migrate to HitBox payload."; }
+		else if (code == "Target") { ja = "判定キーの対象が不正です。専用の有効HitBoxとTrigger Colliderを用意し、食らい判定・物理・敵突進と共有しないでください。"; en = "Invalid key target. Use a dedicated enabled HitBox and Trigger Collider without HurtBox, physics or enemy charge sharing."; }
+		else if (code == "Value") { ja = "キー値が不正です。有限の位置と0.001以上のサイズを指定してください。"; en = "Invalid key values. Use finite offsets and sizes of at least 0.001."; }
+		else if (code == "Interpolation") { ja = "キー補間が不正です。LinearまたはHoldを指定してください。"; en = "Invalid interpolation. Use Linear or Hold."; }
+		else if (code == "Structure") { ja = "判定キーを読み込めません。geometryTrackの必須項目・型・3要素ベクトルを確認してください。"; en = "Cannot load hit geometry keys. Check required fields, types and three-element vectors."; }
+		const auto suffix = issue.find(" / ",codeStart);
+		return std::string(SelectEditorText(language,ja,en)) + (suffix == std::string::npos ? "" : issue.substr(suffix));
+	}
 	using json = nlohmann::json;
 	using SceneEntityQuery::FindComponent;
 	using SceneEntityQuery::FindEnabledComponent;
@@ -2577,7 +2596,7 @@ void ImGuiManager::RestorePrefabWorkspace() {
 		} else {
 			const std::string path = PrefabAssetRegistry::ResolvePath(saved.asset);
 			if (!path.empty() && IsPrefabAssetPath(PathFromUtf8(path))) opened = OpenPrefab(path);
-			if (!opened) detail = prefabEditorSession_->GetLastError();
+			if (!opened) detail = AttackGeometryIssueText(editorLanguage_,prefabEditorSession_->GetLastError());
 		}
 	} catch (const std::exception& error) {
 		// Editor設定に由来する参照が壊れていてもSceneの起動を失敗させない。
@@ -2661,7 +2680,7 @@ void ImGuiManager::DrawPrefabWorkspaceDialogs() {
 			ImGui::TextWrapped("%s", text("保存できませんでした。保存先とPrefabの構成を確認して再試行してください。",
 				"Saving failed. Check the destination and Prefab structure, then retry."));
 			if (ImGui::TreeNode(text("診断の詳細", "Diagnostic details"))) {
-				ImGui::TextWrapped("%s", prefabEditorSession_->GetLastError().c_str()); ImGui::TreePop();
+				ImGui::TextWrapped("%s", AttackGeometryIssueText(editorLanguage_,prefabEditorSession_->GetLastError()).c_str()); ImGui::TreePop();
 			}
 		}
 		ImGui::EndPopup();
@@ -14833,7 +14852,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				} else {
 					ImGui::TextWrapped(
 						"Load error: %s",
-						prefabPreview.GetLastLoadError().c_str()
+						AttackGeometryIssueText(editorLanguage_,prefabPreview.GetLastLoadError()).c_str()
 					);
 				}
 				if (ImGui::Button("Open Prefab Editor")) {
@@ -21947,7 +21966,7 @@ bool ImGuiManager::OpenPrefab(
 	);
 	if (!prefabEditorSession_->Open(resolvedPath)) {
 		playerCombatContexts_[1].returnOpenPending = false;
-		prefabNavigationStatus_ = prefabEditorSession_->GetLastError();
+		prefabNavigationStatus_ = AttackGeometryIssueText(editorLanguage_,prefabEditorSession_->GetLastError());
 		if (!prefabWorkspaceRestoring_) QueuePrefabWorkspaceWarning(false, resolvedPath, prefabNavigationStatus_);
 		return false;
 	}
@@ -22204,7 +22223,7 @@ void ImGuiManager::ValidateAllPrefabAssets() {
 		}
 		SceneDocument document;
 		if (!document.Load(prefabPath)) {
-			addResult(prefabPath, true, document.GetLastLoadError());
+			addResult(prefabPath, true, AttackGeometryIssueText(editorLanguage_,document.GetLastLoadError()));
 			continue;
 		}
 		if (!document.GetLastLoadError().empty()) {
@@ -22624,6 +22643,16 @@ void ImGuiManager::DrawPrefabDiagnostics() {
 	ImGui::PushID("PrefabDiagnosticIssues");
 	for (size_t issueIndex = 0; issueIndex < issues.size(); ++issueIndex) {
 		const SceneValidationIssue& issue = issues[issueIndex];
+		if (issue.message.starts_with("AttackHitGeometry:")) {
+			ImGui::PushID(static_cast<int>(issueIndex));
+			if (issue.entityId && document.FindEntity(issue.entityId)) {
+				if (ImGui::SmallButton(SelectEditorText(editorLanguage_,"選択","Select"))) prefabSelectedEntityId_ = issue.entityId;
+				ImGui::SameLine();
+			}
+			ImGui::TextWrapped("%s: %s",SelectEditorText(editorLanguage_,"警告","Warning"),AttackGeometryIssueText(editorLanguage_,issue.message).c_str());
+			ImGui::PopID();
+			continue;
+		}
 		ImGui::PushID(static_cast<int>(issueIndex));
 		if (issue.entityId != 0 && document.FindEntity(issue.entityId)) {
 			if (ImGui::SmallButton((issue.message.starts_with("MovementBounds:") || issue.message.starts_with("EnemyPositioning:") || issue.message.starts_with("EnemyCharge:") || issue.message.starts_with("StatText:") || issue.message.starts_with("DeathResponse:") || issue.message.starts_with("SpawnPreparation:") || issue.message.starts_with("FlowPreparation:") || issue.message.starts_with("SceneRestart:") || issue.message.starts_with("MenuRuntime:") || issue.message.starts_with("EventKeys:")) ? SelectEditorText(editorLanguage_, "選択", "Select") : "Select")) {
@@ -23004,7 +23033,7 @@ void ImGuiManager::DrawPrefabWindow() {
 		ImGui::TextColored(
 			ImVec4(0.95f, 0.35f, 0.3f, 1.0f),
 			"%s",
-			prefabEditorSession_->GetLastError().c_str()
+			AttackGeometryIssueText(editorLanguage_,prefabEditorSession_->GetLastError()).c_str()
 		);
 	}
 

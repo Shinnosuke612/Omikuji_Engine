@@ -1420,6 +1420,16 @@
                   "name": "FailureState",
                   "stringValue": "SpinFinish",
                   "type": "String"
+                },
+                {
+                  "boolValue": false,
+                  "entityId": 0,
+                  "entityName": "",
+                  "floatValue": 0.15000000596046448,
+                  "intValue": 0,
+                  "name": "MoveSpeedMultiplier",
+                  "stringValue": "",
+                  "type": "Float"
                 }
               ]
             },
@@ -1783,110 +1793,6 @@
           0.0,
           0.0,
           0.0
-        ]
-      }
-    },
-    {
-      "active": false,
-      "components": [
-        {
-          "active": true,
-          "debugColor": [
-            1.0,
-            0.25,
-            0.15000000596046448,
-            1.0
-          ],
-          "debugDrawMode": "Wireframe",
-          "debugSegments": 16,
-          "debugVisible": true,
-          "enabled": true,
-          "isTrigger": true,
-          "layer": 4294967295,
-          "localId": 1,
-          "mask": 4294967295,
-          "offset": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "shape": "Box",
-          "sizeMultiplier": [
-            0.8999999761581421,
-            0.800000011920929,
-            1.2000000476837158
-          ],
-          "sphereRadius": 0.5,
-          "type": "OBBCollider"
-        },
-        {
-          "damage": 20.0,
-          "damageStatId": "hp",
-          "enabled": true,
-          "hitPolicy": "OncePerActivation",
-          "hitStopDuration": 0.0,
-          "ignoreSameFaction": true,
-          "knockback": 8.0,
-          "knockbackDirectionMode": "RadialFromAttacker",
-          "knockbackLocalDirection": [
-            0.0,
-            0.0,
-            1.0
-          ],
-          "localId": 2,
-          "ownerEntityId": 13,
-          "ownerEntityName": "Player",
-          "poiseDamage": 10.0,
-          "poiseStatId": "poise",
-          "reactionTag": "Light",
-          "targetCooldown": 0.15000000596046448,
-          "type": "HitBox",
-          "verticalKnockback": 0.0
-        }
-      ],
-      "folder": false,
-      "folderTeamEnabled": false,
-      "id": 15,
-      "locked": false,
-      "modelPath": "",
-      "name": "PlayerAttackHitBox",
-      "parentId": 13,
-      "sprite": {
-        "anchor": [
-          0.5,
-          0.5
-        ],
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "flipX": false,
-        "flipY": false,
-        "size": [
-          100.0,
-          100.0
-        ],
-        "texturePath": ""
-      },
-      "team": "",
-      "transform": {
-        "rotation": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "translate": [
-          0.0,
-          0.0,
-          1.600000023841858
         ]
       }
     },
@@ -2403,21 +2309,12 @@
                     },
                     {
                       "easingToNext": "EaseIn",
-                      "time": 0.20000000298023224,
-                      "value": [
-                        1.4500000476837158,
-                        1.0,
-                        -1.2999999523162842
-                      ]
-                    },
-                    {
-                      "easingToNext": "EaseIn",
                       "positionBulge": [
                         0.3499999940395355,
                         0.0,
                         0.2800000011920929
                       ],
-                      "time": 0.2800000011920929,
+                      "time": 0.20000000298023224,
                       "value": [
                         1.7000000476837158,
                         1.0,
@@ -2431,7 +2328,7 @@
                         0.0,
                         0.2800000011920929
                       ],
-                      "time": 0.4399999976158142,
+                      "time": 0.27000001072883606,
                       "value": [
                         0.0,
                         1.0,
@@ -2440,7 +2337,7 @@
                     },
                     {
                       "easingToNext": "SmoothStep",
-                      "time": 0.6000000238418579,
+                      "time": 0.3400000035762787,
                       "value": [
                         -1.7000000476837158,
                         1.0,
@@ -2448,7 +2345,7 @@
                       ]
                     },
                     {
-                      "time": 0.800000011920929,
+                      "time": 0.5400000214576721,
                       "value": [
                         -1.2000000476837158,
                         1.0,
@@ -2477,22 +2374,13 @@
                       "time": 0.20000000298023224,
                       "value": [
                         0.0,
-                        -2.3499999046325684,
-                        1.5707963705062866
-                      ]
-                    },
-                    {
-                      "easingToNext": "EaseIn",
-                      "time": 0.2800000011920929,
-                      "value": [
-                        0.0,
                         -1.5707963705062866,
                         1.5707963705062866
                       ]
                     },
                     {
                       "easingToNext": "EaseOut",
-                      "time": 0.4399999976158142,
+                      "time": 0.27000001072883606,
                       "value": [
                         -3.1415927410125732,
                         0.0,
@@ -2501,7 +2389,7 @@
                     },
                     {
                       "easingToNext": "SmoothStep",
-                      "time": 0.6000000238418579,
+                      "time": 0.3400000035762787,
                       "value": [
                         0.0,
                         1.5707963705062866,
@@ -2509,7 +2397,7 @@
                       ]
                     },
                     {
-                      "time": 0.800000011920929,
+                      "time": 0.5400000214576721,
                       "value": [
                         0.0,
                         2.3499999046325684,
@@ -2583,17 +2471,8 @@
                       ]
                     },
                     {
-                      "easingToNext": "EaseIn",
-                      "time": 0.2800000011920929,
-                      "value": [
-                        1.0,
-                        1.0,
-                        1.0
-                      ]
-                    },
-                    {
                       "easingToNext": "EaseOut",
-                      "time": 0.4399999976158142,
+                      "time": 0.27000001072883606,
                       "value": [
                         1.0,
                         1.0,
@@ -2602,7 +2481,7 @@
                     },
                     {
                       "easingToNext": "SmoothStep",
-                      "time": 0.6000000238418579,
+                      "time": 0.3400000035762787,
                       "value": [
                         1.0,
                         1.0,
@@ -2610,7 +2489,7 @@
                       ]
                     },
                     {
-                      "time": 0.800000011920929,
+                      "time": 0.5400000214576721,
                       "value": [
                         1.0,
                         1.0,
@@ -3784,6 +3663,39 @@
               "hitWindows": [
                 {
                   "endTime": 0.5799999833106995,
+                  "geometryTrack": {
+                    "keys": [
+                      {
+                        "halfSize": [
+                          1.75,
+                          3.5820000171661377,
+                          3.953000068664551
+                        ],
+                        "interpolation": "Linear",
+                        "offset": [
+                          -0.7626302242279053,
+                          -3.347659111022949,
+                          1.296407699584961
+                        ],
+                        "time": 0.3756619989871979
+                      },
+                      {
+                        "halfSize": [
+                          1.75,
+                          3.5820000171661377,
+                          3.953000068664551
+                        ],
+                        "interpolation": "Linear",
+                        "offset": [
+                          -0.01729881763458252,
+                          -0.17127501964569092,
+                          0.6016368865966797
+                        ],
+                        "time": 0.4432410001754761
+                      }
+                    ],
+                    "shape": "Box"
+                  },
                   "hitBoxEntityId": 26,
                   "hitBoxEntityName": "Attack1_HitBox_1",
                   "payloadSource": "HitBox",
@@ -3795,7 +3707,7 @@
               "loopSafetyTimeout": 0.0,
               "motionEasing": "EaseInOut",
               "name": "Attack1",
-              "recovery": 0.3199999928474426,
+              "recovery": 0.019999999552965164,
               "sideDistance": 0.0,
               "windup": 0.30000001192092896
             },
@@ -3876,16 +3788,16 @@
               "facingRotateAngle": 0.0,
               "facingTargetEntityId": 0,
               "facingTargetEntityName": "",
-              "forwardDistance": -4.610000133514404,
+              "forwardDistance": -10.8100004196167,
               "hitBoxEntityId": 0,
               "hitBoxEntityName": "",
               "hitWindows": [
                 {
-                  "endTime": 0.6000000238418579,
+                  "endTime": 0.4078820049762726,
                   "hitBoxEntityId": 27,
                   "hitBoxEntityName": "Attack2_HitBox_1",
                   "payloadSource": "HitBox",
-                  "startTime": 0.2800000011920929
+                  "startTime": 0.17517200112342834
                 }
               ],
               "loopEnabled": false,
@@ -3895,7 +3807,7 @@
               "name": "Attack2",
               "recovery": 0.20000000298023224,
               "sideDistance": 0.0,
-              "windup": 0.2800000011920929
+              "windup": 0.15000000596046448
             },
             {
               "activeTime": 1.2999999523162842,
@@ -5055,13 +4967,13 @@
           "offset": [
             0.0,
             0.0,
-            -0.20999999344348907
+            0.0
           ],
           "shape": "Box",
           "sizeMultiplier": [
-            0.3499999940395355,
-            0.3700000047683716,
-            1.309999942779541
+            0.8899999856948853,
+            1.4119999408721924,
+            3.6630001068115234
           ],
           "sphereRadius": 0.5,
           "type": "OBBCollider"
@@ -5178,8 +5090,8 @@
           "shape": "Box",
           "sizeMultiplier": [
             0.3499999940395355,
-            0.3700000047683716,
-            1.309999942779541
+            1.4900000095367432,
+            2.700000047683716
           ],
           "sphereRadius": 0.5,
           "type": "OBBCollider"
@@ -5531,9 +5443,9 @@
           ],
           "shape": "Box",
           "sizeMultiplier": [
-            0.3499999940395355,
-            0.3700000047683716,
-            1.309999942779541
+            0.75,
+            1.7599999904632568,
+            3.430000066757202
           ],
           "sphereRadius": 0.5,
           "type": "OBBCollider"
@@ -5881,19 +5793,19 @@
           "offset": [
             0.0,
             0.0,
-            -0.20999999344348907
+            1.059999942779541
           ],
           "shape": "Box",
           "sizeMultiplier": [
-            0.3499999940395355,
-            0.3700000047683716,
-            1.309999942779541
+            0.6899999976158142,
+            15.0,
+            15.0
           ],
           "sphereRadius": 0.5,
           "type": "OBBCollider"
         },
         {
-          "damage": 5.0,
+          "damage": 40.0,
           "damageStatId": "hp",
           "enabled": true,
           "hitPolicy": "OncePerActivation",
@@ -5914,7 +5826,7 @@
           "reactionTag": "Light",
           "targetCooldown": 0.15000000596046448,
           "type": "HitBox",
-          "verticalKnockback": 20.0
+          "verticalKnockback": 40.0
         }
       ],
       "folder": false,

@@ -182,6 +182,8 @@
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\RuntimeSession.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneAssetService.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneAssetService.h"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneAttackHitGeometryEvaluator.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneAttackHitGeometryEvaluator.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneCatalog.cpp"><Filter>Engine</Filter></ClCompile>
     <ClInclude Include="$(CGProjectSourceRoot)engine\scene\SceneCatalog.h"><Filter>Engine</Filter></ClInclude>
     <ClCompile Include="$(CGProjectSourceRoot)engine\scene\SceneDocument.cpp"><Filter>Engine</Filter></ClCompile>

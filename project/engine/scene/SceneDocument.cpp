@@ -1351,6 +1351,16 @@ namespace {
 						serializedWindow["hitBoxHalfSize"] = VectorToJson(window.hitBoxHalfSize);
 					}
 				}
+				if (!window.geometryTrack.keys.empty()) {
+					json keys = json::array();
+					for (const auto& key : window.geometryTrack.keys) {
+						json value = {{"time",key.time},{"offset",VectorToJson(key.offset)},{"interpolation",key.interpolation}};
+						if (window.geometryTrack.shape != "Sphere") value["halfSize"] = VectorToJson(key.halfSize);
+						if (window.geometryTrack.shape != "Box") value["radius"] = key.radius;
+						keys.push_back(std::move(value));
+					}
+					serializedWindow["geometryTrack"] = {{"shape",window.geometryTrack.shape},{"keys",std::move(keys)}};
+				}
 				windows.push_back(std::move(serializedWindow));
 			}
 			json effects = json::array();
@@ -2541,6 +2551,37 @@ namespace {
 							windowValue.value("targetCooldown", window.targetCooldown), 0.0f
 						);
 						if (windowValue.contains("knockbackLocalDirection")) window.knockbackLocalDirection = JsonToVector(windowValue.at("knockbackLocalDirection"), window.knockbackLocalDirection);
+					}
+					if (windowValue.contains("geometryTrack")) {
+						const auto& track = windowValue.at("geometryTrack");
+						// 型/必須値の欠落は構造エラー。意味的不正は保持して共通Validatorへ渡す。
+						auto require = [&](bool ok) {
+							if (!ok) throw json::type_error::create(302,"AttackHitGeometry:Structure",&track);
+						};
+						require(track.is_object() && track.contains("keys") && track.at("keys").is_array());
+						if (!track.at("keys").empty()) {
+							require(track.contains("shape") && track.at("shape").is_string());
+							window.geometryTrack.shape = track.at("shape").get<std::string>();
+							for (const auto& value : track.at("keys")) {
+								require(value.is_object() && value.contains("time") && value.at("time").is_number());
+								auto vector = [&](const char* name) {
+									require(value.contains(name) && value.at(name).is_array() && value.at(name).size() == 3);
+									for (const auto& n : value.at(name)) require(n.is_number());
+									return Vector3{value.at(name)[0].get<float>(),value.at(name)[1].get<float>(),value.at(name)[2].get<float>()};
+								};
+								SceneAttackHitGeometryKey key;
+								key.time = value.at("time").get<float>();
+								key.offset = vector("offset");
+								if (window.geometryTrack.shape == "Box" || value.contains("halfSize")) key.halfSize = vector("halfSize");
+								if (window.geometryTrack.shape == "Sphere" || value.contains("radius")) {
+									require(value.contains("radius") && value.at("radius").is_number());
+									key.radius = value.at("radius").get<float>();
+								}
+								if (value.contains("interpolation")) require(value.at("interpolation").is_string());
+								key.interpolation = value.value("interpolation",std::string("Linear"));
+								window.geometryTrack.keys.push_back(std::move(key));
+							}
+						}
 					}
 					attack.hitWindows.push_back(std::move(window));
 				}

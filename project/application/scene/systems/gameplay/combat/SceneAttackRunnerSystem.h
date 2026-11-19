@@ -65,6 +65,9 @@ public:
 	std::vector<SceneAttackEffectRequest> ConsumeDeathEffectRequests();
 	void ClearDeathContinuation();
 	bool IsRunning(uint64_t ownerEntityId) const;
+	// 同じ世代/owner/AttackSet/定義の通常実行だけを読取照合。終了/死亡継続は含めない。
+	bool IsRunning(uint64_t ownerEntityId, uint64_t attackSetEntityId,
+		const std::string& attackName, uint64_t documentGeneration) const;
 	bool IsFinished(uint64_t ownerEntityId) const;
 	float GetTime(uint64_t ownerEntityId) const;
 	float GetDuration(uint64_t ownerEntityId) const;
@@ -92,7 +95,16 @@ private:
 		Vector3 colliderHalfSize{};
 	};
 
+	// この実行が借りたColliderだけを、同じDocument世代/localIdへ復元する。
+	struct GeometrySnapshot {
+		bool valid = false;
+		uint64_t generation = 0, colliderId = 0, executionId = 0;
+		std::string shape;
+		Vector3 offset{}, halfSize{};
+		float radius = 0;
+	};
 	struct ActiveWindow {
+		GeometrySnapshot geometry;
 		size_t windowIndex = 0;
 		uint64_t entityId = 0;
 		bool usesLegacyPayload = false;
@@ -100,6 +112,8 @@ private:
 	};
 
 	struct Runtime {
+		uint64_t documentGeneration = 0;
+		std::unordered_set<uint64_t> invalidGeometryTargets;
 		uint64_t attackSetEntityId = 0;
 		uint64_t animationTargetEntityId = 0;
 		uint64_t facingTargetEntityId = 0;
@@ -140,6 +154,8 @@ private:
 	void UpdateHitWindows(SceneDocument& document, Runtime& runtime);
 
 	std::unordered_map<uint64_t, Runtime> runtimes_;
+	// キーなしだけの既存攻撃では全Runtimeの排他走査を増やさない。
+	size_t keyedActiveCount_ = 0;
 	std::vector<SceneAttackEffectRequest> effectRequests_;
 	uint64_t nextAttackExecutionId_ = 1;
 	bool deathContinuation_ = false;
