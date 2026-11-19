@@ -5,19 +5,18 @@
     {
       "active": true,
       "components": [
-        { "cullMode": "Back", "enabled": true, "environmentReflectionIntensity": 0.3, "environmentReflectionOverride": false, "materialOverrides": [], "modelPath": "Cube.obj", "type": "MeshRenderer" },
         { "active": true, "debugColor": [0.25, 0.32, 0.85, 1.0], "debugVisible": true, "enabled": true, "isTrigger": false, "layer": 4294967295, "mask": 4294967295, "offset": [0.0, 0.0, 0.0], "shape": "Box", "sizeMultiplier": [1.0, 1.0, 1.0], "type": "OBBCollider" },
         { "bodyType": "Dynamic", "drag": 0.0, "enabled": true, "friction": 0.0, "gravityScale": 8.0, "mass": 8.0, "maxFallSpeed": 60.0, "restitution": 0.0, "type": "PhysicsBody", "useGravity": true, "velocity": [0.0, 0.0, 0.0] },
         { "enabled": true, "stats": [{ "displayName": "HP", "id": "hp", "initial": 180.0, "max": 180.0, "min": 0.0 }, { "displayName": "Poise", "id": "poise", "initial": 60.0, "max": 60.0, "min": 0.0 }], "type": "StatSet" },
         { "enabled": true, "name": "Enemy", "type": "Faction" },
-        { "attackActiveTime": 0.3, "attackCooldown": 1.5, "attackHitBoxEntityId": 3, "attackHitBoxEntityName": "HeavyEnemyAttackHitBox", "attackRange": 3.0, "attackRecovery": 0.55, "attackWindup": 0.35, "detectionRange": 14.0, "enabled": true, "healthStatId": "hp", "loseRange": 20.0, "moveSpeed": 1.7, "targetEntityId": 0, "targetEntityName": "Player", "turnSpeed": 5.0, "type": "EnemyBehavior" },
+        {"attackActiveTime":0.3,"attackCooldown":1.5,"attackHitBoxEntityId":3,"attackHitBoxEntityName":"HeavyEnemyAttackHitBox","attackRange":3,"attackRecovery":0.55,"attackWindup":0.35,"detectionRange":14,"enabled":true,"healthStatId":"hp","loseRange":20,"moveSpeed":1.7,"targetEntityId":0,"targetEntityName":"","turnSpeed":5,"type":"EnemyBehavior","movementMode":"PositioningCharge","targetMode":"AutoPlayer","positioning":{"acceleration":8,"distance":4,"distanceVariation":1,"orbitRatio":0.5,"randomizeOnPlay":true,"retreatRatio":0.6000000238418579,"seed":1,"spacing":5,"spacingVariation":0.25,"speedVariation":0.15000000596046448,"tolerance":1,"variation":true},"charge":{"aimOffset":[0,0.262,0],"aimSeconds":0.4000000059604645,"aimVariation":0.10000000149011612,"axis":[1,0,0],"backAngle":15,"chargeOffset":[0,0.437,0],"cooldownSeconds":1.5,"cooldownVariation":0.30000001192092896,"distance":16,"firstWaitSeconds":0.5,"firstWaitVariation":0.30000001192092896,"forwardAngle":25,"leanSeconds":0.10000000149011612,"lockedSeconds":0.25,"lockedVariation":0.05000000074505806,"movementEasing":"EaseOut","pivot":[0,-1,0],"poseEnabled":true,"poseEntityId":5,"recoverySeconds":0.55,"returnSeconds":0.25,"speed":10,"startDistance":0}},
         { "behaviorName": "HeavyMeleeEnemy", "enabled": true, "groupName": "HeavyMeleeEnemies", "maxSpeed": 1.7, "minSpeed": 1.7, "movementMode": "GroundXZ", "neighborLimit": 8, "profileName": "HeavyMelee", "separationRadius": 3.2, "separationWeight": 2.6, "type": "AgentBehavior", "useWaterBounds": false },
-        { "clips": [{ "duration": 1.0, "loop": true, "name": "Idle", "playOnStart": true, "tracks": [{ "easing": "Linear", "keyframes": [{ "time": 0.0, "value": [1.0, 1.0, 1.0] }], "property": "LocalScale", "targetEntityId": 1, "targetEntityName": "HeavyEnemy" }] }, { "duration": 0.3, "loop": false, "name": "Hit", "playOnStart": false, "tracks": [{ "easing": "EaseOut", "keyframes": [{ "time": 0.0, "value": [1.0, 1.0, 1.0] }, { "time": 0.12, "value": [1.1, 0.86, 1.1] }, { "time": 0.3, "value": [1.0, 1.0, 1.0] }], "property": "LocalScale", "targetEntityId": 1, "targetEntityName": "HeavyEnemy" }] }, { "duration": 0.6, "loop": false, "name": "Dead", "playOnStart": false, "tracks": [{ "easing": "EaseIn", "keyframes": [{ "time": 0.0, "value": [1.0, 1.0, 1.0] }, { "time": 0.3, "value": [1.12, 0.25, 1.12] }, { "time": 0.6, "value": [0.05, 0.05, 0.05] }], "property": "LocalScale", "targetEntityId": 1, "targetEntityName": "HeavyEnemy" }] }], "enabled": true, "type": "PrefabAnimator" },
+        {"clips":[{"duration":1,"loop":true,"name":"Idle","playOnStart":true,"tracks":[{"easing":"Linear","keyframes":[{"time":0,"value":[1,1,1]}],"property":"LocalScale","targetEntityId":1,"targetEntityName":"HeavyEnemy"},{"easing":"Linear","keyframes":[{"time":0,"value":[2,2,2]}],"property":"LocalScale","targetEntityId":4,"targetEntityName":"HeavyEnemyVisualScale"}]},{"duration":0.3,"loop":false,"name":"Hit","playOnStart":false,"tracks":[{"easing":"EaseOut","keyframes":[{"time":0,"value":[1,1,1]},{"time":0.12,"value":[1.1,0.86,1.1]},{"time":0.3,"value":[1,1,1]}],"property":"LocalScale","targetEntityId":1,"targetEntityName":"HeavyEnemy"},{"easing":"Linear","keyframes":[{"time":0,"value":[2,2,2]}],"property":"LocalScale","targetEntityId":4,"targetEntityName":"HeavyEnemyVisualScale"}]},{"duration":0.6,"loop":false,"name":"Dead","playOnStart":false,"tracks":[{"easing":"EaseIn","keyframes":[{"time":0,"value":[1,1,1]},{"time":0.3,"value":[1.12,0.25,1.12]},{"time":0.6,"value":[0.05,0.05,0.05]}],"property":"LocalScale","targetEntityId":1,"targetEntityName":"HeavyEnemy"},{"easing":"Linear","keyframes":[{"time":0,"value":[2,2,2]}],"property":"LocalScale","targetEntityId":4,"targetEntityName":"HeavyEnemyVisualScale"}]}],"enabled":true,"type":"PrefabAnimator"},
         { "enabled": true, "initialState": "Idle", "resetOnDisable": true, "states": [{ "actionId": "", "name": "Idle", "parameters": [] }, { "actionId": "Builtin.ReactionAnimation", "name": "Hit", "parameters": [{ "entityId": 1, "entityName": "HeavyEnemy", "name": "AnimationTarget", "type": "Entity" }, { "floatValue": 0.3, "name": "Duration", "type": "Float" }, { "name": "Animation", "stringValue": "Hit", "type": "String" }, { "name": "ReturnAnimation", "stringValue": "Idle", "type": "String" }, { "name": "ReturnState", "stringValue": "Idle", "type": "String" }] }, { "actionId": "Builtin.DeathAnimation", "name": "Dead", "parameters": [{ "entityId": 1, "entityName": "HeavyEnemy", "name": "AnimationTarget", "type": "Entity" }, { "name": "Animation", "stringValue": "Dead", "type": "String" }] }], "type": "StateMachine" },
         { "enabled": true, "knockbackMultiplier": 0.35, "minimumPoiseDamage": 0.0, "poiseRecoveryDelay": 1.2, "poiseStatId": "poise", "stateDuration": 0.3, "stateName": "Hit", "triggerMode": "PoiseBreak", "type": "HitReaction" },
         { "deactivateDelay": 0.6, "effectPath": "resources/particles/ring_burst.json", "enabled": true, "stateName": "Dead", "type": "DeathPresentation" }
       ],
-      "folder": false, "folderTeamEnabled": false, "id": 1, "locked": false, "modelPath": "Cube.obj", "name": "HeavyEnemy", "parentId": 0, "team": "",
+      "folder": false, "folderTeamEnabled": false, "id": 1, "locked": false, "modelPath": "", "name": "HeavyEnemy", "parentId": 0, "team": "",
       "transform": { "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [2.0, 2.0, 2.0], "translate": [0.0, 1.0, 0.0] }
     },
     {
@@ -37,11 +36,95 @@
       ],
       "folder": false, "folderTeamEnabled": false, "id": 3, "locked": false, "modelPath": "", "name": "HeavyEnemyAttackHitBox", "parentId": 1, "team": "",
       "transform": { "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0], "translate": [0.0, 0.0, 1.8] }
+    },
+    {
+      "active": true,
+      "components": [],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 4,
+      "locked": false,
+      "modelPath": "",
+      "name": "HeavyEnemyVisualScale",
+      "parentId": 1,
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.3,
+          "environmentReflectionOverride": false,
+          "materialOverrides": [
+            {
+              "color": [
+                0.08,
+                0.18,
+                0.38,
+                1
+              ],
+              "colorOverrideEnabled": true,
+              "enabled": true,
+              "materialName": "Material.001",
+              "texturePath": ""
+            }
+          ],
+          "modelPath": "Cube.obj",
+          "type": "MeshRenderer",
+          "localId": 1
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 5,
+      "locked": false,
+      "modelPath": "Cube.obj",
+      "name": "HeavyEnemyVisual",
+      "parentId": 4,
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0.5,
+          0
+        ]
+      }
     }
   ],
   "lighting": { "shadowMapSize": 1024 },
   "postProcess": {},
   "sceneName": "HeavyEnemy",
   "teams": [],
-  "version": 27
+  "version": 37
 }

@@ -16,16 +16,6 @@
       "active": true,
       "components": [
         {
-          "cullMode": "Back",
-          "enabled": true,
-          "environmentReflectionIntensity": 0.30000001192092896,
-          "environmentReflectionOverride": false,
-          "localId": 1,
-          "materialOverrides": [],
-          "modelPath": "Cube.obj",
-          "type": "MeshRenderer"
-        },
-        {
           "active": true,
           "debugColor": [
             0.8999999761581421,
@@ -145,14 +135,15 @@
             "movementEasing": "EaseOut",
             "pivot": [
               0.0,
-              0.0,
+              -1.0,
               0.0
             ],
-            "poseEnabled": false,
-            "poseEntityId": 0,
+            "poseEnabled": true,
+            "poseEntityId": 4,
             "recoverySeconds": 0.5,
             "returnSeconds": 0.25,
-            "speed": 10.0
+            "speed": 10.0,
+            "startDistance": 0.0
           },
           "detectionRange": 60.0,
           "enabled": true,
@@ -162,13 +153,13 @@
               "combine": "Any",
               "conditions": [
                 {
-                  "threshold": 3.0,
-                  "type": "HitCount"
+                  "threshold": 10.0,
+                  "type": "SingleHpDamage"
                 }
               ]
             },
             "countWindows": false,
-            "enabled": false,
+            "enabled": true,
             "idleResetSeconds": 0.0,
             "overrides": [
               {
@@ -538,13 +529,22 @@
           "localId": 11,
           "stateName": "Dead",
           "type": "DeathPresentation"
+        },
+        {
+          "enabled": true,
+          "healthStatId": "hp",
+          "invulnerabilityDuration": 0.5,
+          "localId": 12,
+          "statsEntityId": 0,
+          "statsEntityName": "",
+          "type": "Health"
         }
       ],
       "folder": false,
       "folderTeamEnabled": false,
       "id": 1,
       "locked": false,
-      "modelPath": "Cube.obj",
+      "modelPath": "",
       "name": "SimpleEnemy",
       "parentId": 0,
       "sprite": {
@@ -778,6 +778,60 @@
           1.399999976158142
         ]
       }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [
+            {
+              "color": [
+                0.15000000596046448,
+                0.45000001788139343,
+                0.6000000238418579,
+                1
+              ],
+              "colorOverrideEnabled": true,
+              "enabled": true,
+              "materialName": "Material.001",
+              "texturePath": ""
+            }
+          ],
+          "modelPath": "Cube.obj",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 4,
+      "locked": false,
+      "modelPath": "Cube.obj",
+      "name": "SimpleEnemyVisual",
+      "parentId": 1,
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
     }
   ],
   "lighting": {
@@ -885,5 +939,5 @@
   },
   "sceneName": "SimpleEnemy",
   "teams": [],
-  "version": 36
+  "version": 37
 }

@@ -1,0 +1,930 @@
+{
+  "assetId": "1f3f9826-a8d2-4416-8f90-b876a0908d0a",
+  "debug": {
+    "jointAxisLength": 0.05999999865889549,
+    "jointRadius": 0.017999999225139618,
+    "showCameraDirection": false,
+    "showCameraPath": true,
+    "showCameraPathPointCameraDirection": true,
+    "showColliders": false,
+    "showJointAxes": false,
+    "showJointNames": false,
+    "showSkeleton": false
+  },
+  "entities": [
+    {
+      "active": true,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            0.8999999761581421,
+            0.30000001192092896,
+            0.25,
+            1
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": false,
+          "layer": 4294967295,
+          "localId": 2,
+          "mask": 4294967295,
+          "offset": [
+            0,
+            0,
+            0
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            1,
+            1,
+            1
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "bodyType": "Dynamic",
+          "drag": 0,
+          "enabled": true,
+          "freezePositionX": false,
+          "freezePositionY": false,
+          "freezePositionZ": false,
+          "friction": 0,
+          "gravityScale": 8,
+          "localId": 3,
+          "mass": 1,
+          "maxFallSpeed": 60,
+          "restitution": 0,
+          "type": "PhysicsBody",
+          "useGravity": true,
+          "velocity": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "enabled": true,
+          "flags": [],
+          "localId": 4,
+          "stats": [
+            {
+              "displayName": "HP",
+              "id": "hp",
+              "initial": 60,
+              "max": 60,
+              "min": 0
+            },
+            {
+              "displayName": "Poise",
+              "id": "poise",
+              "initial": 15,
+              "max": 15,
+              "min": 0
+            }
+          ],
+          "type": "StatSet"
+        },
+        {
+          "enabled": true,
+          "localId": 5,
+          "name": "Enemy",
+          "type": "Faction"
+        },
+        {
+          "attackActiveTime": 0.25,
+          "attackAnimationClip": 0,
+          "attackCooldown": 1.2000000476837158,
+          "attackHitBoxEntityId": 3,
+          "attackHitBoxEntityName": "SimpleEnemyAttackHitBox",
+          "attackPrefabAnimationClip": "",
+          "attackRange": 2.299999952316284,
+          "attackRecovery": 0.44999998807907104,
+          "attackWindup": 0.25,
+          "charge": {
+            "aimOffset": [
+              0,
+              0,
+              0
+            ],
+            "aimSeconds": 0.4000000059604645,
+            "aimVariation": 0.10000000149011612,
+            "axis": [
+              1,
+              0,
+              0
+            ],
+            "backAngle": 15,
+            "chargeOffset": [
+              0,
+              0,
+              0
+            ],
+            "cooldownSeconds": 1,
+            "cooldownVariation": 0.30000001192092896,
+            "distance": 16,
+            "firstWaitSeconds": 0.5,
+            "firstWaitVariation": 0.30000001192092896,
+            "forwardAngle": 25,
+            "leanSeconds": 0.10000000149011612,
+            "lockedSeconds": 0.25,
+            "lockedVariation": 0.05000000074505806,
+            "movementEasing": "EaseOut",
+            "pivot": [
+              0,
+              -1,
+              0
+            ],
+            "poseEnabled": true,
+            "poseEntityId": 4,
+            "recoverySeconds": 0.5,
+            "returnSeconds": 0.25,
+            "speed": 10,
+            "startDistance": 0
+          },
+          "detectionRange": 60,
+          "enabled": true,
+          "healthStatId": "hp",
+          "interruption": {
+            "common": {
+              "combine": "Any",
+              "conditions": [
+                {
+                  "threshold": 10,
+                  "type": "SingleHpDamage"
+                }
+              ]
+            },
+            "countWindows": false,
+            "enabled": true,
+            "idleResetSeconds": 0,
+            "overrides": [
+              {
+                "enabled": false,
+                "rule": {
+                  "combine": "Any",
+                  "conditions": [
+                    {
+                      "threshold": 3,
+                      "type": "HitCount"
+                    }
+                  ]
+                }
+              },
+              {
+                "enabled": false,
+                "rule": {
+                  "combine": "Any",
+                  "conditions": [
+                    {
+                      "threshold": 3,
+                      "type": "HitCount"
+                    }
+                  ]
+                }
+              },
+              {
+                "enabled": false,
+                "rule": {
+                  "combine": "Any",
+                  "conditions": [
+                    {
+                      "threshold": 3,
+                      "type": "HitCount"
+                    }
+                  ]
+                }
+              }
+            ],
+            "phases": 7
+          },
+          "localId": 6,
+          "loseRange": 60,
+          "moveSpeed": 6,
+          "movementMode": "PositioningCharge",
+          "positioning": {
+            "acceleration": 8,
+            "distance": 4,
+            "distanceVariation": 1,
+            "orbitRatio": 0.5,
+            "randomizeOnPlay": true,
+            "retreatRatio": 0.6000000238418579,
+            "seed": 1,
+            "spacing": 5,
+            "spacingVariation": 0.25,
+            "speedVariation": 0.15000000596046448,
+            "tolerance": 1,
+            "variation": true
+          },
+          "targetEntityId": 0,
+          "targetEntityName": "",
+          "targetMode": "AutoPlayer",
+          "turnSpeed": 8,
+          "type": "EnemyBehavior"
+        },
+        {
+          "alignForwardToVelocity": true,
+          "alignmentRadius": 4,
+          "alignmentWeight": 0.800000011920929,
+          "attractorEntityId": 0,
+          "attractorTag": "",
+          "attractorWeight": 0,
+          "bankingStrength": 0,
+          "behaviorName": "LightMeleeEnemy",
+          "boundsEntityId": 0,
+          "boundsName": "",
+          "boundsWeight": 3,
+          "cohesionRadius": 5,
+          "cohesionWeight": 0.8999999761581421,
+          "enableLighting": true,
+          "enabled": true,
+          "flockAcceleration": 4,
+          "flockDecisionInterval": 0.25,
+          "flockTurnRate": 1.5,
+          "forwardAxis": "+Z",
+          "groupName": "LightMeleeEnemies",
+          "localId": 7,
+          "maxSpeed": 3,
+          "memberCatchupSpeed": 2,
+          "memberCenterFollow": 1.5,
+          "memberJitterFollowSpeed": 2,
+          "memberJitterFrequency": 0.8999999761581421,
+          "memberJitterStrength": 0.3499999940395355,
+          "memberJitterUpdateInterval": 0.5,
+          "memberLeashDistance": 4,
+          "memberLeashStrength": 1.5,
+          "memberSeparationBlend": 0.5,
+          "memberSeparationUpdateInterval": 0.10000000149011612,
+          "memberSpeedVariation": 0.15000000596046448,
+          "minSpeed": 3,
+          "movementMode": "GroundXZ",
+          "neighborLimit": 8,
+          "pitchFromVerticalVelocity": 1,
+          "profileName": "LightMelee",
+          "randomSeed": 1,
+          "randomizeSeedOnPlay": true,
+          "rotateAxisX": true,
+          "rotateAxisY": true,
+          "rotateAxisZ": false,
+          "rotationFollowSpeed": 12,
+          "schooling": false,
+          "schoolingBlend": 1,
+          "schoolingUpdateInterval": 0,
+          "schoolingUpdateJitter": 0,
+          "separationRadius": 1.5,
+          "separationWeight": 2.200000047683716,
+          "teamHeadingDirection": [
+            0,
+            0,
+            1
+          ],
+          "teamHeadingFollowSpeed": 2.5,
+          "teamHeadingFromAverage": true,
+          "teamHeadingWeight": 0.75,
+          "teamRotationFollowSpeed": 4,
+          "teamRotationWeight": 0.6000000238418579,
+          "teamSettingsOverride": false,
+          "turnSpeed": 2.5,
+          "type": "AgentBehavior",
+          "useTeamHeading": false,
+          "useTeamRotation": false,
+          "useWaterBounds": false,
+          "visualColor": [
+            0.25,
+            0.75,
+            1,
+            1
+          ],
+          "wanderChangeInterval": 4,
+          "wanderDirectionRange": 1.100000023841858,
+          "wanderStrength": 0.800000011920929,
+          "wanderVerticalRange": 0.18000000715255737
+        },
+        {
+          "clips": [
+            {
+              "duration": 1,
+              "loop": true,
+              "name": "Idle",
+              "playOnStart": true,
+              "tracks": [
+                {
+                  "easing": "Linear",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": [
+                        1,
+                        1,
+                        1
+                      ]
+                    }
+                  ],
+                  "property": "LocalScale",
+                  "targetEntityId": 1,
+                  "targetEntityName": "SimpleEnemy"
+                }
+              ]
+            },
+            {
+              "duration": 0.20000000298023224,
+              "loop": false,
+              "name": "Hit",
+              "playOnStart": false,
+              "tracks": [
+                {
+                  "easing": "EaseOut",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": [
+                        1,
+                        1,
+                        1
+                      ]
+                    },
+                    {
+                      "time": 0.07999999821186066,
+                      "value": [
+                        1.149999976158142,
+                        0.75,
+                        1.149999976158142
+                      ]
+                    },
+                    {
+                      "time": 0.20000000298023224,
+                      "value": [
+                        1,
+                        1,
+                        1
+                      ]
+                    }
+                  ],
+                  "property": "LocalScale",
+                  "targetEntityId": 1,
+                  "targetEntityName": "SimpleEnemy"
+                }
+              ]
+            },
+            {
+              "duration": 0.44999998807907104,
+              "loop": false,
+              "name": "Dead",
+              "playOnStart": false,
+              "tracks": [
+                {
+                  "easing": "EaseIn",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": [
+                        1,
+                        1,
+                        1
+                      ]
+                    },
+                    {
+                      "time": 0.20000000298023224,
+                      "value": [
+                        1.100000023841858,
+                        0.3499999940395355,
+                        1.100000023841858
+                      ]
+                    },
+                    {
+                      "time": 0.44999998807907104,
+                      "value": [
+                        0.05000000074505806,
+                        0.05000000074505806,
+                        0.05000000074505806
+                      ]
+                    }
+                  ],
+                  "property": "LocalScale",
+                  "targetEntityId": 1,
+                  "targetEntityName": "SimpleEnemy"
+                }
+              ]
+            }
+          ],
+          "enabled": true,
+          "localId": 8,
+          "type": "PrefabAnimator"
+        },
+        {
+          "enabled": true,
+          "initialState": "Idle",
+          "localId": 9,
+          "resetOnDisable": true,
+          "states": [
+            {
+              "actionId": "",
+              "name": "Idle",
+              "parameters": []
+            },
+            {
+              "actionId": "Builtin.ReactionAnimation",
+              "name": "Hit",
+              "parameters": [
+                {
+                  "boolValue": false,
+                  "entityId": 1,
+                  "entityName": "SimpleEnemy",
+                  "floatValue": 0,
+                  "intValue": 0,
+                  "name": "AnimationTarget",
+                  "stringValue": "",
+                  "type": "Entity"
+                },
+                {
+                  "boolValue": false,
+                  "entityId": 0,
+                  "entityName": "",
+                  "floatValue": 0.20000000298023224,
+                  "intValue": 0,
+                  "name": "Duration",
+                  "stringValue": "",
+                  "type": "Float"
+                },
+                {
+                  "boolValue": false,
+                  "entityId": 0,
+                  "entityName": "",
+                  "floatValue": 0,
+                  "intValue": 0,
+                  "name": "Animation",
+                  "stringValue": "Hit",
+                  "type": "String"
+                },
+                {
+                  "boolValue": false,
+                  "entityId": 0,
+                  "entityName": "",
+                  "floatValue": 0,
+                  "intValue": 0,
+                  "name": "ReturnAnimation",
+                  "stringValue": "Idle",
+                  "type": "String"
+                },
+                {
+                  "boolValue": false,
+                  "entityId": 0,
+                  "entityName": "",
+                  "floatValue": 0,
+                  "intValue": 0,
+                  "name": "ReturnState",
+                  "stringValue": "Idle",
+                  "type": "String"
+                }
+              ]
+            },
+            {
+              "actionId": "Builtin.DeathAnimation",
+              "name": "Dead",
+              "parameters": [
+                {
+                  "boolValue": false,
+                  "entityId": 1,
+                  "entityName": "SimpleEnemy",
+                  "floatValue": 0,
+                  "intValue": 0,
+                  "name": "AnimationTarget",
+                  "stringValue": "",
+                  "type": "Entity"
+                },
+                {
+                  "boolValue": false,
+                  "entityId": 0,
+                  "entityName": "",
+                  "floatValue": 0,
+                  "intValue": 0,
+                  "name": "Animation",
+                  "stringValue": "Dead",
+                  "type": "String"
+                }
+              ]
+            }
+          ],
+          "type": "StateMachine"
+        },
+        {
+          "enabled": true,
+          "knockbackMultiplier": 1.350000023841858,
+          "localId": 10,
+          "minimumPoiseDamage": 0,
+          "poiseRecoveryDelay": 0.800000011920929,
+          "poiseStatId": "poise",
+          "stateDuration": 0.20000000298023224,
+          "stateName": "Hit",
+          "triggerMode": "PoiseBreak",
+          "type": "HitReaction"
+        },
+        {
+          "deactivateDelay": 0.44999998807907104,
+          "effectPath": "resources/particles/ring_burst.json",
+          "enabled": true,
+          "localId": 11,
+          "stateName": "Dead",
+          "type": "DeathPresentation"
+        },
+        {
+          "enabled": true,
+          "healthStatId": "hp",
+          "invulnerabilityDuration": 0.5,
+          "localId": 12,
+          "statsEntityId": 0,
+          "statsEntityName": "",
+          "type": "Health"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 1,
+      "locked": false,
+      "modelPath": "",
+      "name": "SimpleEnemy",
+      "parentId": 0,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1,
+            0.6000000238418579,
+            0.20000000298023224,
+            1
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0,
+            0,
+            0
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            1,
+            1,
+            1
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damageMultiplier": 1,
+          "enabled": true,
+          "healthStatId": "hp",
+          "localId": 2,
+          "statsEntityId": 1,
+          "statsEntityName": "SimpleEnemy",
+          "type": "HurtBox"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 2,
+      "locked": false,
+      "modelPath": "",
+      "name": "SimpleEnemyHurtBox",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "active": false,
+      "components": [
+        {
+          "active": true,
+          "debugColor": [
+            1,
+            0.10000000149011612,
+            0.10000000149011612,
+            1
+          ],
+          "debugDrawMode": "Wireframe",
+          "debugSegments": 16,
+          "debugVisible": true,
+          "enabled": true,
+          "isTrigger": true,
+          "layer": 4294967295,
+          "localId": 1,
+          "mask": 4294967295,
+          "offset": [
+            0,
+            0,
+            0
+          ],
+          "shape": "Box",
+          "sizeMultiplier": [
+            0.800000011920929,
+            0.800000011920929,
+            1
+          ],
+          "sphereRadius": 0.5,
+          "type": "OBBCollider"
+        },
+        {
+          "damage": 10,
+          "damageStatId": "hp",
+          "enabled": true,
+          "hitPolicy": "OncePerActivation",
+          "hitStopDuration": 0,
+          "ignoreSameFaction": true,
+          "knockback": 2.5,
+          "knockbackDirectionMode": "RadialFromAttacker",
+          "knockbackLocalDirection": [
+            0,
+            0,
+            1
+          ],
+          "localId": 2,
+          "ownerEntityId": 1,
+          "ownerEntityName": "SimpleEnemy",
+          "poiseDamage": 6,
+          "poiseStatId": "poise",
+          "reactionTag": "LightMelee",
+          "targetCooldown": 0.15000000596046448,
+          "type": "HitBox",
+          "verticalKnockback": 0
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 3,
+      "locked": false,
+      "modelPath": "",
+      "name": "SimpleEnemyAttackHitBox",
+      "parentId": 1,
+      "sprite": {
+        "anchor": [
+          0.5,
+          0.5
+        ],
+        "color": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "flipX": false,
+        "flipY": false,
+        "size": [
+          100,
+          100
+        ],
+        "texturePath": ""
+      },
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          1.399999976158142
+        ]
+      }
+    },
+    {
+      "active": true,
+      "components": [
+        {
+          "cullMode": "Back",
+          "enabled": true,
+          "environmentReflectionIntensity": 0.30000001192092896,
+          "environmentReflectionOverride": false,
+          "localId": 1,
+          "materialOverrides": [],
+          "modelPath": "Cube.obj",
+          "type": "MeshRenderer"
+        }
+      ],
+      "folder": false,
+      "folderTeamEnabled": false,
+      "id": 4,
+      "locked": false,
+      "modelPath": "Cube.obj",
+      "name": "SimpleEnemyVisual",
+      "parentId": 1,
+      "team": "",
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translate": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "lighting": {
+    "shadowMapSize": 1024
+  },
+  "postProcess": {
+    "baseExposure": 1,
+    "bloomBlurIterations": 4,
+    "bloomBlurRadius": 1,
+    "bloomDownsampleScale": 2,
+    "bloomEnabled": true,
+    "bloomIntensity": 0.699999988079071,
+    "bloomSoftKnee": 0.5,
+    "bloomThreshold": 1,
+    "boxBlurEnabled": false,
+    "boxBlurKernelSize": 3,
+    "boxBlurStrength": 1,
+    "chromaticAberrationCenter": [
+      0.5,
+      0.5
+    ],
+    "chromaticAberrationEnabled": false,
+    "chromaticAberrationFalloff": 1.5,
+    "chromaticAberrationIntensity": 0.003000000026077032,
+    "depthOfFieldBlurStrength": 1,
+    "depthOfFieldEnabled": false,
+    "depthOfFieldFarStrength": 1,
+    "depthOfFieldFocusDistance": 10,
+    "depthOfFieldFocusRange": 2,
+    "depthOfFieldMaxRadius": 4,
+    "depthOfFieldNearStrength": 0,
+    "dissolveEdgeColor": [
+      1,
+      0.4000000059604645,
+      0.30000001192092896,
+      1
+    ],
+    "dissolveEdgeWidth": 0.029999999329447746,
+    "dissolveEnabled": false,
+    "dissolveMaskIndex": 0,
+    "dissolveThreshold": 0,
+    "gaussianBlurEnabled": false,
+    "gaussianBlurKernelSize": 3,
+    "gaussianBlurSigma": 1,
+    "gaussianBlurStrength": 1,
+    "grayscaleEnabled": false,
+    "motionBlurEnabled": false,
+    "motionBlurMaxRadius": 24,
+    "motionBlurSamples": 8,
+    "motionBlurStrength": 0.5,
+    "noiseAmount": 0.25,
+    "noiseAnimate": true,
+    "noiseEnabled": false,
+    "noiseScale": 1,
+    "noiseSeed": 0,
+    "noiseSpeed": 1,
+    "outlineColor": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "outlineDepthEnabled": true,
+    "outlineDepthWeight": 1,
+    "outlineEnabled": false,
+    "outlineLuminanceEnabled": false,
+    "outlineLuminanceWeight": 1,
+    "outlineSoftness": 0.05000000074505806,
+    "outlineThickness": 1,
+    "outlineThreshold": 0.10000000149011612,
+    "pixelationBlockSize": 4,
+    "pixelationEnabled": false,
+    "radialBlurCenter": [
+      0.5,
+      0.5
+    ],
+    "radialBlurEnabled": false,
+    "radialBlurSamples": 10,
+    "radialBlurWidth": 0.009999999776482582,
+    "toneMapMode": 0,
+    "underwaterDistortion": 0.012000000104308128,
+    "underwaterEnabled": false,
+    "underwaterFogDensity": 0.03500000014901161,
+    "underwaterIntensity": 0.6499999761581421,
+    "underwaterTintColor": [
+      0.019999999552965164,
+      0.44999998807907104,
+      0.6800000071525574,
+      1
+    ],
+    "vignetteEnabled": false,
+    "vignetteIntensity": 1,
+    "vignettePower": 0.800000011920929,
+    "vignetteScale": 16,
+    "waterRefractionEdgeSoftness": 0.07999999821186066,
+    "waterRefractionEnabled": false,
+    "waterRefractionStrength": 0.017999999225139618,
+    "waterRefractionTintColor": [
+      0.019999999552965164,
+      0.550000011920929,
+      0.8199999928474426,
+      1
+    ],
+    "waterRefractionTintStrength": 0.11999999731779099
+  },
+  "sceneName": "SimpleEnemyChargePose",
+  "teams": [],
+  "version": 37
+}
