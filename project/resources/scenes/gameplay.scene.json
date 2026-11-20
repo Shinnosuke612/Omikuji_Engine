@@ -1567,11 +1567,11 @@
           "enabled": true,
           "knockbackMultiplier": 20.0,
           "localId": 13,
-          "minimumPoiseDamage": 0.0,
+          "minimumPoiseDamage": 100.0,
           "poiseRecoveryDelay": 1.0,
           "poiseStatId": "poise",
           "stateDuration": 0.20000000298023224,
-          "stateName": "Idle",
+          "stateName": "Attack",
           "triggerMode": "MinimumDamage",
           "type": "HitReaction"
         },
