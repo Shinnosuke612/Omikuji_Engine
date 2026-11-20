@@ -17,6 +17,12 @@
       "name": "GAMEPLAY LEGACY",
       "path": "resources/scenes/gameplay_legacy.scene.json",
       "runtimeProfile": "RUNTIME"
+    },
+    {
+      "id": "alley_preview",
+      "name": "ALLEY PREVIEW",
+      "path": "resources/scenes/alley_preview.scene.json",
+      "runtimeProfile": "RUNTIME"
     }
   ],
   "startScene": "title",
