@@ -20801,6 +20801,7 @@ void ImGuiManager::DrawInspectorWindow() {
 				// 通常は統合点を編集する。保存形式に沿う旧編集は明示的に詳細を開いた時だけ表示する。
 				if (ImGui::CollapsingHeader(SelectEditorText(editorLanguage_,
 					"詳細編集（項目別）###SceneAnimationAdvanced", "Advanced Property Editing###SceneAnimationAdvanced"))) {
+					DrawTimeInputReference();
 					int removeClipIndex = -1;
 					for (size_t clipIndex = 0;
 						clipIndex < component.prefabAnimationClips.size();
@@ -20890,16 +20891,18 @@ void ImGuiManager::DrawInspectorWindow() {
 											track.keyframes[keyframeIndex];
 										ImGui::PushID(static_cast<int>(keyframeIndex));
 										ImGui::SeparatorText(SelectEditorText(editorLanguage_, "Keyframe", "Keyframe"));
-										if (ImGui::DragFloat(
-											LocalizedComponentWidgetLabel(editorLanguage_, "Time"), &keyframe.time, 0.01f, 0.0f, clip.duration
-										)) {
-											keyframe.time = std::clamp(
-												keyframe.time,
-												0.0f,
-												clip.duration
-											);
-											keyframeTimeChanged = true;
-											animationChanged = true;
+										float editedTime = keyframe.time;
+										if (DrawCommittedTimeInput(LocalizedComponentWidgetLabel(editorLanguage_, "Time"),
+											editedTime, 0.01f, clip.duration, document,
+											"scene-key/" + std::to_string(entity->id) + "/" + std::to_string(component.localId))) {
+											const bool duplicate = std::any_of(track.keyframes.begin(), track.keyframes.end(),
+												[&](const auto& other) { return &other != &keyframe && other.time == editedTime; });
+											if (duplicate) WarnTimeInput(true);
+											else {
+												editorSession_->EndEditFrame(true);
+												editorSession_->BeginEditFrame();
+												keyframe.time = editedTime; keyframeTimeChanged = true;
+											}
 										}
 										if (track.property == "Active") {
 											bool activeValue = keyframe.value.x >= 0.5f;
@@ -20937,6 +20940,10 @@ void ImGuiManager::DrawInspectorWindow() {
 												return left.time < right.time;
 											}
 										);
+										document.MarkDirty();
+										editorSession_->EndEditFrame(true);
+										// 同Frameの追加/削除等は、時刻移動とは別のUndoに収める。
+										editorSession_->BeginEditFrame();
 									}
 									if (ImGui::SmallButton(SelectEditorText(editorLanguage_, "Keyframeを追加###AddKeyframe", "Add Keyframe###AddKeyframe"))) {
 										SceneAnimationKeyframe keyframe{};
