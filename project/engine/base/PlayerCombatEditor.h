@@ -12,7 +12,7 @@ enum class IssueCode {
 	None, Stale, Locked, Playing, Missing, Ambiguous, Competing,
 	Legacy, UnknownAction, Disabled, ReceiverElsewhere, ReceiverMissing,
 	BodyMissing, FrozenAxes, HealthMissing, InvalidTime, InvalidDistance,
-	InvalidReaction, InvalidState, InvalidTarget, InvalidChoice, AddFailed
+	InvalidReaction, InvalidState, InvalidTarget, InvalidChoice, AddFailed, InvalidSpinMovement
 };
 struct Issue { IssueCode code = IssueCode::None; std::string detail; };
 
@@ -26,7 +26,7 @@ struct Subject {
 	std::string componentType, attackName;
 };
 // 武器用の二要求も値だけを返す。Session切替・保存・反映はUI coordinatorが担当する。
-enum class Operation { None, EditAttack, EditReaction, AddReaction, Inspect, OpenPrefab, ReturnToActor, PreviewAttack,
+enum class Operation { None, EditAttack, EditReaction, AddReaction, Inspect, OpenPrefab, ReturnToActor, PreviewAttack, EditSpinMovement,
 	EditWeaponPrefab, BindWeaponPrefab };
 enum Field : uint64_t {
 	Windup = 1ull << 0, ActiveTime = 1ull << 1, Recovery = 1ull << 2,
@@ -34,7 +34,7 @@ enum Field : uint64_t {
 	Facing = 1ull << 6, FacingTarget = 1ull << 7, Angle = 1ull << 8,
 	Enabled = 1ull << 9, Multiplier = 1ull << 10, Duration = 1ull << 11,
 	Trigger = 1ull << 12, MinimumPoise = 1ull << 13, PoiseStat = 1ull << 14,
-	PoiseDelay = 1ull << 15, State = 1ull << 16
+	PoiseDelay = 1ull << 15, State = 1ull << 16, SpinMoveSpeed = 1ull << 17
 };
 struct AttackValues {
 	float windup = 0, activeTime = 0, recovery = 0, forward = 0, side = 0, angle = 0;
@@ -46,6 +46,9 @@ struct ReactionValues {
 	float multiplier = 0, duration = 0, minimumPoise = 0, poiseDelay = 0;
 	std::string trigger, poiseStat, state;
 };
+// 倍率は0〜1。State名はAttack名と別に保持し、既存Float parameterだけを更新する。
+struct SpinMovementValues { std::string stateName; float multiplier = 0; };
+struct SpinMovementModel { Subject subject; SpinMovementValues values; Issue issue; bool editable = false; };
 struct Request {
 	DocumentToken token;
 	Subject subject;
@@ -53,6 +56,7 @@ struct Request {
 	uint64_t fields = 0, serial = 0;
 	AttackValues attack;
 	ReactionValues reaction;
+	SpinMovementValues spinMovement;
 };
 struct EntityChoice { uint64_t id = 0; std::string name; };
 struct AttackModel {
@@ -78,6 +82,7 @@ struct ActorModel {
 	std::vector<Issue> issues;
 	std::vector<EntityChoice> hurtBoxes, receivers;
 	ReactionModel reaction;
+	std::vector<SpinMovementModel> spinMovements;
 };
 // ImGuiManagerがDocument/Entityごとに保持する表示選択。保存データやUndoへは含めない。
 struct Selection { bool initialized = false; uint64_t attackOwner = 0; std::string attackName; };

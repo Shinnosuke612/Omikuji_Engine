@@ -14740,7 +14740,8 @@ void ImGuiManager::QueuePlayerCombatRequest(PlayerCombatEditor::Request request,
 		context.mutation = {}; context.navigation = {}; context.requestFrame = ImGui::GetFrameCount();
 	}
 	request.serial = ++playerCombatSerial_;
-	const bool mutation = request.operation == Operation::EditAttack || request.operation == Operation::EditReaction || request.operation == Operation::AddReaction;
+	const bool mutation = request.operation == Operation::EditAttack || request.operation == Operation::EditReaction ||
+		request.operation == Operation::AddReaction || request.operation == Operation::EditSpinMovement;
 	auto& destination = mutation ? context.mutation : context.navigation;
 	if (destination.operation != Operation::None) { WarnPlayerCombat(request,{IssueCode::Competing,{}}); return; }
 	destination = std::move(request);
@@ -15921,6 +15922,7 @@ void ImGuiManager::DrawPlayerCombatDialogs() {
 	ImGui::SetNextWindowSize(ImVec2(500,240),ImGuiCond_Appearing);
 	if (ImGui::BeginPopupModal(title,nullptr,ImGuiWindowFlags_None)) {
 		const char* operation = playerCombatWarningOperation_ == Operation::AddReaction ? SelectEditorText(editorLanguage_,"吹き飛び設定の追加","Add knockback") :
+			playerCombatWarningOperation_ == Operation::EditSpinMovement ? SelectEditorText(editorLanguage_,"回転中の移動速度の変更","Edit spin movement speed") :
 			playerCombatWarningOperation_ == Operation::PreviewAttack ? SelectEditorText(editorLanguage_,"攻撃プレビューの開始","Start attack preview") :
 			playerCombatWarningOperation_ == Operation::EditAttack ? SelectEditorText(editorLanguage_,"攻撃設定の変更","Edit attack") :
 			playerCombatWarningOperation_ == Operation::EditReaction ? SelectEditorText(editorLanguage_,"被弾設定の変更","Edit hit reaction") :

@@ -37,6 +37,37 @@ AttackValues Values(const SceneAttackDefinition& a) {
 	return { a.windup, a.activeTime, a.recovery, a.forwardDistance, a.sideDistance,
 		a.facingRotateAngle, a.motionEasing, a.facingMode, a.facingTargetEntityName, a.facingTargetEntityId };
 }
+SpinMovementModel ResolveSpinMovement(const SceneDocument& doc, uint64_t actorId, const std::string& stateName) {
+	SpinMovementModel model;
+	model.values.stateName = stateName;
+	model.subject = {actorId, actorId, 0, "StateMachine", {}};
+	auto reject = [&](IssueCode code) { model.issue = {code, stateName}; return model; };
+	const auto* actor = doc.FindEntity(actorId);
+	const auto* player = Component(actor, "PlayerBehavior");
+	const auto* machine = Component(actor, "StateMachine");
+	if (!actor || !player || !machine) return reject(IssueCode::Ambiguous);
+	model.subject.componentId = machine->localId;
+	if (actor->locked || actor->folder) return reject(IssueCode::Locked);
+	if (!player->enabled || !machine->enabled) return reject(IssueCode::Disabled);
+	const SceneStateDefinition* state = nullptr;
+	for (const auto& candidate : machine->stateMachineStates) if (candidate.name == stateName) {
+		if (state) return reject(IssueCode::Ambiguous);
+		state = &candidate;
+	}
+	if (!state || stateName.empty() || state->actionId != "Builtin.SpinLoopAttack") return reject(IssueCode::InvalidState);
+	const SceneStateParameter* parameter = nullptr;
+	for (const auto& p : state->parameters) if (p.name == "MoveSpeedMultiplier") {
+		if (parameter) return reject(IssueCode::Ambiguous);
+		parameter = &p;
+	}
+	if (parameter && parameter->type != "Float") return reject(IssueCode::InvalidSpinMovement);
+	model.values.multiplier = parameter ? parameter->floatValue : 0;
+	// 型/一意性が正しければ、不正な数値も専用欄から修正可能にする。
+	model.editable = true;
+	if (!std::isfinite(model.values.multiplier) || model.values.multiplier < 0 || model.values.multiplier > 1)
+		model.issue = {IssueCode::InvalidSpinMovement, stateName};
+	return model;
+}
 bool Contains(const char* const* values, size_t count, const std::string& value) {
 	for (size_t i = 0; i < count; ++i) if (value == values[i]) return true;
 	return false;
@@ -113,6 +144,9 @@ bool Descendant(const SceneDocument& doc, const SceneEntity& entity, uint64_t ro
 std::string DescribeIssue(const Issue& issue, EditorLanguage l) {
 	const char* message = "";
 	switch (issue.code) {
+	case IssueCode::InvalidSpinMovement: message = Text(l,
+		"回転中の移動設定が不正です。移動速度を0〜100％にし、StateMachineのMoveSpeedMultiplierを重複のないFloatにしてください。",
+		"Invalid spin movement. Use 0 to 100 percent and one Float MoveSpeedMultiplier parameter in the StateMachine."); break;
 	case IssueCode::None: break;
 	case IssueCode::Stale: message = Text(l, "設定先が変更されたため適用できません。現在の対象を確認してもう一度操作してください。", "The source changed. Check the current target and retry the operation."); break;
 	case IssueCode::Locked: message = Text(l, "対象がロック中、またはFolderです。設定先のロックを解除し、Entityを選んでください。", "The target is locked or a folder. Unlock the source and select an entity."); break;
@@ -200,6 +234,8 @@ ActorModel ResolveActor(const SceneDocument& doc, uint64_t id) {
 	if (!Component(actor, "PlayerBehavior")->enabled) m.issues.push_back({ IssueCode::Disabled, "PlayerBehavior" });
 	const auto* machine = Component(actor, "StateMachine");
 	if (machine) {
+		for (const auto& state : machine->stateMachineStates) if (state.actionId == "Builtin.SpinLoopAttack")
+			m.spinMovements.push_back(ResolveSpinMovement(doc, id, state.name));
 		if (!machine->enabled) m.issues.push_back({ IssueCode::Disabled, "StateMachine" });
 		for (const auto& state : machine->stateMachineStates) {
 			const bool melee = state.actionId == "Builtin.MeleeComboAttack";
@@ -423,6 +459,26 @@ std::vector<Request> DrawActor(const ActorModel& m, Selection& selected, EditorL
 				ImGui::TreePop();
 			}
 		}
+		Heading(Text(l,"回転中の移動","Movement during spin"));
+		ImGui::TextWrapped("%s",Text(l,"0〜100％。0％・未設定は入力移動なし。回転継続中だけに適用します。",
+			"0 to 100 percent. Zero or missing means no input movement. Applies during the spin loop only."));
+		if (m.spinMovements.empty()) ImGui::TextWrapped("%s",Text(l,
+			"SpinLoopAttackのStateがありません。既存のStateMachine設定を確認してください。",
+			"No SpinLoopAttack state. Check the existing StateMachine configuration."));
+		for (size_t i = 0; i < m.spinMovements.size(); ++i) {
+			const auto& spin = m.spinMovements[i];
+			ImGui::PushID(spin.values.stateName.c_str()); ImGui::PushID(static_cast<int>(i));
+			ImGui::TextWrapped(Text(l,"状態：%s","State: %s"),spin.values.stateName.c_str());
+			Notice(spin.issue,l);
+			float percent = spin.values.multiplier * 100.0f;
+			ImGui::BeginDisabled(!editable || !spin.editable);
+			if (Number(Text(l,"移動速度（通常歩行比％）","Move speed (% of walk speed)"),"##spinMoveSpeed",percent,1.0f)) {
+				Request r; r.operation = Operation::EditSpinMovement; r.subject = spin.subject;
+				r.fields = SpinMoveSpeed; r.spinMovement = {spin.values.stateName,percent/100.0f};
+				requests.push_back(std::move(r));
+			}
+			ImGui::EndDisabled(); ImGui::PopID(); ImGui::PopID();
+		}
 		for (const auto& issue : m.issues) Notice(issue,l);
 		if (ImGui::TreeNode(Text(l,"発動・コンボ / 詳細・旧設定###states","Activation / Combo / Legacy###states"))) {
 			Link(requests,Text(l,"StateMachineを開く###stateMachine","Inspect StateMachine###stateMachine"),m.id,m.id,"StateMachine");
@@ -467,6 +523,10 @@ void DrawReference(EditorLanguage l) {
 	ImGui::TextWrapped("%s",Text(l,
 		"初版は既存の姿勢・攻撃・見た目・当たり判定の値が対象です。Rootの取り付け位置、BoneAttachment、外部参照や対象外項目は維持します。今回編集しても配置先へ反映しない値は『反映されない編集』に理由付きで表示し、その他の保護項目は理由別の件数で確認できます。保護は解除できません。反映0項目なら元の武器は変更せず、未保存の武器Prefabがあれば保存します。Entity/Componentの追加削除・親変更、Variant、武器内部のNestedは連動反映できません。保存だけ成功した場合は『保存済み・未反映』と表示します。",
 		"This version reflects values on existing poses, attacks, meshes and colliders. Root placement, BoneAttachment, external references and unsupported fields are preserved. Protected edits that will not reach the target remain visible with their reasons; other protected values are counted by reason. Protection cannot be disabled. With zero reflected items the target stays unchanged, while unsaved weapon edits are saved. Structural changes, Variants and nested weapon assets are unsupported. Save-only partial success is reported explicitly."));
+	Heading(Text(l,"回転中の低速移動","Slow movement during spin"));
+	ImGui::TextWrapped("%s",Text(l,
+		"Playerの動作→攻撃→回転中の移動で、SpinLoopAttackのStateごとに通常歩行比0〜100％を設定します。保存先はそのScene/PrefabのStateMachine内のFloatパラメータMoveSpeedMultiplierです。0％または未設定なら従来どおり入力移動なし、正の値ならSpinLoop中だけ操作できます。開始・締めや敵には適用せず、体の向きは保持します。Shiftで加速せず、入力移動は攻撃の前後/左右移動へ加算されます。変更は通常のUndoと編集元の保存で管理します。型や重複が不正ならStateMachine Inspectorで直してください。Previewは入力移動を再現しないためPlayで確認してください。",
+		"Under Player actions > Attack > Movement during spin, set 0 to 100 percent of walk speed per SpinLoopAttack state. This edits the Float MoveSpeedMultiplier parameter in that Scene/Prefab's StateMachine. Zero or missing preserves no input movement; positive values allow movement during SpinLoop only. Start, finish and enemies are unaffected; body facing stays locked. Shift does not boost this speed. Input movement is added to authored attack motion. Use normal Undo and save the source. Repair duplicate or incorrectly typed parameters in the StateMachine Inspector. Preview does not simulate input movement; verify in Play."));
 	Heading(Text(l,"攻撃中の体の向き","Body facing during attacks"));
 	ImGui::TextWrapped("%s",Text(l,
 		"生存Playerの攻撃中は、構えから後隙まで本体の向きを保持します。連続コンボ・Loop・HitStopでも保持し、終了・中断後はその向きから通常のカメラ追従へ戻ります。カメラ操作と移動入力は継続できます。InputDirection・TargetDirection・RotateByAngleは移動方向の計算に使いますが、固定中のPlayer本体は回しません。子の武器・HitBoxは固定されたrootの向きを継承するため、実際の命中範囲はPlayで確認してください。武器自身のPoseや判定キーは別に評価されます。死亡・再配置・Scene切替では固定状態を破棄します。親自体の回転や別Mesh・骨の回転を逆補正する機能はありません。Previewの移動再現は従来どおり親なしPlayerのFixedAtStartに限定します。",
@@ -496,7 +556,7 @@ bool Matches(const DocumentToken& a, const DocumentToken& b) {
 bool ValidateAndApplyValueEdit(SceneDocument& doc, const DocumentToken& current, const Request& r,
 	bool editingAllowed, bool& changed, Issue& issue) {
 	changed = false; issue = {};
-	auto fail = [&](IssueCode code) { issue = { code, r.subject.attackName }; return false; };
+	auto fail = [&](IssueCode code) { issue = { code, r.operation == Operation::EditSpinMovement ? r.spinMovement.stateName : r.subject.attackName }; return false; };
 	if (!editingAllowed) return fail(IssueCode::Playing);
 	if (!Matches(current,r.token) || current.generation != doc.GetContentGeneration() || current.revision != doc.GetRevision()) return fail(IssueCode::Stale);
 	auto* entity = doc.FindEntity(r.subject.entityId);
@@ -508,6 +568,28 @@ bool ValidateAndApplyValueEdit(SceneDocument& doc, const DocumentToken& current,
 	auto* c = &entity->components[static_cast<size_t>(original - entity->components.data())];
 	auto nonnegative = [](float value) { return std::isfinite(value) && value >= 0; };
 	auto assign = [&changed](auto& destination, const auto& value) { if (destination != value) { destination = value; changed = true; } };
+	if (r.operation == Operation::EditSpinMovement && c->type == "StateMachine") {
+		if (r.fields != SpinMoveSpeed || r.subject.actorId != entity->id ||
+			!std::isfinite(r.spinMovement.multiplier) || r.spinMovement.multiplier < 0 || r.spinMovement.multiplier > 1)
+			return fail(IssueCode::InvalidSpinMovement);
+		const auto model = ResolveSpinMovement(doc,entity->id,r.spinMovement.stateName);
+		if (!model.editable) { issue = model.issue; return false; }
+		// 検証後に該当StateのFloatだけを更新。Entity/Component/Clip全体を置き換えない。
+		for (auto& state : c->stateMachineStates) if (state.name == r.spinMovement.stateName) {
+			for (auto& p : state.parameters) if (p.name == "MoveSpeedMultiplier") {
+				assign(p.floatValue,r.spinMovement.multiplier);
+				return true;
+			}
+			if (r.spinMovement.multiplier != 0) {
+				SceneStateParameter parameter;
+				parameter.name = "MoveSpeedMultiplier"; parameter.type = "Float";
+				parameter.floatValue = r.spinMovement.multiplier;
+				state.parameters.push_back(std::move(parameter)); changed = true;
+			}
+			return true;
+		}
+		return fail(IssueCode::InvalidState);
+	}
 	if (r.operation == Operation::EditAttack && c->type == "AttackSet") {
 		SceneAttackDefinition* a = nullptr;
 		for (auto& candidate : c->attackDefinitions) if (candidate.name == r.subject.attackName) {
